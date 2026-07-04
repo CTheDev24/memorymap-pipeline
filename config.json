@@ -1,0 +1,14 @@
+{
+  "portrait": {
+    "map_width": 190.0,
+    "map_height": 240.0
+  },
+  "landscape": {
+    "map_width": 240.0,
+    "map_height": 1900.0
+  },
+  "route_height": 2.0,
+  "route_width": 1.2,
+  "base_thickness": 1.0,
+  "margin": 8.0
+}
