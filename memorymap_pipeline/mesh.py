@@ -104,7 +104,26 @@ def route_mesh_from_polygon(polygon, height_mm: float, z_offset: float = 0.0) ->
     return mesh
 
 
-def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: Trimesh) -> None:
+def center_meshes_to_base(meshes: list[Trimesh], width_mm: float, height_mm: float) -> None:
+    """Center a list of meshes together within the base dimensions in XY."""
+    if not meshes:
+        return
+
+    xs_min = min(mesh.bounds[0, 0] for mesh in meshes)
+    ys_min = min(mesh.bounds[0, 1] for mesh in meshes)
+    xs_max = max(mesh.bounds[1, 0] for mesh in meshes)
+    ys_max = max(mesh.bounds[1, 1] for mesh in meshes)
+
+    combined_width = xs_max - xs_min
+    combined_height = ys_max - ys_min
+    offset_x = (width_mm - combined_width) / 2.0 - xs_min
+    offset_y = (height_mm - combined_height) / 2.0 - ys_min
+
+    for mesh in meshes:
+        mesh.apply_translation((offset_x, offset_y, 0.0))
+
+
+def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: Trimesh, roads_mesh: Trimesh | None = None) -> None:
     from trimesh.exchange.export import export_mesh
 
     output_path = Path(output_path)
@@ -125,6 +144,14 @@ def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: T
         route_mesh.metadata = {}
     route_mesh.metadata["name"] = "Route_Accent"
     meshes.append(route_mesh)
+
+    if roads_mesh is not None:
+        try:
+            roads_mesh.metadata = roads_mesh.metadata or {}
+        except Exception:
+            roads_mesh.metadata = {}
+        roads_mesh.metadata["name"] = "Roads_Black"
+        meshes.append(roads_mesh)
 
     export_mesh(
         meshes,

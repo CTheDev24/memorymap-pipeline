@@ -3,12 +3,6 @@
 This project converts a GPX track into a Bambu-ready 3MF memory map.
 
 ## Phase 1 features
-- Parse a GPX file
-- Convert lat/lon to a local projected coordinate system
-- Normalize and scale the route to a 241 mm × 190 mm rectangle
-- Generate a raised route mesh with a configurable width
-- Generate a flat base plate beneath it
-- Export separate mesh bodies named Base_White and Route_Accent
 
 ## Installation
 
@@ -18,8 +12,29 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+## Phase II — Road Network (OSM)
+
+This release adds road-network generation from OpenStreetMap as a separate mesh layer.
+
+Installation (optional dev deps for roads)
+
+```powershell
+.venv\Scripts\pip install -r requirements-dev.txt
+```
+
+Usage
+
+```powershell
+
 ## Usage
 
+
+Notes
+
+- Roads require `osmnx` (installed via `requirements-dev.txt`) and internet access to download OSM data.
+- The exporter now writes three independent objects into the 3MF: `Base_White`, `Route_Accent`, and `Roads_Black`.
+- Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`.
+- Debug plots for roads can be enabled by setting `roads_debug` to `true` in the config.
 ```bash
 python -m memorymap_pipeline.cli sample.gpx output.3mf
 ```
@@ -36,7 +51,7 @@ Create a JSON file such as `memorymap-pipeline/config.json`:
   },
   "landscape": {
     "map_width": 240.0,
-    "map_height": 1900.0
+    "map_height": 190.0
   },
   "route_height": 2.0,
   "route_width": 1.2,

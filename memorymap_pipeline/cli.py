@@ -5,9 +5,15 @@ from pathlib import Path
 
 from .config import load_config
 from .gpx_loader import load_route_from_gpx
-from .mesh import build_base_plate, export_3mf, route_mesh_from_polygon
-from .projection import normalize_scale_and_center_points, project_points
+from .mesh import build_base_plate, center_meshes_to_base, export_3mf, route_mesh_from_polygon
+from .projection import (
+    normalize_scale_and_center_points,
+    project_points,
+    compute_normalize_center_transform,
+    apply_transform,
+)
 from .geometry import buffered_polygon_from_points, validate_polygon, repair_polygon
+from .roads import download_and_build_roads
 import matplotlib.pyplot as plt
 
 
@@ -22,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-thickness-mm", type=float, default=None, help="Base plate thickness in millimeters")
     parser.add_argument("--no-base", dest="include_base", action="store_false", help="Do not include the base plate in the exported 3MF")
     parser.add_argument("--margin-mm", type=float, default=None, help="Margin from the map edge in millimeters")
+    parser.add_argument("--roads-file", type=Path, default=None, help="Path to a local roads GeoJSON/GeoPackage to use instead of downloading OSM")
     parser.set_defaults(include_base=True)
     return parser
 
@@ -50,7 +57,9 @@ def main() -> None:
     map_width = float(map_info["map_width"])
     map_height = float(map_info["map_height"])
 
-    scaled = normalize_scale_and_center_points(projected, width_mm=map_width, height_mm=map_height, margin_mm=margin_mm)
+    # compute transform once and apply to any other layer (routes, roads, future layers)
+    transform = compute_normalize_center_transform(projected, width_mm=map_width, height_mm=map_height, margin_mm=margin_mm)
+    scaled = apply_transform(projected, transform)
 
     base_mesh = None
     if args.include_base:
@@ -93,8 +102,36 @@ def main() -> None:
     # extrude polygon to create route mesh sitting on top of the base plate
     z_offset = base_thickness_mm if args.include_base else 0.0
     route_mesh = route_mesh_from_polygon(poly_to_use, height_mm=route_height_mm, z_offset=z_offset)
+    # build roads (separate body)
+    roads_mesh = None
+    try:
+        latitudes = [p.latitude for p in route.points]
+        longitudes = [p.longitude for p in route.points]
+        lat_min = min(latitudes)
+        lat_max = max(latitudes)
+        lon_min = min(longitudes)
+        lon_max = max(longitudes)
 
-    export_3mf(args.output_3mf, base_mesh, route_mesh)
+        unioned, roads_mesh = download_and_build_roads(
+            bbox=(lat_min, lat_max, lon_min, lon_max),
+            center_lat=route.points[0].latitude,
+            center_lon=route.points[0].longitude,
+            transform=transform,
+            road_types=config.get("road_types", []),
+            road_widths=config.get("road_widths", {}),
+            road_height_mm=config.get("road_height", 0.8),
+            debug=config.get("roads_debug", False),
+            z_offset=z_offset,
+            radius_m=config.get("road_query_radius_m", None),
+            roads_file=str(args.roads_file) if args.roads_file is not None else None,
+        )
+    except Exception:
+        unioned = None
+
+    if base_mesh is not None:
+        center_meshes_to_base([route_mesh] + ([roads_mesh] if roads_mesh is not None else []), map_width, map_height)
+
+    export_3mf(args.output_3mf, base_mesh, route_mesh, roads_mesh)
     print(f"Exported {args.output_3mf} (base included: {args.include_base}, orientation: {orientation}, map {map_width}x{map_height}mm, margin {margin_mm}mm)")
 
 
