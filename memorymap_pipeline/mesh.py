@@ -123,7 +123,7 @@ def center_meshes_to_base(meshes: list[Trimesh], width_mm: float, height_mm: flo
         mesh.apply_translation((offset_x, offset_y, 0.0))
 
 
-def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: Trimesh, roads_mesh: Trimesh | None = None) -> None:
+def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: Trimesh, roads_mesh: Trimesh | None = None, buildings_mesh: Trimesh | None = None) -> None:
     from trimesh.exchange.export import export_mesh
 
     output_path = Path(output_path)
@@ -152,6 +152,14 @@ def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: T
             roads_mesh.metadata = {}
         roads_mesh.metadata["name"] = "Roads_Black"
         meshes.append(roads_mesh)
+
+    if buildings_mesh is not None:
+        try:
+            buildings_mesh.metadata = buildings_mesh.metadata or {}
+        except Exception:
+            buildings_mesh.metadata = {}
+        buildings_mesh.metadata["name"] = "Buildings_Verification"
+        meshes.append(buildings_mesh)
 
     export_mesh(
         meshes,

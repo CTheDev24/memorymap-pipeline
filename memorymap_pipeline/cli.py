@@ -14,6 +14,7 @@ from .projection import (
 )
 from .geometry import buffered_polygon_from_points, validate_polygon, repair_polygon
 from .roads import download_and_build_roads
+from .buildings import download_and_build_buildings
 import matplotlib.pyplot as plt
 
 
@@ -29,7 +30,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-base", dest="include_base", action="store_false", help="Do not include the base plate in the exported 3MF")
     parser.add_argument("--margin-mm", type=float, default=None, help="Margin from the map edge in millimeters")
     parser.add_argument("--roads-file", type=Path, default=None, help="Path to a local roads GeoJSON/GeoPackage to use instead of downloading OSM")
+    parser.add_argument("--buildings-file", type=Path, default=None, help="Path to a local buildings GeoJSON/GeoPackage to use instead of downloading OSM")
+    parser.add_argument("--no-buildings", dest="include_buildings", action="store_false", help="Do not include building footprints in the exported 3MF")
     parser.set_defaults(include_base=True)
+    parser.set_defaults(include_buildings=True)
     return parser
 
 
@@ -127,11 +131,32 @@ def main() -> None:
         )
     except Exception:
         unioned = None
+    # build buildings (verification overlay)
+    buildings_mesh = None
+    unioned_buildings = None
+    if args.include_buildings:
+        try:
+            buildings_file_arg = str(args.buildings_file) if args.buildings_file is not None else None
+            unioned_buildings, buildings_mesh = download_and_build_buildings(
+                bbox=(lat_min, lat_max, lon_min, lon_max),
+                center_lat=route.points[0].latitude,
+                center_lon=route.points[0].longitude,
+                transform=transform,
+                debug=config.get("buildings_debug", False),
+                z_offset=z_offset,
+                building_thickness_mm=config.get("building_thickness", 0.3),
+                radius_m=config.get("road_query_radius_m", None),
+                buildings_file=buildings_file_arg,
+                overlay_roads=unioned,
+                route_points=scaled,
+            )
+        except Exception:
+            unioned_buildings = None
 
     if base_mesh is not None:
-        center_meshes_to_base([route_mesh] + ([roads_mesh] if roads_mesh is not None else []), map_width, map_height)
+        center_meshes_to_base([route_mesh] + ([roads_mesh] if roads_mesh is not None else []) + ([buildings_mesh] if buildings_mesh is not None else []), map_width, map_height)
 
-    export_3mf(args.output_3mf, base_mesh, route_mesh, roads_mesh)
+    export_3mf(args.output_3mf, base_mesh, route_mesh, roads_mesh, buildings_mesh)
     print(f"Exported {args.output_3mf} (base included: {args.include_base}, orientation: {orientation}, map {map_width}x{map_height}mm, margin {margin_mm}mm)")
 
 

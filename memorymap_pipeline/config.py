@@ -29,6 +29,9 @@ DEFAULT_CONFIG = {
     "roads_debug": False,
     # radius (meters) to query OSM around route center when fetching roads
     "road_query_radius_m": 1000,
+    # building footprint verification
+    "building_thickness": 0.3,
+    "buildings_debug": False,
 }
 
 
