@@ -17,14 +17,22 @@ DEFAULT_CONFIG = {
     # widths in mm by highway type
     "road_widths": {
         "motorway": 2.4,
+        "motorway_link": 2.0,
         "trunk": 2.0,
+        "trunk_link": 1.8,
         "primary": 2.0,
+        "primary_link": 1.8,
         "secondary": 1.6,
+        "secondary_link": 1.4,
         "tertiary": 1.4,
+        "tertiary_link": 1.2,
         "residential": 1.1,
+        "living_street": 1.0,
+        "unclassified": 1.0,
+        "service": 0.8,
     },
     # which highway types to keep by default
-    "road_types": ["motorway", "trunk", "primary", "secondary", "tertiary", "residential"],
+    "road_types": ["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link", "residential", "living_street", "unclassified", "service"],
     # debug plotting for roads
     "roads_debug": False,
     # radius (meters) to query OSM around route center when fetching roads
