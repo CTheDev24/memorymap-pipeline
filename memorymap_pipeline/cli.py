@@ -50,7 +50,14 @@ def main() -> None:
     margin_mm = args.margin_mm if args.margin_mm is not None else config["margin"]
 
     route = load_route_from_gpx(args.input_gpx)
-    projected = project_points(route.points, center_lat=route.points[0].latitude, center_lon=route.points[0].longitude)
+
+    # Use geographic center of route for symmetric projection
+    latitudes = [p.latitude for p in route.points]
+    longitudes = [p.longitude for p in route.points]
+    center_lat = (min(latitudes) + max(latitudes)) / 2.0
+    center_lon = (min(longitudes) + max(longitudes)) / 2.0
+
+    projected = project_points(route.points, center_lat=center_lat, center_lon=center_lon)
 
     route_span_x = float(projected[:, 0].max() - projected[:, 0].min())
     route_span_y = float(projected[:, 1].max() - projected[:, 1].min())
@@ -113,17 +120,10 @@ def main() -> None:
     unioned = None
     if args.include_roads:
         try:
-            latitudes = [p.latitude for p in route.points]
-            longitudes = [p.longitude for p in route.points]
-            lat_min = min(latitudes)
-            lat_max = max(latitudes)
-            lon_min = min(longitudes)
-            lon_max = max(longitudes)
-
             unioned, roads_mesh = download_and_build_roads(
-                bbox=(lat_min, lat_max, lon_min, lon_max),
-                center_lat=route.points[0].latitude,
-                center_lon=route.points[0].longitude,
+                bbox=(min(latitudes), max(latitudes), min(longitudes), max(longitudes)),
+                center_lat=center_lat,
+                center_lon=center_lon,
                 transform=transform,
                 road_types=config.get("road_types", []),
                 road_widths=config.get("road_widths", {}),
@@ -145,9 +145,9 @@ def main() -> None:
         try:
             buildings_file_arg = str(args.buildings_file) if args.buildings_file is not None else None
             unioned_buildings, buildings_mesh = download_and_build_buildings(
-                bbox=(lat_min, lat_max, lon_min, lon_max),
-                center_lat=route.points[0].latitude,
-                center_lon=route.points[0].longitude,
+                bbox=(min(latitudes), max(latitudes), min(longitudes), max(longitudes)),
+                center_lat=center_lat,
+                center_lon=center_lon,
                 transform=transform,
                 map_width_mm=map_width,
                 map_height_mm=map_height,

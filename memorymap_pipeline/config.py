@@ -28,7 +28,7 @@ DEFAULT_CONFIG = {
     # debug plotting for roads
     "roads_debug": False,
     # radius (meters) to query OSM around route center when fetching roads
-    "road_query_radius_m": 200,
+    "road_query_radius_m": 1000,
     # building footprint generation
     # max real-world extrusion height at print scale (1.25 inches)
     "max_print_height_mm": 31.75,
