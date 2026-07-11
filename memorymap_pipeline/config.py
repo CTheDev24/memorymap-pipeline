@@ -29,7 +29,20 @@ DEFAULT_CONFIG = {
     "roads_debug": False,
     # radius (meters) to query OSM around route center when fetching roads
     "road_query_radius_m": 1000,
-    # building footprint verification
+    # building footprint generation
+    # max real-world extrusion height at print scale (1.25 inches)
+    "max_print_height_mm": 31.75,
+    # minimum extrusion so 1-storey buildings remain visible
+    "min_building_height_mm": 0.4,
+    # fallback real-world height when OSM height/levels tags are absent (metres, ~2 storeys)
+    "building_default_height_m": 6.0,
+    # metres per floor when deriving height from building:levels
+    "building_levels_to_m": 3.0,
+    # cap on raw OSM height tag to reject corrupt/erroneous values (metres)
+    "building_max_real_height_m": 400.0,
+    # omit building if this fraction (or more) of its footprint lies outside the margin-inset build area
+    "building_clip_threshold": 0.5,
+    # retained for backwards compatibility but superseded by proportional height system
     "building_thickness": 0.3,
     "buildings_debug": False,
 }

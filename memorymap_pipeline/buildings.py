@@ -1,18 +1,23 @@
 from __future__ import annotations
 
-from typing import Iterable
 import logging
+from typing import Iterable
 
+import numpy as np
 import shapely.geometry as geom
 import shapely.ops as ops
-import numpy as np
 
-from .projection import project_lonlat_array, apply_transform
 from .geometry import repair_polygon
 from .mesh import route_mesh_from_polygon
+from .projection import apply_transform, project_lonlat_array
 
 
-def _transform_shapely_polygon(polygon: geom.Polygon, center_lat: float, center_lon: float, transform: dict) -> geom.Polygon:
+def _transform_shapely_polygon(
+    polygon: geom.Polygon,
+    center_lat: float,
+    center_lon: float,
+    transform: dict,
+) -> geom.Polygon:
     """Apply lon/lat -> mm transform to all coordinates of a Shapely Polygon.
 
     Preserves all original vertices and ring order.
@@ -38,6 +43,75 @@ def _transform_shapely_polygon(polygon: geom.Polygon, center_lat: float, center_
         return polygon
 
 
+def _extract_real_height_m(
+    tags: dict,
+    default_height_m: float,
+    levels_to_m: float,
+    max_height_m: float,
+) -> float:
+    """Extract real-world building height in metres from OSM tag dict.
+
+    Priority:
+    1. ``height`` tag (explicit metres; values tagged in feet are converted)
+    2. ``building:levels`` × ``levels_to_m``
+    3. ``default_height_m`` fallback
+
+    Values above ``max_height_m`` are treated as corrupt and skipped.
+    """
+    height_val = tags.get("height")
+    if height_val is not None:
+        if isinstance(height_val, (list, tuple)):
+            height_val = height_val[0] if height_val else None
+        if height_val is not None:
+            try:
+                raw = str(height_val).strip()
+                if raw.endswith("ft"):
+                    # Convert feet to metres
+                    h = float(raw[:-2].strip()) * 0.3048
+                else:
+                    h = float(raw.replace("m", "").strip())
+                if 0.0 < h <= max_height_m:
+                    return h
+            except (ValueError, TypeError):
+                pass
+
+    levels_val = tags.get("building:levels")
+    if levels_val is not None:
+        if isinstance(levels_val, (list, tuple)):
+            levels_val = levels_val[0] if levels_val else None
+        if levels_val is not None:
+            try:
+                levels = float(str(levels_val).strip())
+                max_levels = max_height_m / levels_to_m
+                if 0.0 < levels <= max_levels:
+                    return levels * levels_to_m
+            except (ValueError, TypeError):
+                pass
+
+    return default_height_m
+
+
+def _tags_from_gdf_row(row, columns: list[str]) -> dict:
+    """Build a plain tag dict from a GeoDataFrame row, dropping missing values."""
+    import math
+
+    tags: dict = {}
+    for col in columns:
+        if col == "geometry":
+            continue
+        val = row[col]
+        # Drop None and float NaN (covers pandas NaN without requiring pandas import)
+        if val is None:
+            continue
+        try:
+            if isinstance(val, float) and math.isnan(val):
+                continue
+        except (TypeError, ValueError):
+            pass
+        tags[col] = val
+    return tags
+
+
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.openstreetmap.fr/api/interpreter",
@@ -51,9 +125,17 @@ def download_and_build_buildings(
     center_lat: float,
     center_lon: float,
     transform: dict,
+    map_width_mm: float,
+    map_height_mm: float,
+    margin_mm: float,
     debug: bool = False,
     z_offset: float = 0.0,
-    building_thickness_mm: float = 0.3,
+    max_print_height_mm: float = 31.75,
+    min_building_height_mm: float = 0.4,
+    building_default_height_m: float = 6.0,
+    building_levels_to_m: float = 3.0,
+    building_max_real_height_m: float = 400.0,
+    building_clip_threshold: float = 0.5,
     radius_m: float | None = None,
     buildings_file: str | None = None,
     overlay_roads: object | None = None,
@@ -61,151 +143,243 @@ def download_and_build_buildings(
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
-    Polygons are transformed into map mm coordinates using the provided `transform` and
-    `project_lonlat_array`, and extruded to `building_thickness_mm` at `z_offset`.
+    Each building is extruded to a height proportional to its real-world OSM height so
+    that the tallest building in the scene prints at ``max_print_height_mm``.  Buildings
+    where more than ``building_clip_threshold`` of their footprint lies outside the
+    margin-inset build area are omitted; the remainder are clipped to that boundary.
+
+    All extruded buildings are concatenated into a single mesh.
     """
-    Polygon = None
-    MultiPolygon = None
+    # geo_with_tags: list of (shapely_geometry, tags_dict) collected from all sources
+    geo_with_tags: list[tuple] = []
 
     if buildings_file is not None:
         try:
             import geopandas as gpd
-            from shapely.geometry import Polygon, MultiPolygon
 
             df = gpd.read_file(buildings_file)
-            geoms = df.geometry
+            cols = list(df.columns)
+            for _, row in df.iterrows():
+                g = row.geometry
+                if g is None:
+                    continue
+                geo_with_tags.append((g, _tags_from_gdf_row(row, cols)))
         except Exception as exc:
             logging.warning("Failed to read local buildings file %s: %s", buildings_file, exc)
             return None, None
     else:
         try:
             import osmnx as ox
-            from shapely.geometry import Polygon, MultiPolygon
         except Exception as exc:
             logging.warning("OSMnx not available or failed to import: %s", exc)
             return None, None
 
-        geoms = None
+        bbox_for_query: tuple | None = None
+
         for endpoint in OVERPASS_ENDPOINTS:
             try:
                 ox.settings.overpass_endpoint = endpoint
-                # Prefer using osmnx helper if available
+
                 if radius_m is not None:
-                    tags = {"building": True}
                     try:
-                        gdf = ox.geometries_from_point((center_lat, center_lon), tags=tags, dist=radius_m)
-                        geoms = gdf.geometry
+                        gdf = ox.geometries_from_point(
+                            (center_lat, center_lon), tags={"building": True}, dist=radius_m
+                        )
+                        cols = list(gdf.columns)
+                        for _, row in gdf.iterrows():
+                            g = row.geometry
+                            if g is None:
+                                continue
+                            geo_with_tags.append((g, _tags_from_gdf_row(row, cols)))
                         break
                     except Exception:
-                        # fall back to Overpass HTTP using bbox computed from radius
                         lat_delta = radius_m / 111000.0
                         lon_delta = radius_m / (111000.0 * max(0.000001, np.cos(np.deg2rad(center_lat))))
-                        north = center_lat + lat_delta
-                        south = center_lat - lat_delta
-                        east = center_lon + lon_delta
-                        west = center_lon - lon_delta
-                        bbox_for_query = (south, west, north, east)
+                        bbox_for_query = (
+                            center_lat - lat_delta,
+                            center_lon - lon_delta,
+                            center_lat + lat_delta,
+                            center_lon + lon_delta,
+                        )
                 else:
                     lat_min, lat_max, lon_min, lon_max = bbox
-                    # ox.geometries_from_bbox takes north, south, east, west
                     try:
-                        gdf = ox.geometries_from_bbox(lat_max, lat_min, lon_max, lon_min, tags={"building": True})
-                        geoms = gdf.geometry
+                        gdf = ox.geometries_from_bbox(
+                            lat_max, lat_min, lon_max, lon_min, tags={"building": True}
+                        )
+                        cols = list(gdf.columns)
+                        for _, row in gdf.iterrows():
+                            g = row.geometry
+                            if g is None:
+                                continue
+                            geo_with_tags.append((g, _tags_from_gdf_row(row, cols)))
                         break
                     except Exception:
                         bbox_for_query = (lat_min, lon_min, lat_max, lon_max)
 
-                # If osmnx helpers failed, perform Overpass HTTP query directly
+                # OSMnx failed — fall back to raw Overpass HTTP query
+                if bbox_for_query is None:
+                    geo_with_tags = []
+                    continue
+
                 try:
                     import requests
+                    from shapely.geometry import Polygon as ShapelyPolygon
 
                     south, west, north, east = bbox_for_query
-                    query = f"""
-[out:json][timeout:25];
-(
-  way["building"]({south},{west},{north},{east});
-  relation["building"]({south},{west},{north},{east});
-);
-out geom;
-"""
-                    headers = {"User-Agent": "memorymap-pipeline/1.0 (+https://example.local)", "Accept": "application/json"}
-                    resp = requests.post(endpoint, data={"data": query}, headers=headers, timeout=30)
+                    # Use "out body geom" so tags are included in the response
+                    query = (
+                        f"[out:json][timeout:25];\n"
+                        f"(\n"
+                        f'  way["building"]({south},{west},{north},{east});\n'
+                        f");\n"
+                        f"out body geom;\n"
+                    )
+                    headers = {
+                        "User-Agent": "memorymap-pipeline/1.0 (+https://example.local)",
+                        "Accept": "application/json",
+                    }
+                    resp = requests.post(
+                        endpoint, data={"data": query}, headers=headers, timeout=30
+                    )
                     resp.raise_for_status()
                     data = resp.json()
                     elements = data.get("elements", [])
-                    # Build shapely geometries from returned elements
-                    from shapely.geometry import Polygon as ShapelyPolygon
-
-                    parsed = []
                     for el in elements:
+                        if el.get("type") != "way":
+                            continue
                         geom_coords = el.get("geometry")
                         if not geom_coords:
                             continue
-                        coords = [(c["lon"], c["lat"]) if isinstance(c, dict) else (c["lon"], c["lat"]) for c in geom_coords]
+                        coords = [
+                            (c["lon"], c["lat"])
+                            for c in geom_coords
+                            # Overpass geometry entries are always dicts; skip any malformed elements
+                            if isinstance(c, dict) and "lon" in c and "lat" in c
+                        ]
+                        el_tags = el.get("tags", {})
                         try:
-                            parsed.append(ShapelyPolygon(coords))
+                            geo_with_tags.append((ShapelyPolygon(coords), el_tags))
                         except Exception:
                             continue
-                    if parsed:
-                        geoms = parsed
+                    if geo_with_tags:
                         break
                 except Exception as exc:
                     logging.warning("Overpass HTTP fetch failed via %s: %s", endpoint, exc)
-                    geoms = None
+                    geo_with_tags = []
                     continue
+
             except Exception as exc:
                 logging.warning("Failed to download OSM building data via %s: %s", endpoint, exc)
-                geoms = None
+                geo_with_tags = []
                 continue
 
-        if geoms is None:
+        if not geo_with_tags:
             return None, None
 
-    polygons = []
-    for g in geoms:
+    # Margin-inset plate boundary used for clip/omit decisions
+    plate_box = geom.box(
+        margin_mm, margin_mm, map_width_mm - margin_mm, map_height_mm - margin_mm
+    )
+
+    # Transform each polygon to mm coords, extract its height, clip, and filter
+    poly_height_pairs: list[tuple[geom.base.BaseGeometry, float]] = []
+
+    for g, tags in geo_with_tags:
         if g is None:
             continue
-        geom_type = g.geom_type
-        if geom_type == "Polygon":
+        if g.geom_type == "Polygon":
             polys = [g]
-        elif geom_type == "MultiPolygon":
+        elif g.geom_type == "MultiPolygon":
             polys = list(g.geoms)
         else:
             continue
 
+        real_h = _extract_real_height_m(
+            tags,
+            default_height_m=building_default_height_m,
+            levels_to_m=building_levels_to_m,
+            max_height_m=building_max_real_height_m,
+        )
+
         for p in polys:
             if p.is_empty:
                 continue
+
             try:
-                tp = _transform_shapely_polygon(p, center_lat=center_lat, center_lon=center_lon, transform=transform)
+                tp = _transform_shapely_polygon(
+                    p, center_lat=center_lat, center_lon=center_lon, transform=transform
+                )
             except Exception:
-                tp = p
+                continue
 
             if not tp.is_valid:
-                tp, ok, explanation = repair_polygon(tp)
+                tp, _ok, _exp = repair_polygon(tp)
             if tp.is_empty:
                 continue
-            polygons.append(tp)
 
-    if not polygons:
+            original_area = tp.area
+            if original_area <= 0.0:
+                continue
+
+            # Clip to margin-inset plate boundary
+            try:
+                clipped = tp.intersection(plate_box)
+            except Exception:
+                continue
+
+            if clipped.is_empty:
+                continue
+
+            fraction_inside = clipped.area / original_area
+            # Omit buildings where the fraction of footprint inside the build area is
+            # less than (1 - building_clip_threshold).  With a threshold of 0.5 this
+            # discards any building that has more than 50 % of its area outside.
+            if fraction_inside < (1.0 - building_clip_threshold):
+                continue
+
+            if not clipped.is_valid:
+                clipped, _ok, _exp = repair_polygon(clipped)
+            if clipped.is_empty:
+                continue
+
+            poly_height_pairs.append((clipped, real_h))
+
+    if not poly_height_pairs:
         return None, None
 
-    unioned = ops.unary_union(polygons)
+    # Proportional height scaling: tallest building in scene → max_print_height_mm
+    all_real_heights = [h for _, h in poly_height_pairs]
+    max_real_h = max(all_real_heights)
+    height_scale = (max_print_height_mm / max_real_h) if max_real_h > 0.0 else 1.0
 
-    # create meshes for each polygon part, preserving geometry
+    logging.info(
+        "Buildings: %d footprints | real heights %.1f–%.1f m | "
+        "scale %.4f mm/m | extrusions %.2f–%.2f mm",
+        len(poly_height_pairs),
+        min(all_real_heights),
+        max_real_h,
+        height_scale,
+        min(max(min_building_height_mm, h * height_scale) for _, h in poly_height_pairs),
+        max(max(min_building_height_mm, h * height_scale) for _, h in poly_height_pairs),
+    )
+
+    # Extrude each building individually then concatenate into one mesh
     meshes = []
-    try:
-        if unioned.geom_type == "Polygon":
-            parts = [unioned]
-        else:
-            parts = list(unioned.geoms)
-        for p in parts:
-            if p.is_empty:
+    for poly, real_h in poly_height_pairs:
+        extrusion_mm = max(min_building_height_mm, real_h * height_scale)
+        parts: list[geom.Polygon] = (
+            list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
+        )
+        for part in parts:
+            if part.is_empty:
                 continue
-            mesh = route_mesh_from_polygon(p, height_mm=building_thickness_mm, z_offset=z_offset)
-            meshes.append(mesh)
-    except Exception as exc:
-        logging.warning("Failed creating building meshes: %s", exc)
+            try:
+                meshes.append(
+                    route_mesh_from_polygon(part, height_mm=extrusion_mm, z_offset=z_offset)
+                )
+            except Exception as exc:
+                logging.warning("Failed creating building mesh: %s", exc)
 
     final_mesh = None
     if meshes:
@@ -216,39 +390,43 @@ out geom;
         except Exception:
             final_mesh = meshes[0]
 
+    # Union of all clipped footprints (used for debug overlay and return value)
+    unioned = ops.unary_union([p for p, _ in poly_height_pairs])
+
     if debug:
         try:
             import matplotlib.pyplot as plt
 
             fig, ax = plt.subplots(figsize=(6, 8))
-            # plot buildings
-            for poly in polygons:
+            for poly, _real_h in poly_height_pairs:
                 try:
-                    x, y = poly.exterior.xy
-                    ax.fill(x, y, alpha=0.6, fc="cyan", ec="black")
+                    parts = (
+                        list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
+                    )
+                    for part in parts:
+                        x, y = part.exterior.xy
+                        ax.fill(x, y, alpha=0.6, fc="cyan", ec="black")
                 except Exception:
                     pass
-            # overlay roads if given
             if overlay_roads is not None:
                 try:
-                    if hasattr(overlay_roads, 'exterior'):
-                        parts = [overlay_roads]
-                    else:
-                        parts = list(overlay_roads.geoms) if overlay_roads.geom_type == 'MultiPolygon' else [overlay_roads]
-                    for r in parts:
-                        if r.is_empty:
+                    road_parts = (
+                        list(overlay_roads.geoms)
+                        if overlay_roads.geom_type in ("MultiPolygon", "GeometryCollection")
+                        else [overlay_roads]
+                    )
+                    for r in road_parts:
+                        if r.is_empty or not hasattr(r, "exterior"):
                             continue
                         x, y = r.exterior.xy
-                        ax.plot(x, y, color='black', linewidth=0.5)
+                        ax.plot(x, y, color="black", linewidth=0.5)
                 except Exception:
                     pass
-            # overlay route points if provided (scaled mm coords)
             if route_points is not None:
                 try:
-                    ax.plot(route_points[:, 0], route_points[:, 1], color='red', linewidth=1.0)
+                    ax.plot(route_points[:, 0], route_points[:, 1], color="red", linewidth=1.0)
                 except Exception:
                     pass
-
             ax.set_aspect("equal", adjustable="box")
             fig.savefig("buildings_debug.png", dpi=150)
             plt.close(fig)
@@ -256,3 +434,4 @@ out geom;
             pass
 
     return unioned, final_mesh
+
