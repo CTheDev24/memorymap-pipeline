@@ -36,6 +36,9 @@ def download_and_build_roads(
     road_types: Iterable[str],
     road_widths: dict,
     road_height_mm: float,
+    map_width_mm: float = 190.0,
+    map_height_mm: float = 190.0,
+    margin_mm: float = 8.0,
     debug: bool = False,
     z_offset: float = 0.0,
     radius_m: float | None = None,
@@ -89,6 +92,11 @@ def download_and_build_roads(
 
     buffered_polys = []
 
+    # Create clipping boundary to keep roads within map bounds
+    clip_box = geom.box(
+        margin_mm, margin_mm, map_width_mm - margin_mm, map_height_mm - margin_mm
+    )
+
     for _, row in edges.iterrows():
         hw = row.get("highway")
         if hw is None:
@@ -120,7 +128,14 @@ def download_and_build_roads(
         width_mm = float(road_widths.get(hw_norm, 1.0))
         poly = line.buffer(width_mm / 2.0, resolution=16, cap_style=2, join_style=1)
         if not poly.is_empty:
-            buffered_polys.append(poly)
+            # Clip road to map boundaries
+            try:
+                clipped = poly.intersection(clip_box)
+                if not clipped.is_empty:
+                    buffered_polys.append(clipped)
+            except Exception:
+                # If clipping fails, keep unclipped
+                buffered_polys.append(poly)
 
     if not buffered_polys:
         return None, None
