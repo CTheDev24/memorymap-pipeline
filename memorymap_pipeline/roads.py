@@ -25,6 +25,8 @@ OVERPASS_ENDPOINTS = [
     "https://overpass.kumi.systems/api/interpreter",
 ]
 
+OVERPASS_TIMEOUT = 60
+
 
 def download_and_build_roads(
     bbox: tuple[float, float, float, float] | None,

@@ -5,3 +5,7 @@ shapely>=2.0
 matplotlib>=3.7
 mapbox_earcut>=1.0
 lxml>=4.9
+networkx>=3.0
+osmnx>=1.7.0
+geopandas>=0.13.0
+requests>=2.28.0

@@ -119,6 +119,8 @@ OVERPASS_ENDPOINTS = [
     "https://overpass.kumi.systems/api/interpreter",
 ]
 
+OVERPASS_TIMEOUT = 60
+
 
 def download_and_build_buildings(
     bbox: tuple[float, float, float, float] | None,
@@ -240,7 +242,7 @@ def download_and_build_buildings(
                         "Accept": "application/json",
                     }
                     resp = requests.post(
-                        endpoint, data={"data": query}, headers=headers, timeout=30
+                        endpoint, data={"data": query}, headers=headers, timeout=OVERPASS_TIMEOUT
                     )
                     resp.raise_for_status()
                     data = resp.json()
