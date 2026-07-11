@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run unit tests
+        run: PYTHONPATH=. pytest tests/ -v
+
+      - name: Run pipeline with Evening_run.gpx
+        run: |
+          PYTHONPATH=. python main.py Evening_run.gpx /tmp/output_evening.3mf --no-roads --no-buildings

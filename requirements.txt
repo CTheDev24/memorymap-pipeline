@@ -4,3 +4,4 @@ pytest>=8.0
 shapely>=2.0
 matplotlib>=3.7
 mapbox_earcut>=1.0
+lxml>=4.9

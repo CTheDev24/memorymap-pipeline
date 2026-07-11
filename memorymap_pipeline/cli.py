@@ -31,8 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--margin-mm", type=float, default=None, help="Margin from the map edge in millimeters")
     parser.add_argument("--roads-file", type=Path, default=None, help="Path to a local roads GeoJSON/GeoPackage to use instead of downloading OSM")
     parser.add_argument("--buildings-file", type=Path, default=None, help="Path to a local buildings GeoJSON/GeoPackage to use instead of downloading OSM")
+    parser.add_argument("--no-roads", dest="include_roads", action="store_false", help="Do not include road network in the exported 3MF")
     parser.add_argument("--no-buildings", dest="include_buildings", action="store_false", help="Do not include building footprints in the exported 3MF")
     parser.set_defaults(include_base=True)
+    parser.set_defaults(include_roads=True)
     parser.set_defaults(include_buildings=True)
     return parser
 
@@ -108,29 +110,31 @@ def main() -> None:
     route_mesh = route_mesh_from_polygon(poly_to_use, height_mm=route_height_mm, z_offset=z_offset)
     # build roads (separate body)
     roads_mesh = None
-    try:
-        latitudes = [p.latitude for p in route.points]
-        longitudes = [p.longitude for p in route.points]
-        lat_min = min(latitudes)
-        lat_max = max(latitudes)
-        lon_min = min(longitudes)
-        lon_max = max(longitudes)
+    unioned = None
+    if args.include_roads:
+        try:
+            latitudes = [p.latitude for p in route.points]
+            longitudes = [p.longitude for p in route.points]
+            lat_min = min(latitudes)
+            lat_max = max(latitudes)
+            lon_min = min(longitudes)
+            lon_max = max(longitudes)
 
-        unioned, roads_mesh = download_and_build_roads(
-            bbox=(lat_min, lat_max, lon_min, lon_max),
-            center_lat=route.points[0].latitude,
-            center_lon=route.points[0].longitude,
-            transform=transform,
-            road_types=config.get("road_types", []),
-            road_widths=config.get("road_widths", {}),
-            road_height_mm=config.get("road_height", 0.8),
-            debug=config.get("roads_debug", False),
-            z_offset=z_offset,
-            radius_m=config.get("road_query_radius_m", None),
-            roads_file=str(args.roads_file) if args.roads_file is not None else None,
-        )
-    except Exception:
-        unioned = None
+            unioned, roads_mesh = download_and_build_roads(
+                bbox=(lat_min, lat_max, lon_min, lon_max),
+                center_lat=route.points[0].latitude,
+                center_lon=route.points[0].longitude,
+                transform=transform,
+                road_types=config.get("road_types", []),
+                road_widths=config.get("road_widths", {}),
+                road_height_mm=config.get("road_height", 0.8),
+                debug=config.get("roads_debug", False),
+                z_offset=z_offset,
+                radius_m=config.get("road_query_radius_m", None),
+                roads_file=str(args.roads_file) if args.roads_file is not None else None,
+            )
+        except Exception:
+            unioned = None
     # build buildings (verification overlay)
     buildings_mesh = None
     unioned_buildings = None
