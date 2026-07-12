@@ -133,5 +133,36 @@ To build a distributable Windows executable, install the packaging extra and run
 
 ```powershell
 python -m pip install -e ".[desktop,package]"
-pyinstaller memorymap-desktop.spec
+pyinstaller --noconfirm --clean memorymap-desktop.spec
 ```
+
+The finished executable is written to `dist\MemoryMap.exe`. The `build/`, `dist/`, and
+`*.exe` paths remain ignored by Git: source code, dependencies, and the PyInstaller spec
+are versioned, while generated binaries are distributed through Actions and Releases.
+
+Because development builds are not code-signed, Windows SmartScreen may display a warning.
+If you trust the commit that produced the build, select **More info** and **Run anyway**.
+
+### Download a branch or pull-request build
+
+1. Open the repository's **Actions** tab on GitHub.
+2. Select a successful **Build Windows desktop app** run for the desired commit.
+3. Under **Artifacts**, download `MemoryMap-Windows-<commit SHA>`.
+4. Extract the ZIP and run `MemoryMap.exe`.
+
+Workflow artifacts are temporary, commit-specific test builds. The accompanying
+`MemoryMap.exe.sha256` file can be used to verify the download.
+
+### Publish a tagged release
+
+Create and push a semantic version tag after the target commit is tested:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The tag triggers the release workflow, which tests and packages the exact tagged source,
+then attaches a versioned Windows executable and checksum to a permanent GitHub Release.
+Use patch tags such as `v0.1.1` for fixes, minor tags such as `v0.2.0` for compatible
+features, and major tags such as `v1.0.0` for the first stable release or breaking changes.
