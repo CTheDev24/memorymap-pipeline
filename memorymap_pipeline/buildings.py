@@ -32,7 +32,8 @@ def _transform_shapely_polygon(
         lons = coords[:, 0]
         lats = coords[:, 1]
         projected = project_lonlat_array(lats, lons, center_lat=center_lat, center_lon=center_lon)
-        transformed = apply_transform(projected, transform)
+        frame = transform.get("map_frame")
+        transformed = frame.transform_projected(projected) if frame is not None else apply_transform(projected, transform)
         return [(float(x), float(y)) for x, y in transformed]
 
     exterior = _transform_ring(polygon.exterior.coords)
@@ -87,6 +88,41 @@ def _extract_real_height_m(
                     return levels * levels_to_m
             except (ValueError, TypeError):
                 pass
+
+    roof_levels_val = tags.get("roof:levels")
+    if roof_levels_val is not None:
+        if isinstance(roof_levels_val, (list, tuple)):
+            roof_levels_val = roof_levels_val[0] if roof_levels_val else None
+        try:
+            roof_levels = float(str(roof_levels_val).strip())
+            estimated_height = default_height_m + roof_levels * levels_to_m
+            if 0.0 < roof_levels and estimated_height <= max_height_m:
+                return estimated_height
+        except (ValueError, TypeError):
+            pass
+
+    building_type = tags.get("building")
+    if isinstance(building_type, (list, tuple)):
+        building_type = building_type[0] if building_type else None
+    type_defaults = {
+        "apartments": 12.0,
+        "office": 12.0,
+        "commercial": 9.0,
+        "hotel": 12.0,
+        "hospital": 12.0,
+        "industrial": 8.0,
+        "warehouse": 8.0,
+        "retail": 6.0,
+        "church": 12.0,
+        "cathedral": 18.0,
+        "garage": 3.0,
+        "garages": 3.0,
+        "shed": 3.0,
+    }
+    if building_type is not None:
+        estimated = type_defaults.get(str(building_type).strip().lower())
+        if estimated is not None:
+            return min(estimated, max_height_m)
 
     return default_height_m
 

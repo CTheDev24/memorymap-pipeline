@@ -1,0 +1,20 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"building": "apartments", "height": "18 m"},
+      "geometry": {"type": "Polygon", "coordinates": [[[-95.37035, 29.75990], [-95.37015, 29.75990], [-95.37015, 29.76008], [-95.37035, 29.76008], [-95.37035, 29.75990]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"building": "commercial", "building:levels": 4},
+      "geometry": {"type": "Polygon", "coordinates": [[[-95.36985, 29.76005], [-95.36965, 29.76005], [-95.36965, 29.76022], [-95.36985, 29.76022], [-95.36985, 29.76005]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"building": "yes", "height": 9},
+      "geometry": {"type": "Polygon", "coordinates": [[[-95.36905, 29.76000], [-95.36885, 29.76000], [-95.36885, 29.76020], [-95.36905, 29.76020], [-95.36905, 29.76000]]]}
+    }
+  ]
+}

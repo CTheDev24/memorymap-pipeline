@@ -1,0 +1,87 @@
+"""Offline full-stack coverage for the frame-aware generation service.
+
+The local fixtures deliberately cross the frame edges so this suite also catches
+regressions where secondary layers use route-derived bounds instead of MapFrame.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+import xml.etree.ElementTree as ET
+import zipfile
+
+import pytest
+
+generation = pytest.importorskip(
+    "memorymap_pipeline.generation",
+    reason="frame-aware generation service is implemented in the GUI integration phase",
+)
+
+from memorymap_pipeline.config import load_config
+from memorymap_pipeline.gpx_loader import load_route_from_gpx
+from memorymap_pipeline.map_frame import MapFrame
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _model_objects(path: Path) -> tuple[set[str], list[tuple[float, float, float]]]:
+    with zipfile.ZipFile(path) as archive:
+        model_name = next(name for name in archive.namelist() if name.lower().endswith(".model"))
+        root = ET.fromstring(archive.read(model_name))
+    namespace = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    names = {item.attrib.get("name", "") for item in root.findall(".//m:object", namespace)}
+    vertices = [
+        (float(item.attrib["x"]), float(item.attrib["y"]), float(item.attrib["z"]))
+        for item in root.findall(".//m:vertex", namespace)
+    ]
+    return names, vertices
+
+
+def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
+    route = load_route_from_gpx(FIXTURES / "frame_route.gpx")
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+    output = tmp_path / "offline-frame.3mf"
+    request = generation.GenerationRequest(
+        route=route,
+        frame=frame,
+        output_path=output,
+        include_base=True,
+        include_route=True,
+        include_roads=True,
+        include_buildings=True,
+        route_width_mm=1.2,
+        route_height_mm=2.0,
+        base_thickness_mm=1.0,
+        config=load_config(),
+        roads_file=FIXTURES / "frame_roads.geojson",
+        buildings_file=FIXTURES / "frame_buildings.geojson",
+    )
+
+    progress: list[int] = []
+    result = generation.generate_memory_map(
+        request, progress_callback=lambda value, *_message: progress.append(value)
+    )
+
+    assert result.output_path == output
+    assert output.is_file()
+    assert progress and progress[-1] == 100
+    assert result.stats["roads"] > 0
+    assert result.stats["buildings"] == 2  # third footprint is entirely east of the frame
+
+    names, vertices = _model_objects(output)
+    assert {"Base_White", "Route_Accent", "Roads_Black", "Buildings_Verification"} <= names
+    assert vertices
+    # Base may occupy the full physical dimensions; no generated overlay may expand it.
+    tolerance = 1e-5
+    assert min(x for x, _, _ in vertices) >= -tolerance
+    assert min(y for _, y, _ in vertices) >= -tolerance
+    assert max(x for x, _, _ in vertices) <= frame.print_width_mm + tolerance
+    assert max(y for _, y, _ in vertices) <= frame.print_height_mm + tolerance

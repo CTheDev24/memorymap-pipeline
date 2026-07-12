@@ -1,9 +1,13 @@
 from pathlib import Path
+import json
+import sys
 
 import pytest
 from shapely.geometry import box
 
 from memorymap_pipeline.buildings import _extract_real_height_m
+from memorymap_pipeline.cli import main
+from memorymap_pipeline.config import DEFAULT_CONFIG, load_config
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
 from memorymap_pipeline.projection import normalize_and_scale_points, project_points
 
@@ -34,6 +38,41 @@ def test_parse_and_scale_route(tmp_path: Path) -> None:
     assert scaled[:, 0].max() <= 241.0
     assert scaled[:, 1].min() >= 0.0
     assert scaled[:, 1].max() <= 190.0
+
+
+def test_load_config_does_not_mutate_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"portrait": {"map_width": 123.0}}), encoding="utf-8")
+    assert load_config(config_path)["portrait"]["map_width"] == 123.0
+    assert DEFAULT_CONFIG["portrait"]["map_width"] == 190.0
+    assert load_config()["portrait"]["map_width"] == 190.0
+
+
+def test_buildings_run_when_roads_are_disabled(tmp_path: Path, monkeypatch) -> None:
+    gpx_path = tmp_path / "route.gpx"
+    gpx_path.write_text(
+        """<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
+<trkpt lat="40.0" lon="-74.0"/><trkpt lat="40.001" lon="-74.002"/>
+</trkseg></trk></gpx>""",
+        encoding="utf-8",
+    )
+    call = {}
+
+    def fake_buildings(**kwargs):
+        call.update(kwargs)
+        return None, None
+
+    monkeypatch.setattr("memorymap_pipeline.cli.download_and_build_buildings", fake_buildings)
+    monkeypatch.setattr("memorymap_pipeline.cli.export_3mf", lambda *args: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["memorymap-pipeline", str(gpx_path), str(tmp_path / "out.3mf"), "--no-roads", "--no-base"],
+    )
+
+    main()
+
+    assert call["bbox"] == pytest.approx((40.0, 40.001, -74.002, -74.0))
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +128,15 @@ def test_height_zero_not_used():
     # Zero-height tags should be ignored and fall back
     tags = {"height": "0", "building:levels": "0"}
     assert _extract_real_height_m(tags, **_DEFAULTS) == pytest.approx(6.0)
+
+
+def test_height_uses_roof_levels_when_main_levels_are_missing():
+    assert _extract_real_height_m({"roof:levels": "2"}, **_DEFAULTS) == pytest.approx(12.0)
+
+
+def test_height_uses_conservative_building_type_estimate():
+    assert _extract_real_height_m({"building": "apartments"}, **_DEFAULTS) == pytest.approx(12.0)
+    assert _extract_real_height_m({"building": "garage"}, **_DEFAULTS) == pytest.approx(3.0)
 
 
 # ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ def download_and_build_roads(
     road_types: Iterable[str],
     road_widths: dict,
     road_height_mm: float,
+    network_type: str = "all",
     map_width_mm: float = 190.0,
     map_height_mm: float = 190.0,
     margin_mm: float = 8.0,
@@ -76,11 +77,11 @@ def download_and_build_roads(
             try:
                 ox.settings.overpass_endpoint = endpoint
                 if radius_m is not None:
-                    G = ox.graph_from_point((center_lat, center_lon), dist=radius_m, network_type="drive")
+                    G = ox.graph_from_point((center_lat, center_lon), dist=radius_m, network_type=network_type)
                 else:
                     lat_min, lat_max, lon_min, lon_max = bbox
                     bbox_tuple = (lat_max, lat_min, lon_max, lon_min)
-                    G = ox.graph_from_bbox(bbox_tuple, network_type="drive")
+                    G = ox.graph_from_bbox(bbox_tuple, network_type=network_type)
                 edges = ox.graph_to_gdfs(G, nodes=False, edges=True, fill_edge_geometry=True)
                 break
             except Exception as exc:
@@ -120,7 +121,8 @@ def download_and_build_roads(
         lats = coords[:, 1]
 
         projected = project_lonlat_array(lats, lons, center_lat=center_lat, center_lon=center_lon)
-        transformed = apply_transform(projected, transform)
+        frame = transform.get("map_frame")
+        transformed = frame.transform_projected(projected) if frame is not None else apply_transform(projected, transform)
 
         # build shapely LineString in mm coordinates
         line = LineString([(float(x), float(y)) for x, y in transformed])

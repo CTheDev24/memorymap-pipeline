@@ -1,0 +1,15 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"highway": "residential", "name": "Center Street"},
+      "geometry": {"type": "LineString", "coordinates": [[-95.3712, 29.7600], [-95.3692, 29.7600]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"highway": "service", "name": "Clipped Service Road"},
+      "geometry": {"type": "LineString", "coordinates": [[-95.3700, 29.7594], [-95.3700, 29.7606]]}
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -30,9 +31,16 @@ DEFAULT_CONFIG = {
         "living_street": 1.0,
         "unclassified": 1.0,
         "service": 0.8,
+        "pedestrian": 1.0,
+        "cycleway": 0.7,
+        "footway": 0.6,
+        "path": 0.5,
+        "track": 0.7,
     },
     # which highway types to keep by default
-    "road_types": ["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link", "residential", "living_street", "unclassified", "service"],
+    "road_types": ["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link", "residential", "living_street", "unclassified", "service", "pedestrian", "cycleway", "footway", "path", "track"],
+    # "all" includes pedestrian, cycle, path, and track networks; road_types controls output.
+    "road_network_type": "all",
     # debug plotting for roads
     "roads_debug": False,
     # radius (meters) to query OSM around route center when fetching roads
@@ -57,7 +65,7 @@ DEFAULT_CONFIG = {
 
 
 def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
-    config = DEFAULT_CONFIG.copy()
+    config = deepcopy(DEFAULT_CONFIG)
     if config_path is None:
         return config
 
