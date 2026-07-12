@@ -16,21 +16,39 @@ class DesktopProject:
     gpx_path: str | None = None
     include_roads: bool = True
     include_buildings: bool = True
+    include_terrain: bool = False
+    include_water: bool = False
+    terrain_relief_mm: float = 3.0
+    water_recess_mm: float = 0.4
     route_width_mm: float = 1.2
     route_height_mm: float = 2.0
     version: int = field(default=1, init=False)
 
     def __post_init__(self) -> None:
-        if self.route_width_mm <= 0 or self.route_height_mm <= 0:
-            raise ValueError("Route dimensions must be positive")
+        if min(
+            self.route_width_mm,
+            self.route_height_mm,
+            self.terrain_relief_mm,
+            self.water_recess_mm,
+        ) <= 0:
+            raise ValueError("Route and terrain dimensions must be positive")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,
             "gpx_path": self.gpx_path,
             "frame": asdict(self.frame),
-            "layers": {"roads": self.include_roads, "buildings": self.include_buildings},
+            "layers": {
+                "roads": self.include_roads,
+                "buildings": self.include_buildings,
+                "terrain": self.include_terrain,
+                "water": self.include_water,
+            },
             "route": {"width_mm": self.route_width_mm, "height_mm": self.route_height_mm},
+            "terrain": {
+                "relief_mm": self.terrain_relief_mm,
+                "water_recess_mm": self.water_recess_mm,
+            },
         }
 
     def to_json(self) -> str:
@@ -43,11 +61,16 @@ class DesktopProject:
         try:
             layers = value.get("layers", {})
             route = value.get("route", {})
+            terrain = value.get("terrain", {})
             return cls(
                 frame=MapFrame(**value["frame"]),
                 gpx_path=value.get("gpx_path"),
                 include_roads=bool(layers.get("roads", True)),
                 include_buildings=bool(layers.get("buildings", True)),
+                include_terrain=bool(layers.get("terrain", False)),
+                include_water=bool(layers.get("water", False)),
+                terrain_relief_mm=float(terrain.get("relief_mm", 3.0)),
+                water_recess_mm=float(terrain.get("water_recess_mm", 0.4)),
                 route_width_mm=float(route.get("width_mm", 1.2)),
                 route_height_mm=float(route.get("height_mm", 2.0)),
             )

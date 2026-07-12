@@ -86,8 +86,8 @@ the official USGS 3DEP ImageServer for United States frames; downloaded TIFF sam
 cached under the user's local MemoryMap data directory. The provider boundary accepts
 offline fixtures today and is intended to support a global DEM provider later.
 
-Terrain is disabled by default while the desktop controls and OSM water downloader are
-completed. Its initial configuration is:
+Terrain is disabled by default. MemoryMap Studio exposes Terrain and Water layer toggles,
+maximum relief, and water recess controls. Its initial configuration is:
 
 ```json
 {
@@ -110,9 +110,10 @@ their visible heights.
 
 Water polygons are part of the same multipart model and use the same gray material as
 buildings. Water starts 0.4 mm below the local terrain surface and embeds by 0.2 mm,
-while the structural base remains underneath. The scaffold currently accepts water
-polygons already transformed into print coordinates; automatic OSM water acquisition
-and GUI toggles are the next integration stage.
+while the structural base remains underneath. When Water is enabled, desktop generation
+downloads OSM areas tagged `natural=water`, `waterway=riverbank`, or reservoir/basin land
+use and transforms them into the print frame. Local water files or pre-transformed
+polygons remain available for offline tests.
 
 To omit the base plate:
 

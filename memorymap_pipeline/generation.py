@@ -25,7 +25,12 @@ from .mesh import (
 from .roads import download_and_build_roads
 from .terrain import ElevationGrid, build_terrain_mesh, drape_mesh, terrain_surface_from_grid
 from .terrain_providers import Usgs3depProvider
-from .water import build_water_mesh, rasterize_water_mask, recess_water_surface
+from .water import (
+    build_water_mesh,
+    download_water_polygons,
+    rasterize_water_mask,
+    recess_water_surface,
+)
 
 
 ProgressCallback = Callable[[int, str], None]
@@ -79,6 +84,7 @@ class GenerationRequest:
     buildings_file: str | Path | None = None
     elevation_grid: ElevationGrid | None = None
     water_polygons: list[Any] | None = None
+    water_file: str | Path | None = None
 
 
 @dataclass
@@ -181,6 +187,7 @@ def generate_memory_map(
     )
     warnings: list[str] = []
     bbox, radius = _query_bounds(frame)
+    transform = {"map_frame": frame}
     terrain_surface = None
     water_mesh = None
     if request.include_base and bool(config.get("terrain_enabled", False)):
@@ -202,8 +209,20 @@ def generate_memory_map(
             float(config.get("terrain_min_relief_mm", 1.5)),
         )
         if bool(config.get("water_enabled", False)):
-            if request.water_polygons:
-                water_mask = rasterize_water_mask(request.water_polygons, terrain_surface)
+            water_polygons = request.water_polygons
+            if water_polygons is None:
+                water_polygons = download_water_polygons(
+                    bbox=bbox,
+                    center_lat=frame.center_lat,
+                    center_lon=frame.center_lon,
+                    transform=transform,
+                    map_width_mm=frame.print_width_mm,
+                    map_height_mm=frame.print_height_mm,
+                    radius_m=radius,
+                    water_file=request.water_file,
+                )
+            if water_polygons:
+                water_mask = rasterize_water_mask(water_polygons, terrain_surface)
                 terrain_surface = recess_water_surface(
                     terrain_surface,
                     water_mask,
@@ -239,7 +258,6 @@ def generate_memory_map(
             warnings.append("The route does not intersect the printable frame.")
     progress(25, "Route mesh complete")
 
-    transform = {"map_frame": frame}
     unioned_roads = None
     roads_mesh = None
     if request.include_roads:

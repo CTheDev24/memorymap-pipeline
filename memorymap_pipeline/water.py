@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 import numpy as np
 from shapely import contains_xy
 from shapely.geometry.base import BaseGeometry
@@ -7,6 +10,80 @@ from shapely.ops import unary_union
 from trimesh import Trimesh
 
 from .terrain import TerrainSurface
+from .buildings import _transform_shapely_polygon
+
+
+WATER_TAGS = {
+    "natural": "water",
+    "waterway": "riverbank",
+    "landuse": ["reservoir", "basin"],
+}
+
+
+def download_water_polygons(
+    bbox: tuple[float, float, float, float],
+    center_lat: float,
+    center_lon: float,
+    transform: dict,
+    map_width_mm: float,
+    map_height_mm: float,
+    radius_m: float | None = None,
+    water_file: str | Path | None = None,
+) -> list[BaseGeometry]:
+    """Load OSM water areas and transform them into clipped print-space polygons."""
+    try:
+        import geopandas as gpd
+
+        if water_file is not None:
+            data = gpd.read_file(water_file)
+        else:
+            import osmnx as ox
+
+            fetch_point = getattr(ox, "features_from_point", None) or getattr(
+                ox, "geometries_from_point", None
+            )
+            fetch_bbox = getattr(ox, "features_from_bbox", None) or getattr(
+                ox, "geometries_from_bbox", None
+            )
+            if radius_m is not None and fetch_point is not None:
+                data = fetch_point(
+                    (center_lat, center_lon), tags=WATER_TAGS, dist=radius_m
+                )
+            elif fetch_bbox is not None:
+                lat_min, lat_max, lon_min, lon_max = bbox
+                try:
+                    data = fetch_bbox((lon_min, lat_min, lon_max, lat_max), tags=WATER_TAGS)
+                except TypeError:
+                    data = fetch_bbox(lat_max, lat_min, lon_max, lon_min, tags=WATER_TAGS)
+            else:
+                raise RuntimeError("Installed OSMnx does not expose a feature query API")
+    except Exception as exc:
+        logging.warning("Failed to load water polygons: %s", exc)
+        return []
+
+    from shapely.geometry import box as shapely_box
+
+    print_bounds = shapely_box(0.0, 0.0, map_width_mm, map_height_mm)
+    transformed: list[BaseGeometry] = []
+    for geometry in data.geometry:
+        if geometry is None or geometry.is_empty:
+            continue
+        parts = list(geometry.geoms) if geometry.geom_type == "MultiPolygon" else [geometry]
+        for part in parts:
+            if part.geom_type != "Polygon":
+                continue
+            try:
+                print_polygon = _transform_shapely_polygon(
+                    part,
+                    center_lat=center_lat,
+                    center_lon=center_lon,
+                    transform=transform,
+                ).intersection(print_bounds)
+            except Exception:
+                continue
+            if not print_polygon.is_empty:
+                transformed.append(print_polygon)
+    return transformed
 
 
 def rasterize_water_mask(

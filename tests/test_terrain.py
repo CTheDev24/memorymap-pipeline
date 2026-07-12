@@ -21,7 +21,12 @@ from memorymap_pipeline.terrain import (
     terrain_surface_from_grid,
 )
 from memorymap_pipeline.terrain_providers import Usgs3depProvider
-from memorymap_pipeline.water import build_water_mesh, rasterize_water_mask, recess_water_surface
+from memorymap_pipeline.water import (
+    build_water_mesh,
+    download_water_polygons,
+    rasterize_water_mask,
+    recess_water_surface,
+)
 
 
 def _grid(values: list[list[float]]) -> ElevationGrid:
@@ -223,3 +228,27 @@ def test_generation_service_drapes_route_and_exports_recessed_water(tmp_path: Pa
     assert result.stats["terrain"]["flatness_rating"] == 5
     assert result.stats["layers"]["water"] is not None
     assert result.buildings_mesh.bounds[0, 2] > -0.2
+
+
+def test_water_loader_transforms_local_osm_polygons_into_print_space() -> None:
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+    polygons = download_water_polygons(
+        bbox=(29.759, 29.761, -95.371, -95.369),
+        center_lat=frame.center_lat,
+        center_lon=frame.center_lon,
+        transform={"map_frame": frame},
+        map_width_mm=frame.print_width_mm,
+        map_height_mm=frame.print_height_mm,
+        water_file=Path(__file__).parent / "fixtures" / "frame_buildings.geojson",
+    )
+    assert polygons
+    assert all(0.0 <= polygon.bounds[0] <= polygon.bounds[2] <= 120.0 for polygon in polygons)
+    assert all(0.0 <= polygon.bounds[1] <= polygon.bounds[3] <= 90.0 for polygon in polygons)

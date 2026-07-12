@@ -125,9 +125,30 @@ class MemoryMapWindow(QMainWindow):
         self.route_layer = QCheckBox("Route"); self.route_layer.setChecked(True)
         self.roads_layer = QCheckBox("Roads"); self.roads_layer.setChecked(True)
         self.buildings_layer = QCheckBox("Buildings"); self.buildings_layer.setChecked(True)
-        for control in (self.route_layer, self.roads_layer, self.buildings_layer):
+        self.terrain_layer = QCheckBox("Terrain (USGS 3DEP)")
+        self.water_layer = QCheckBox("Water (gray, recessed)")
+        self.water_layer.setEnabled(False)
+        self.terrain_layer.toggled.connect(self._terrain_toggled)
+        self.water_layer.toggled.connect(self._water_toggled)
+        for control in (
+            self.route_layer,
+            self.roads_layer,
+            self.buildings_layer,
+            self.terrain_layer,
+            self.water_layer,
+        ):
             layer_layout.addWidget(control)
         outer.addWidget(layers)
+
+        terrain_box = QGroupBox("Terrain settings")
+        terrain_form = QFormLayout(terrain_box)
+        self.terrain_relief = self._spin(3.0, 0.5, 12.0)
+        self.water_recess = self._spin(0.4, 0.1, 3.0)
+        self.terrain_relief.setEnabled(False)
+        self.water_recess.setEnabled(False)
+        terrain_form.addRow("Maximum relief", self.terrain_relief)
+        terrain_form.addRow("Water recess", self.water_recess)
+        outer.addWidget(terrain_box)
         self.generate = QPushButton("Generate 3MF")
         self.generate.setEnabled(False)
         self.generate.clicked.connect(self.request_generation)
@@ -213,6 +234,18 @@ class MemoryMapWindow(QMainWindow):
             self.current_frame = self.default_frame.copy()
             self.map_view.page().runJavaScript("resetFrame()")
 
+    @Slot(bool)
+    def _terrain_toggled(self, enabled: bool) -> None:
+        self.terrain_relief.setEnabled(enabled)
+        self.water_layer.setEnabled(enabled)
+        if not enabled:
+            self.water_layer.setChecked(False)
+        self.water_recess.setEnabled(enabled and self.water_layer.isChecked())
+
+    @Slot(bool)
+    def _water_toggled(self, enabled: bool) -> None:
+        self.water_recess.setEnabled(enabled and self.terrain_layer.isChecked())
+
     @Slot()
     def request_generation(self) -> None:
         if not self.gpx_path or not self.route or not self.current_frame:
@@ -229,6 +262,12 @@ class MemoryMapWindow(QMainWindow):
                 "include_roads": self.roads_layer.isChecked(),
                 "include_buildings": self.buildings_layer.isChecked(),
                 "route_width_mm": self.route_width.value(),
+                "config": {
+                    "terrain_enabled": self.terrain_layer.isChecked(),
+                    "water_enabled": self.water_layer.isChecked(),
+                    "terrain_max_relief_mm": self.terrain_relief.value(),
+                    "water_recess_mm": self.water_recess.value(),
+                },
             }
             thread = QThread(self); worker = GenerationWorker(payload)
             worker.moveToThread(thread); thread.started.connect(worker.run)
