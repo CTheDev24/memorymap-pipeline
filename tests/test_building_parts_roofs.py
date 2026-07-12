@@ -2,10 +2,11 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 import zipfile
 
+import numpy as np
 import pytest
 from shapely.geometry import box
 
-from memorymap_pipeline.buildings import _building_dimensions, _roof_mesh
+from memorymap_pipeline.buildings import _building_dimensions, _overpass_geometry, _roof_mesh
 from memorymap_pipeline.generation import GenerationRequest, generate_memory_map
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
 from memorymap_pipeline.map_frame import MapFrame
@@ -45,6 +46,42 @@ def test_unknown_roof_shape_falls_back_to_flat() -> None:
         {"height": "10", "roof:height": "3", "roof:shape": "onion"}, **DEFAULTS
     )
     assert dims.roof_shape == "flat"
+
+
+def test_gabled_roof_orientation_across_rotates_the_ridge() -> None:
+    polygon = box(0, 0, 20, 10)
+    along = _roof_mesh(polygon, 5.0, 3.0, "gabled", orientation="along")
+    across = _roof_mesh(polygon, 5.0, 3.0, "gabled", orientation="across")
+    assert along is not None and across is not None
+    along_peak = along.vertices[np.isclose(along.vertices[:, 2], 8.0)]
+    across_peak = across.vertices[np.isclose(across.vertices[:, 2], 8.0)]
+    assert len(set(along_peak[:, 0])) > len(set(along_peak[:, 1]))
+    assert len(set(across_peak[:, 1])) > len(set(across_peak[:, 0]))
+
+
+def test_overpass_multipolygon_preserves_centerpoint_style_crown_hole() -> None:
+    def points(coords):
+        return [{"lon": x, "lat": y} for x, y in coords]
+
+    element = {
+        "type": "relation",
+        "members": [
+            {
+                "type": "way",
+                "role": "outer",
+                "geometry": points([(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]),
+            },
+            {
+                "type": "way",
+                "role": "inner",
+                "geometry": points([(3, 3), (7, 3), (7, 7), (3, 7), (3, 3)]),
+            },
+        ],
+    }
+    polygon = _overpass_geometry(element)
+    assert polygon is not None
+    assert polygon.area == pytest.approx(84.0)
+    assert len(polygon.interiors) == 1
 
 
 def test_offline_parts_fixture_generates_embedded_colored_layer(tmp_path: Path) -> None:
