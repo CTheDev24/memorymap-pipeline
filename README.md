@@ -158,8 +158,9 @@ conservative one-storey roof.
 All building bodies and roofs remain in the gray `Buildings_Verification` component of the
 colored multipart 3MF. Ground-level volumes retain the configured 0.2 mm local embed without
 reducing their visible height. Elevated parts honor `min_height` and overlap their supporting
-volume by up to the same embed depth. Roof direction and more specialized roof shapes are not
-yet modeled; supported roofs are aligned to the footprint's minimum rotated rectangle.
+volume by up to the same embed depth. `roof:orientation=along|across` is honored for supported
+roof shapes. `roof:direction` and more specialized roof shapes are not yet modeled; supported
+roofs otherwise align to the footprint's minimum rotated rectangle.
 
 To build a distributable Windows executable, install the packaging extra and run:
 

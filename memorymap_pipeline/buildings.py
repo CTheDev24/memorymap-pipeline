@@ -23,6 +23,7 @@ class BuildingDimensions:
     total_height_m: float
     roof_height_m: float
     roof_shape: str
+    roof_orientation: str
 
     @property
     def eave_height_m(self) -> float:
@@ -77,11 +78,18 @@ def _building_dimensions(
         roof_height = 0.0
     if shape != "flat" and roof_height <= 0.0:
         roof_height = min(levels_to_m, total_height - min_height)
-    return BuildingDimensions(min_height, total_height, roof_height, shape)
+    orientation = str(tags.get("roof:orientation", "along")).strip().lower()
+    if orientation not in {"along", "across"}:
+        orientation = "along"
+    return BuildingDimensions(min_height, total_height, roof_height, shape, orientation)
 
 
 def _roof_mesh(
-    polygon: geom.Polygon, eave_z: float, roof_height_mm: float, shape: str
+    polygon: geom.Polygon,
+    eave_z: float,
+    roof_height_mm: float,
+    shape: str,
+    orientation: str = "along",
 ) -> Trimesh | None:
     """Create a faceted roof over an arbitrary footprint using oriented bounds."""
     if shape == "flat" or roof_height_mm <= 0.0:
@@ -96,6 +104,9 @@ def _roof_mesh(
     projected = corners - center
     half_long = max(np.max(np.abs(projected @ long_axis)), 1e-9)
     half_short = max(np.max(np.abs(projected @ short_axis)), 1e-9)
+    if orientation == "across":
+        long_axis, short_axis = short_axis, long_axis
+        half_long, half_short = half_short, half_long
 
     def z_at(x: float, y: float) -> float:
         delta = np.array([x, y]) - center
@@ -298,6 +309,46 @@ OVERPASS_ENDPOINTS = [
 OVERPASS_TIMEOUT = 60
 
 
+def _overpass_geometry(element: dict) -> geom.base.BaseGeometry | None:
+    """Build polygon geometry from an Overpass way or multipolygon relation."""
+
+    def ring(items: object) -> geom.Polygon | None:
+        if not isinstance(items, list):
+            return None
+        coordinates = [
+            (item["lon"], item["lat"])
+            for item in items
+            if isinstance(item, dict) and "lon" in item and "lat" in item
+        ]
+        if len(coordinates) < 3:
+            return None
+        try:
+            polygon = geom.Polygon(coordinates)
+            return polygon if not polygon.is_empty else None
+        except Exception:
+            return None
+
+    if element.get("type") == "way":
+        return ring(element.get("geometry"))
+    if element.get("type") != "relation":
+        return None
+    outers: list[geom.Polygon] = []
+    inners: list[geom.Polygon] = []
+    for member in element.get("members", []):
+        if not isinstance(member, dict) or member.get("type") != "way":
+            continue
+        polygon = ring(member.get("geometry"))
+        if polygon is None:
+            continue
+        (inners if member.get("role") == "inner" else outers).append(polygon)
+    if not outers:
+        return None
+    result = ops.unary_union(outers)
+    if inners:
+        result = result.difference(ops.unary_union(inners))
+    return result
+
+
 def download_and_build_buildings(
     bbox: tuple[float, float, float, float] | None,
     center_lat: float,
@@ -412,7 +463,6 @@ def download_and_build_buildings(
 
                 try:
                     import requests
-                    from shapely.geometry import Polygon as ShapelyPolygon
 
                     south, west, north, east = bbox_for_query
                     # Use "out body geom" so tags are included in the response
@@ -421,6 +471,8 @@ def download_and_build_buildings(
                         f"(\n"
                         f'  way["building"]({south},{west},{north},{east});\n'
                         f'  way["building:part"]({south},{west},{north},{east});\n'
+                        f'  relation["building"]({south},{west},{north},{east});\n'
+                        f'  relation["building:part"]({south},{west},{north},{east});\n'
                         f");\n"
                         f"out body geom;\n"
                     )
@@ -435,22 +487,10 @@ def download_and_build_buildings(
                     data = resp.json()
                     elements = data.get("elements", [])
                     for el in elements:
-                        if el.get("type") != "way":
-                            continue
-                        geom_coords = el.get("geometry")
-                        if not geom_coords:
-                            continue
-                        coords = [
-                            (c["lon"], c["lat"])
-                            for c in geom_coords
-                            # Overpass geometry entries are always dicts; skip any malformed elements
-                            if isinstance(c, dict) and "lon" in c and "lat" in c
-                        ]
                         el_tags = el.get("tags", {})
-                        try:
-                            geo_with_tags.append((ShapelyPolygon(coords), el_tags))
-                        except Exception:
-                            continue
+                        polygon = _overpass_geometry(el)
+                        if polygon is not None:
+                            geo_with_tags.append((polygon, el_tags))
                     if geo_with_tags:
                         break
                 except Exception as exc:
@@ -588,6 +628,7 @@ def download_and_build_buildings(
                     eave_z=surface_z + eave_mm,
                     roof_height_mm=dimensions.roof_height_m * height_scale,
                     shape=dimensions.roof_shape,
+                    orientation=dimensions.roof_orientation,
                 )
                 if roof is not None:
                     meshes.append(roof)
