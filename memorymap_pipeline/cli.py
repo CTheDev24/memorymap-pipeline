@@ -6,7 +6,13 @@ from pathlib import Path
 
 from .config import load_config
 from .gpx_loader import load_route_from_gpx
-from .mesh import build_base_plate, center_meshes_to_base, export_3mf, route_mesh_from_polygon
+from .mesh import (
+    build_base_plate,
+    center_meshes_to_base,
+    embedded_feature_dimensions,
+    export_3mf,
+    route_mesh_from_polygon,
+)
 from .projection import (
     project_points,
     compute_normalize_center_transform,
@@ -28,7 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=None, help="Path to a JSON configuration file")
     parser.add_argument("--orientation", choices=["portrait", "landscape"], default=None, help="Map orientation (auto if omitted)")
     parser.add_argument("--route-width-mm", type=float, default=None, help="Route width in millimeters")
-    parser.add_argument("--route-height-mm", type=float, default=None, help="Raised route height in millimeters")
+    parser.add_argument(
+        "--route-height-mm",
+        type=float,
+        default=None,
+        help="Visible route height above the base plate in millimeters",
+    )
     parser.add_argument("--base-thickness-mm", type=float, default=None, help="Base plate thickness in millimeters")
     parser.add_argument("--no-base", dest="include_base", action="store_false", help="Do not include the base plate in the exported 3MF")
     parser.add_argument("--margin-mm", type=float, default=None, help="Margin from the map edge in millimeters")
@@ -117,9 +128,14 @@ def main() -> None:
         except Exception as exc:  # Debug rendering must not block model generation.
             logger.warning("Could not write repaired-route debug image: %s", exc)
 
-    # Extrude overlay layers so they start at the base top plane (z=0).
-    z_offset = 0.0
-    route_mesh = route_mesh_from_polygon(poly_to_use, height_mm=route_height_mm, z_offset=z_offset)
+    route_extrusion_mm, z_offset, feature_embed_mm = embedded_feature_dimensions(
+        route_height_mm,
+        base_thickness_mm if args.include_base else 0.0,
+        float(config.get("feature_embed_depth", 0.2)),
+    )
+    route_mesh = route_mesh_from_polygon(
+        poly_to_use, height_mm=route_extrusion_mm, z_offset=z_offset
+    )
     # build roads (separate body)
     roads_mesh = None
     unioned = None
@@ -138,6 +154,7 @@ def main() -> None:
             margin_mm=margin_mm,
             debug=config.get("roads_debug", False),
             z_offset=z_offset,
+            embed_depth_mm=feature_embed_mm,
             radius_m=config.get("road_query_radius_m", None),
             roads_file=str(args.roads_file) if args.roads_file is not None else None,
         )
@@ -156,6 +173,7 @@ def main() -> None:
             margin_mm=margin_mm,
             debug=config.get("buildings_debug", False),
             z_offset=z_offset,
+            embed_depth_mm=feature_embed_mm,
             max_print_height_mm=config.get("max_print_height_mm", 31.75),
             min_building_height_mm=config.get("min_building_height_mm", 0.4),
             building_default_height_m=config.get("building_default_height_m", 6.0),

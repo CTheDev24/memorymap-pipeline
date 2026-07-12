@@ -16,7 +16,12 @@ from .config import DEFAULT_CONFIG
 from .geometry import buffered_polygon_from_points, repair_polygon
 from .gpx_loader import Route
 from .map_frame import MapFrame
-from .mesh import build_base_plate, export_3mf, route_mesh_from_polygon
+from .mesh import (
+    build_base_plate,
+    embedded_feature_dimensions,
+    export_3mf,
+    route_mesh_from_polygon,
+)
 from .roads import download_and_build_roads
 
 
@@ -162,8 +167,11 @@ def generate_memory_map(
         frame.print_width_mm - frame.margin_mm,
         frame.print_height_mm - frame.margin_mm,
     )
-    # Overlay layers start at the top of the base plate, which is z=0 in model space.
-    z_offset = 0.0
+    route_extrusion_mm, z_offset, feature_embed_mm = embedded_feature_dimensions(
+        request.route_height_mm,
+        request.base_thickness_mm if request.include_base else 0.0,
+        float(config.get("feature_embed_depth", 0.2)),
+    )
     warnings: list[str] = []
 
     base_mesh = (
@@ -178,7 +186,7 @@ def generate_memory_map(
             route_polygon, valid, explanation = repair_polygon(route_polygon)
             if not valid:
                 warnings.append(f"Route polygon repair failed: {explanation}")
-        route_mesh = _route_mesh(route_polygon, request.route_height_mm, z_offset)
+        route_mesh = _route_mesh(route_polygon, route_extrusion_mm, z_offset)
         if route_mesh is None:
             warnings.append("The route does not intersect the printable frame.")
     progress(25, "Route mesh complete")
@@ -205,6 +213,7 @@ def generate_memory_map(
             margin_mm=frame.margin_mm,
             debug=bool(config.get("roads_debug", False)),
             z_offset=z_offset,
+            embed_depth_mm=feature_embed_mm,
             radius_m=radius,
             roads_file=str(request.roads_file) if request.roads_file else None,
             )
@@ -231,6 +240,7 @@ def generate_memory_map(
             margin_mm=frame.margin_mm,
             debug=bool(config.get("buildings_debug", False)),
             z_offset=z_offset,
+            embed_depth_mm=feature_embed_mm,
             max_print_height_mm=float(config["max_print_height_mm"]),
             min_building_height_mm=float(config["min_building_height_mm"]),
             building_default_height_m=float(config["building_default_height_m"]),

@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from shapely.geometry import LineString, box, mapping, shape
 
 from ..gpx_loader import Route, load_route_from_gpx
-from ..mesh import build_base_plate, export_3mf, route_mesh_from_polygon
+from ..mesh import build_base_plate, embedded_feature_dimensions, export_3mf, route_mesh_from_polygon
 from ..projection import project_points
 from .models import GenerateRequest, JobStatus, MapFrame, PreviewRequest
 
@@ -113,8 +113,12 @@ def _run_generation(job: JobRecord, route: Route, request: GenerateRequest) -> N
             raise ValueError("Route does not intersect the selected frame")
         polygon = clipped.buffer(request.route_width_mm / 2, cap_style=1, join_style=1)
         job.progress = 55
-        route_mesh = route_mesh_from_polygon(polygon, request.route_height_mm,
-                             z_offset=0.0)
+        route_extrusion_mm, z_offset, _embed_depth_mm = embedded_feature_dimensions(
+            request.route_height_mm, request.base_thickness_mm
+        )
+        route_mesh = route_mesh_from_polygon(
+            polygon, route_extrusion_mm, z_offset=z_offset
+        )
         base = build_base_plate(request.frame.print_width_mm, request.frame.print_height_mm,
                                 request.base_thickness_mm)
         if request.layers.roads:

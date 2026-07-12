@@ -10,5 +10,6 @@
   "route_height": 2.0,
   "route_width": 1.2,
   "base_thickness": 1.0,
+  "feature_embed_depth": 0.2,
   "margin": 8.0
 }

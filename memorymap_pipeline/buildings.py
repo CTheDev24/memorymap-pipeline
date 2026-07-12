@@ -168,6 +168,7 @@ def download_and_build_buildings(
     margin_mm: float,
     debug: bool = False,
     z_offset: float = 0.0,
+    embed_depth_mm: float = 0.0,
     max_print_height_mm: float = 31.75,
     min_building_height_mm: float = 0.4,
     building_default_height_m: float = 6.0,
@@ -181,12 +182,13 @@ def download_and_build_buildings(
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
-    Each building is extruded to a height proportional to its real-world OSM height so
+    Each building's visible height is proportional to its real-world OSM height so
     that the tallest building in the scene prints at ``max_print_height_mm``.  Buildings
     where more than ``building_clip_threshold`` of their footprint lies outside the
     margin-inset build area are omitted; the remainder are clipped to that boundary.
 
-    All extruded buildings are concatenated into a single mesh.
+    ``embed_depth_mm`` extends every building below the base top without reducing that
+    visible height. All extruded buildings are concatenated into a single mesh.
     """
     # geo_with_tags: list of (shapely_geometry, tags_dict) collected from all sources
     geo_with_tags: list[tuple] = []
@@ -414,7 +416,11 @@ def download_and_build_buildings(
                 continue
             try:
                 meshes.append(
-                    route_mesh_from_polygon(part, height_mm=extrusion_mm, z_offset=z_offset)
+                    route_mesh_from_polygon(
+                        part,
+                        height_mm=extrusion_mm + embed_depth_mm,
+                        z_offset=z_offset,
+                    )
                 )
             except Exception as exc:
                 logging.warning("Failed creating building mesh: %s", exc)

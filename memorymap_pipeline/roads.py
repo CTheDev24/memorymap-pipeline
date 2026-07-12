@@ -42,11 +42,13 @@ def download_and_build_roads(
     margin_mm: float = 8.0,
     debug: bool = False,
     z_offset: float = 0.0,
+    embed_depth_mm: float = 0.0,
     radius_m: float | None = None,
     roads_file: str | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download OSM drivable roads within bbox (lat_min, lat_max, lon_min, lon_max), buffer them
-    using widths from road_widths (mm), and extrude into a mesh sitting on top of the base.
+    using widths from road_widths (mm). ``road_height_mm`` is the visible height above
+    the base; ``embed_depth_mm`` extends the mesh downward for a reliable overlap.
 
     Returns (buffered_polygons (shapely), mesh_or_none).
     """
@@ -154,7 +156,9 @@ def download_and_build_roads(
             for p in parts:
                 if p.is_empty:
                     continue
-                mesh = route_mesh_from_polygon(p, height_mm=road_height_mm, z_offset=z_offset)
+                mesh = route_mesh_from_polygon(
+                    p, height_mm=road_height_mm + embed_depth_mm, z_offset=z_offset
+                )
                 meshes.append(mesh)
     except Exception as exc:  # pragma: no cover - mesh library issues
         logging.warning("Failed creating road meshes: %s", exc)

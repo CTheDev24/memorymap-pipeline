@@ -9,6 +9,7 @@ from memorymap_pipeline.buildings import _extract_real_height_m
 from memorymap_pipeline.cli import main
 from memorymap_pipeline.config import DEFAULT_CONFIG, load_config
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
+from memorymap_pipeline.mesh import embedded_feature_dimensions
 from memorymap_pipeline.projection import normalize_and_scale_points, project_points
 
 
@@ -75,7 +76,7 @@ def test_buildings_run_when_roads_are_disabled(tmp_path: Path, monkeypatch) -> N
     assert call["bbox"] == pytest.approx((40.0, 40.001, -74.002, -74.0))
 
 
-def test_cli_overlay_layers_start_at_base_top(tmp_path: Path, monkeypatch) -> None:
+def test_cli_overlay_layers_embed_below_base_top(tmp_path: Path, monkeypatch) -> None:
     gpx_path = tmp_path / "route.gpx"
     gpx_path.write_text(
         """<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
@@ -108,8 +109,21 @@ def test_cli_overlay_layers_start_at_base_top(tmp_path: Path, monkeypatch) -> No
 
     main()
 
-    assert captured["z_offset"] == pytest.approx(0.0)
-    assert captured["height_mm"] == pytest.approx(2.0)
+    assert captured["z_offset"] == pytest.approx(-0.2)
+    assert captured["height_mm"] == pytest.approx(2.2)
+
+
+def test_embedded_feature_height_remains_visible_above_base() -> None:
+    extrusion, bottom_z, embed = embedded_feature_dimensions(0.6, 1.0, 0.2)
+    assert embed == pytest.approx(0.2)
+    assert bottom_z == pytest.approx(-0.2)
+    assert extrusion == pytest.approx(0.8)
+    assert bottom_z + extrusion == pytest.approx(0.6)
+
+
+def test_feature_embed_is_clamped_to_base_and_disabled_without_base() -> None:
+    assert embedded_feature_dimensions(0.6, 0.1, 0.2) == pytest.approx((0.7, -0.1, 0.1))
+    assert embedded_feature_dimensions(0.6, 0.0, 0.2) == pytest.approx((0.6, 0.0, 0.0))
 
 
 # ---------------------------------------------------------------------------

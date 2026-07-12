@@ -21,8 +21,13 @@ or local GeoJSON/GeoPackage files can be supplied with `--roads-file` and `--bui
 
 Notes:
 
-- The exporter writes independent `Base_White`, `Route_Accent`, `Roads_Black`, and `Buildings_Verification` objects.
+- The exporter writes independent, pre-colored objects: `Base_White` (white),
+  `Route_Accent` (orange), `Roads_Black` (black), and
+  `Buildings_Verification` (gray). Compatible slicers import these assignments from
+  standard 3MF base-material resources.
 - Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`.
+- Route, road, and building heights are visible heights measured above the base plate.
+- Raised features overlap the base by `feature_embed_depth` (0.2 mm by default) to keep short geometry printable without changing its visible height.
 - Debug plots for roads can be enabled by setting `roads_debug` to `true` in the config.
 
 ```bash
@@ -49,9 +54,16 @@ Create a JSON file such as `memorymap-pipeline/config.json`:
   "route_height": 2.0,
   "route_width": 1.2,
   "base_thickness": 1.0,
+  "feature_embed_depth": 0.2,
   "margin": 8.0
 }
 ```
+
+The base top is the model's Z=0 plane. With a 1.0 mm base, 0.2 mm embed depth,
+and 0.6 mm road height, the road mesh runs from Z=-0.2 mm to Z=0.6 mm. Thus
+0.2 mm is anchored inside the base and the full requested 0.6 mm remains visible.
+The embed depth is automatically clamped to the base thickness and becomes zero
+when generating without a base.
 
 Run with the config file and let the orientation be chosen automatically by the route shape:
 

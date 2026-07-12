@@ -37,6 +37,24 @@ def _model_objects(path: Path) -> tuple[set[str], list[tuple[float, float, float
     return names, vertices
 
 
+def _model_materials(path: Path) -> dict[str, str]:
+    with zipfile.ZipFile(path) as archive:
+        model_name = next(name for name in archive.namelist() if name.lower().endswith(".model"))
+        root = ET.fromstring(archive.read(model_name))
+    namespace = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    resources = root.find("m:resources", namespace)
+    assert resources is not None
+    palettes = {
+        palette.attrib["id"]: [base.attrib["displaycolor"] for base in palette]
+        for palette in resources.findall("m:basematerials", namespace)
+    }
+    return {
+        item.attrib["name"]: palettes[item.attrib["pid"]][int(item.attrib["pindex"])]
+        for item in resources.findall("m:object", namespace)
+        if "pid" in item.attrib and "pindex" in item.attrib
+    }
+
+
 def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
     route = load_route_from_gpx(FIXTURES / "frame_route.gpx")
     frame = MapFrame(
@@ -78,6 +96,12 @@ def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
 
     names, vertices = _model_objects(output)
     assert {"Base_White", "Route_Accent", "Roads_Black", "Buildings_Verification"} <= names
+    assert _model_materials(output) == {
+        "Base_White": "#FFFFFFFF",
+        "Route_Accent": "#FF6633FF",
+        "Roads_Black": "#000000FF",
+        "Buildings_Verification": "#808080FF",
+    }
     assert vertices
     # Base may occupy the full physical dimensions; no generated overlay may expand it.
     tolerance = 1e-5
@@ -88,9 +112,14 @@ def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
     assert result.route_mesh is not None
     assert result.roads_mesh is not None
     assert result.buildings_mesh is not None
-    assert result.route_mesh.bounds[0, 2] == pytest.approx(0.0, abs=tolerance)
-    assert result.roads_mesh.bounds[0, 2] == pytest.approx(0.0, abs=tolerance)
-    assert result.buildings_mesh.bounds[0, 2] == pytest.approx(0.0, abs=tolerance)
+    embed_depth = request.config["feature_embed_depth"]
+    assert result.route_mesh.bounds[0, 2] == pytest.approx(-embed_depth, abs=tolerance)
+    assert result.roads_mesh.bounds[0, 2] == pytest.approx(-embed_depth, abs=tolerance)
+    assert result.buildings_mesh.bounds[0, 2] == pytest.approx(-embed_depth, abs=tolerance)
     assert result.route_mesh.bounds[1, 2] == pytest.approx(request.route_height_mm, abs=tolerance)
-    assert result.roads_mesh.bounds[1, 2] > 0.0
-    assert result.buildings_mesh.bounds[1, 2] > 0.0
+    assert result.roads_mesh.bounds[1, 2] == pytest.approx(
+        request.config["road_height"], abs=tolerance
+    )
+    assert result.buildings_mesh.bounds[1, 2] == pytest.approx(
+        request.config["max_print_height_mm"], abs=tolerance
+    )

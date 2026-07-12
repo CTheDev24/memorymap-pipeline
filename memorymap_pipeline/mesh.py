@@ -1,10 +1,50 @@
 from __future__ import annotations
 
 from pathlib import Path
+import xml.etree.ElementTree as ET
+import zipfile
 
 import numpy as np
 from trimesh import Trimesh
 from trimesh.creation import extrude_polygon
+
+
+DEFAULT_FEATURE_EMBED_DEPTH_MM = 0.2
+
+MESH_COLORS = {
+    "base": np.array([255, 255, 255, 255], dtype=np.uint8),
+    "route": np.array([255, 102, 51, 255], dtype=np.uint8),
+    "roads": np.array([0, 0, 0, 255], dtype=np.uint8),
+    "buildings": np.array([128, 128, 128, 255], dtype=np.uint8),
+}
+
+MESH_MATERIALS = {
+    "Base_White": ("White", "#FFFFFFFF"),
+    "Route_Accent": ("Orange", "#FF6633FF"),
+    "Roads_Black": ("Black", "#000000FF"),
+    "Buildings_Verification": ("Gray", "#808080FF"),
+}
+
+THREE_MF_CORE_NAMESPACE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+
+
+def embedded_feature_dimensions(
+    visible_height_mm: float,
+    base_thickness_mm: float,
+    embed_depth_mm: float = DEFAULT_FEATURE_EMBED_DEPTH_MM,
+) -> tuple[float, float, float]:
+    """Return extrusion height, bottom Z, and effective embed for a raised feature.
+
+    Feature heights are user-facing visible heights above the base top plane (Z=0).
+    The mesh extends downward into the base by at most ``embed_depth_mm`` so separate
+    3MF objects overlap reliably without changing the requested visible height.
+    """
+    if visible_height_mm <= 0:
+        raise ValueError("Visible feature height must be positive")
+    if base_thickness_mm < 0 or embed_depth_mm < 0:
+        raise ValueError("Base thickness and feature embed depth cannot be negative")
+    effective_embed = min(base_thickness_mm, embed_depth_mm)
+    return visible_height_mm + effective_embed, -effective_embed, effective_embed
 
 
 def build_route_mesh(points: np.ndarray, route_width_mm: float, height_mm: float) -> Trimesh:
@@ -123,6 +163,61 @@ def center_meshes_to_base(meshes: list[Trimesh], width_mm: float, height_mm: flo
         mesh.apply_translation((offset_x, offset_y, 0.0))
 
 
+def _apply_3mf_materials(output_path: Path) -> None:
+    """Add uniform, slicer-visible materials to named objects in a 3MF archive."""
+    with zipfile.ZipFile(output_path, "r") as source:
+        entries = [(info, source.read(info.filename)) for info in source.infolist()]
+
+    model_index = next(
+        (index for index, (info, _data) in enumerate(entries) if info.filename.lower().endswith(".model")),
+        None,
+    )
+    if model_index is None:
+        raise ValueError("Exported 3MF archive does not contain a model document")
+
+    model_info, model_data = entries[model_index]
+    root = ET.fromstring(model_data)
+    core = f"{{{THREE_MF_CORE_NAMESPACE}}}"
+    resources = root.find(f"{core}resources")
+    if resources is None:
+        raise ValueError("Exported 3MF model does not contain resources")
+
+    used_ids = {
+        int(element.attrib["id"])
+        for element in resources
+        if element.attrib.get("id", "").isdigit()
+    }
+    material_id = max(used_ids, default=0) + 1
+    materials = ET.SubElement(resources, f"{core}basematerials", {"id": str(material_id)})
+    material_indices: dict[str, int] = {}
+    for index, (object_name, (material_name, display_color)) in enumerate(MESH_MATERIALS.items()):
+        ET.SubElement(
+            materials,
+            f"{core}base",
+            {"name": material_name, "displaycolor": display_color},
+        )
+        material_indices[object_name] = index
+
+    for object_element in resources.findall(f"{core}object"):
+        object_name = object_element.attrib.get("name")
+        if object_name in material_indices:
+            object_element.set("pid", str(material_id))
+            object_element.set("pindex", str(material_indices[object_name]))
+
+    entries[model_index] = (
+        model_info,
+        ET.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+    temporary_path = output_path.with_name(f"{output_path.name}.materials.tmp")
+    try:
+        with zipfile.ZipFile(temporary_path, "w") as destination:
+            for info, data in entries:
+                destination.writestr(info, data)
+        temporary_path.replace(output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: Trimesh | None, roads_mesh: Trimesh | None = None, buildings_mesh: Trimesh | None = None) -> None:
     from trimesh.exchange.export import export_mesh
 
@@ -136,6 +231,7 @@ def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: T
         except Exception:
             base_mesh.metadata = {}
         base_mesh.metadata["name"] = "Base_White"
+        base_mesh.visual.face_colors = MESH_COLORS["base"]
         meshes.append(base_mesh)
 
     if route_mesh is not None:
@@ -144,6 +240,7 @@ def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: T
         except Exception:
             route_mesh.metadata = {}
         route_mesh.metadata["name"] = "Route_Accent"
+        route_mesh.visual.face_colors = MESH_COLORS["route"]
         meshes.append(route_mesh)
 
     if roads_mesh is not None:
@@ -152,6 +249,7 @@ def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: T
         except Exception:
             roads_mesh.metadata = {}
         roads_mesh.metadata["name"] = "Roads_Black"
+        roads_mesh.visual.face_colors = MESH_COLORS["roads"]
         meshes.append(roads_mesh)
 
     if buildings_mesh is not None:
@@ -160,6 +258,7 @@ def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: T
         except Exception:
             buildings_mesh.metadata = {}
         buildings_mesh.metadata["name"] = "Buildings_Verification"
+        buildings_mesh.visual.face_colors = MESH_COLORS["buildings"]
         meshes.append(buildings_mesh)
 
     export_mesh(
@@ -167,3 +266,4 @@ def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: T
         output_path,
         file_type="3mf",
     )
+    _apply_3mf_materials(output_path)

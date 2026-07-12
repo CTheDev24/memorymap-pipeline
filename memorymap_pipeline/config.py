@@ -12,6 +12,8 @@ DEFAULT_CONFIG = {
     "route_height": 2.0,
     "route_width": 1.2,
     "base_thickness": 1.0,
+    # overlap raised features into the base; feature heights remain visible heights
+    "feature_embed_depth": 0.2,
     "margin": 8.0,
     # Road generation defaults
     "road_height": 0.8,
