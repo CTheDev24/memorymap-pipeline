@@ -33,6 +33,9 @@ memorymap-pipeline = "memorymap_pipeline.cli:main"
 memorymap-api = "memorymap_pipeline.api.__main__:main"
 memorymap-desktop = "memorymap_pipeline.desktop.launcher:main"
 
+[tool.setuptools.packages.find]
+include = ["memorymap_pipeline*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
