@@ -15,6 +15,15 @@ DEFAULT_CONFIG = {
     # overlap raised features into the base; feature heights remain visible heights
     "feature_embed_depth": 0.2,
     "margin": 8.0,
+    # terrain/water scaffold (disabled until selected by a client)
+    "terrain_enabled": False,
+    "terrain_provider": "usgs-3dep",
+    "terrain_grid_size": 96,
+    "terrain_max_relief_mm": 3.0,
+    "terrain_min_relief_mm": 1.5,
+    "water_enabled": False,
+    "water_recess_mm": 0.4,
+    "water_embed_depth_mm": 0.2,
     # Road generation defaults
     "road_height": 0.8,
     # widths in mm by highway type

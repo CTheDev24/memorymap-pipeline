@@ -11,5 +11,13 @@
   "route_width": 1.2,
   "base_thickness": 1.0,
   "feature_embed_depth": 0.2,
+  "terrain_enabled": false,
+  "terrain_provider": "usgs-3dep",
+  "terrain_grid_size": 96,
+  "terrain_max_relief_mm": 3.0,
+  "terrain_min_relief_mm": 1.5,
+  "water_enabled": false,
+  "water_recess_mm": 0.4,
+  "water_embed_depth_mm": 0.2,
   "margin": 8.0
 }

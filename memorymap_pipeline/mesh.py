@@ -16,6 +16,7 @@ MESH_COLORS = {
     "route": np.array([255, 102, 51, 255], dtype=np.uint8),
     "roads": np.array([0, 0, 0, 255], dtype=np.uint8),
     "buildings": np.array([128, 128, 128, 255], dtype=np.uint8),
+    "water": np.array([128, 128, 128, 255], dtype=np.uint8),
 }
 
 MESH_MATERIALS = {
@@ -23,6 +24,7 @@ MESH_MATERIALS = {
     "Route_Accent": ("Orange", "#FF6633FF"),
     "Roads_Black": ("Black", "#000000FF"),
     "Buildings_Verification": ("Gray", "#808080FF"),
+    "Water_Gray": ("Gray Water", "#808080FF"),
 }
 
 def embedded_feature_dimensions(
@@ -263,7 +265,14 @@ def _apply_3mf_materials(output_path: Path) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
-def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: Trimesh | None, roads_mesh: Trimesh | None = None, buildings_mesh: Trimesh | None = None) -> None:
+def export_3mf(
+    output_path: str | Path,
+    base_mesh: Trimesh | None,
+    route_mesh: Trimesh | None,
+    roads_mesh: Trimesh | None = None,
+    buildings_mesh: Trimesh | None = None,
+    water_mesh: Trimesh | None = None,
+) -> None:
     from trimesh.exchange.export import export_mesh
 
     output_path = Path(output_path)
@@ -305,6 +314,15 @@ def export_3mf(output_path: str | Path, base_mesh: Trimesh | None, route_mesh: T
         buildings_mesh.metadata["name"] = "Buildings_Verification"
         buildings_mesh.visual.face_colors = MESH_COLORS["buildings"]
         meshes.append(buildings_mesh)
+
+    if water_mesh is not None:
+        try:
+            water_mesh.metadata = water_mesh.metadata or {}
+        except Exception:
+            water_mesh.metadata = {}
+        water_mesh.metadata["name"] = "Water_Gray"
+        water_mesh.visual.face_colors = MESH_COLORS["water"]
+        meshes.append(water_mesh)
 
     export_mesh(
         meshes,

@@ -23,6 +23,9 @@ from .mesh import (
     route_mesh_from_polygon,
 )
 from .roads import download_and_build_roads
+from .terrain import ElevationGrid, build_terrain_mesh, drape_mesh, terrain_surface_from_grid
+from .terrain_providers import Usgs3depProvider
+from .water import build_water_mesh, rasterize_water_mask, recess_water_surface
 
 
 ProgressCallback = Callable[[int, str], None]
@@ -74,6 +77,8 @@ class GenerationRequest:
     config: dict[str, Any] = field(default_factory=dict)
     roads_file: str | Path | None = None
     buildings_file: str | Path | None = None
+    elevation_grid: ElevationGrid | None = None
+    water_polygons: list[Any] | None = None
 
 
 @dataclass
@@ -85,6 +90,7 @@ class GenerationResult:
     route_mesh: Any | None = None
     roads_mesh: Any | None = None
     buildings_mesh: Any | None = None
+    water_mesh: Any | None = None
 
     @property
     def meshes(self) -> dict[str, Any]:
@@ -95,6 +101,7 @@ class GenerationResult:
                 "route": self.route_mesh,
                 "roads": self.roads_mesh,
                 "buildings": self.buildings_mesh,
+                "water": self.water_mesh,
             }.items()
             if mesh is not None
         }
@@ -173,12 +180,51 @@ def generate_memory_map(
         float(config.get("feature_embed_depth", 0.2)),
     )
     warnings: list[str] = []
-
-    base_mesh = (
-        build_base_plate(frame.print_width_mm, frame.print_height_mm, request.base_thickness_mm)
-        if request.include_base
-        else None
-    )
+    bbox, radius = _query_bounds(frame)
+    terrain_surface = None
+    water_mesh = None
+    if request.include_base and bool(config.get("terrain_enabled", False)):
+        grid_size = int(config.get("terrain_grid_size", 96))
+        elevation_grid = request.elevation_grid
+        if elevation_grid is None:
+            if config.get("terrain_provider", "usgs-3dep") != "usgs-3dep":
+                raise ValueError(f"Unsupported terrain provider: {config.get('terrain_provider')}")
+            cache_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "MemoryMap" / "dem-cache"
+            elevation_grid = Usgs3depProvider().fetch(
+                bbox, (grid_size, grid_size), cache_dir
+            )
+        terrain_surface = terrain_surface_from_grid(
+            elevation_grid,
+            frame.print_width_mm,
+            frame.print_height_mm,
+            math.hypot(frame.coverage_width_m, frame.coverage_height_m),
+            float(config.get("terrain_max_relief_mm", 3.0)),
+            float(config.get("terrain_min_relief_mm", 1.5)),
+        )
+        if bool(config.get("water_enabled", False)):
+            if request.water_polygons:
+                water_mask = rasterize_water_mask(request.water_polygons, terrain_surface)
+                terrain_surface = recess_water_surface(
+                    terrain_surface,
+                    water_mask,
+                    float(config.get("water_recess_mm", 0.4)),
+                    minimum_height_mm=-request.base_thickness_mm
+                    + float(config.get("water_embed_depth_mm", 0.2)),
+                )
+                water_mesh = build_water_mesh(
+                    terrain_surface,
+                    water_mask,
+                    float(config.get("water_embed_depth_mm", 0.2)),
+                )
+            else:
+                warnings.append("Water is enabled but no water polygons were supplied.")
+        base_mesh = build_terrain_mesh(terrain_surface, request.base_thickness_mm)
+    else:
+        base_mesh = (
+            build_base_plate(frame.print_width_mm, frame.print_height_mm, request.base_thickness_mm)
+            if request.include_base
+            else None
+        )
     route_mesh = None
     if request.include_route:
         route_polygon = buffered_polygon_from_points(scaled, request.route_width_mm).intersection(printable)
@@ -187,11 +233,12 @@ def generate_memory_map(
             if not valid:
                 warnings.append(f"Route polygon repair failed: {explanation}")
         route_mesh = _route_mesh(route_polygon, route_extrusion_mm, z_offset)
+        if route_mesh is not None and terrain_surface is not None:
+            route_mesh = drape_mesh(route_mesh, terrain_surface)
         if route_mesh is None:
             warnings.append("The route does not intersect the printable frame.")
     progress(25, "Route mesh complete")
 
-    bbox, radius = _query_bounds(frame)
     transform = {"map_frame": frame}
     unioned_roads = None
     roads_mesh = None
@@ -222,6 +269,8 @@ def generate_memory_map(
         if roads_mesh is None:
             warnings.append("No road geometry was available inside the selected frame.")
             warnings.extend(f"Road detail: {message}" for message in collector.messages[-4:])
+        elif terrain_surface is not None:
+            roads_mesh = drape_mesh(roads_mesh, terrain_surface)
     progress(55, "Road mesh complete")
 
     unioned_buildings = None
@@ -257,20 +306,32 @@ def generate_memory_map(
         if buildings_mesh is None:
             warnings.append("No building geometry was available inside the selected frame.")
             warnings.extend(f"Building detail: {message}" for message in collector.messages[-4:])
+        elif terrain_surface is not None:
+            buildings_mesh = drape_mesh(buildings_mesh, terrain_surface)
     progress(85, "Building mesh complete")
 
-    if all(mesh is None for mesh in (base_mesh, route_mesh, roads_mesh, buildings_mesh)):
+    if all(mesh is None for mesh in (base_mesh, route_mesh, roads_mesh, buildings_mesh, water_mesh)):
         raise ValueError("No printable layers were generated")
-    export_3mf(output_path, base_mesh, route_mesh, roads_mesh, buildings_mesh)
+    export_3mf(output_path, base_mesh, route_mesh, roads_mesh, buildings_mesh, water_mesh)
     stats = {
         "route_points": len(request.route.points),
         "roads": _geometry_count(unioned_roads),
         "buildings": _geometry_count(unioned_buildings),
+        "terrain": (
+            {
+                "source": elevation_grid.source,
+                "flatness_rating": terrain_surface.analysis.flatness_rating,
+                "relief_mm": terrain_surface.analysis.target_relief_mm,
+            }
+            if terrain_surface is not None
+            else None
+        ),
         "layers": {
             "base": _mesh_stats(base_mesh),
             "route": _mesh_stats(route_mesh),
             "roads": _mesh_stats(roads_mesh),
             "buildings": _mesh_stats(buildings_mesh),
+            "water": _mesh_stats(water_mesh),
         },
     }
     progress(100, "3MF export complete")
@@ -282,6 +343,7 @@ def generate_memory_map(
         route_mesh=route_mesh,
         roads_mesh=roads_mesh,
         buildings_mesh=buildings_mesh,
+        water_mesh=water_mesh,
     )
 
 

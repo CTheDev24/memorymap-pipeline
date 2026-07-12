@@ -79,6 +79,41 @@ python -m memorymap_pipeline.cli sample.gpx output.3mf --config config.json --or
 
 The pipeline will maximize the printed route area within the selected map dimensions while reserving a consistent border on all sides.
 
+### Terrain and water scaffold
+
+Terrain uses bare-earth DEM samples through a provider interface. The first provider is
+the official USGS 3DEP ImageServer for United States frames; downloaded TIFF samples are
+cached under the user's local MemoryMap data directory. The provider boundary accepts
+offline fixtures today and is intended to support a global DEM provider later.
+
+Terrain is disabled by default while the desktop controls and OSM water downloader are
+completed. Its initial configuration is:
+
+```json
+{
+  "terrain_enabled": false,
+  "terrain_provider": "usgs-3dep",
+  "terrain_grid_size": 96,
+  "terrain_max_relief_mm": 3.0,
+  "terrain_min_relief_mm": 1.5,
+  "water_enabled": false,
+  "water_recess_mm": 0.4,
+  "water_embed_depth_mm": 0.2
+}
+```
+
+Each frame receives a flatness rating from 0 (rugged) to 5 (very flat), based on its
+robust elevation range relative to the frame diagonal. Very flat areas receive the full
+3 mm printed relief; rugged areas taper toward 1.5 mm so terrain does not overpower map
+features. Routes and roads are draped over the resulting height field while retaining
+their visible heights.
+
+Water polygons are part of the same multipart model and use the same gray material as
+buildings. Water starts 0.4 mm below the local terrain surface and embeds by 0.2 mm,
+while the structural base remains underneath. The scaffold currently accepts water
+polygons already transformed into print coordinates; automatic OSM water acquisition
+and GUI toggles are the next integration stage.
+
 To omit the base plate:
 
 ```bash
