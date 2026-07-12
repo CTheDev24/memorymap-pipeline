@@ -57,6 +57,24 @@ def _model_materials(path: Path) -> dict[str, str]:
     }
 
 
+def _model_assembly(path: Path) -> tuple[str, list[str]]:
+    with zipfile.ZipFile(path) as archive:
+        model_name = next(name for name in archive.namelist() if name.lower().endswith(".model"))
+        root = ET.fromstring(archive.read(model_name))
+    namespace = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    objects = {
+        item.attrib["id"]: item for item in root.findall("m:resources/m:object", namespace)
+    }
+    build_items = root.findall("m:build/m:item", namespace)
+    assert len(build_items) == 1
+    assembly = objects[build_items[0].attrib["objectid"]]
+    components = assembly.findall("m:components/m:component", namespace)
+    component_names = [
+        objects[item.attrib["objectid"]].attrib["name"] for item in components
+    ]
+    return assembly.attrib["name"], component_names
+
+
 def test_partial_export_assigns_materials_only_to_present_objects(tmp_path: Path) -> None:
     output = tmp_path / "route-only-layers.3mf"
     base = build_base_plate(40.0, 30.0, 1.0)
@@ -68,6 +86,7 @@ def test_partial_export_assigns_materials_only_to_present_objects(tmp_path: Path
         "Base_White": "#FFFFFFFF",
         "Route_Accent": "#FF6633FF",
     }
+    assert _model_assembly(output) == ("MemoryMap", ["Base_White", "Route_Accent"])
 
 
 def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
@@ -117,6 +136,10 @@ def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
         "Roads_Black": "#000000FF",
         "Buildings_Verification": "#808080FF",
     }
+    assert _model_assembly(output) == (
+        "MemoryMap",
+        ["Base_White", "Route_Accent", "Roads_Black", "Buildings_Verification"],
+    )
     assert vertices
     # Base may occupy the full physical dimensions; no generated overlay may expand it.
     tolerance = 1e-5

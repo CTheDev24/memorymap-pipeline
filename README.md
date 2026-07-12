@@ -21,10 +21,10 @@ or local GeoJSON/GeoPackage files can be supplied with `--roads-file` and `--bui
 
 Notes:
 
-- The exporter writes independent, pre-colored objects: `Base_White` (white),
-  `Route_Accent` (orange), `Roads_Black` (black), and
-  `Buildings_Verification` (gray). Compatible slicers import these assignments from
-  standard 3MF base-material resources.
+- The exporter writes one `MemoryMap` assembly containing independent, pre-colored
+  component parts: `Base_White` (white), `Route_Accent` (orange), `Roads_Black`
+  (black), and `Buildings_Verification` (gray). Compatible slicers import the model as
+  one multipart object and read the assignments from standard 3MF base materials.
 - Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`.
 - Route, road, and building heights are visible heights measured above the base plate.
 - Raised features overlap the base by `feature_embed_depth` (0.2 mm by default) to keep short geometry printable without changing its visible height.

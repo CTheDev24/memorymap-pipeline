@@ -200,10 +200,17 @@ def _apply_3mf_materials(output_path: Path) -> None:
         + model_text[insertion_point:]
     )
 
+    component_ids: list[int] = []
     for object_name, material_index in material_indices.items():
         object_pattern = re.compile(
             rf'(<(?:[A-Za-z_][\w.-]*:)?object\b(?=[^>]*\bname="{re.escape(object_name)}")[^>]*)(>)'
         )
+        object_match = object_pattern.search(model_text)
+        if object_match is not None:
+            id_match = re.search(r'\bid="(\d+)"', object_match.group(1))
+            if id_match is None:
+                raise ValueError(f"Exported 3MF object {object_name} has no resource id")
+            component_ids.append(int(id_match.group(1)))
         model_text, replacements = object_pattern.subn(
             rf'\1 pid="{material_id}" pindex="{material_index}"\2',
             model_text,
@@ -211,6 +218,36 @@ def _apply_3mf_materials(output_path: Path) -> None:
         )
         if replacements > 1:
             raise ValueError(f"Exported 3MF model contains duplicate object {object_name}")
+
+    if not component_ids:
+        raise ValueError("Exported 3MF model contains no printable components")
+
+    assembly_id = material_id + 1
+    components_xml = "".join(
+        f'<component objectid="{component_id}" />' for component_id in component_ids
+    )
+    assembly_xml = (
+        f'<object id="{assembly_id}" name="MemoryMap" type="model">'
+        f'<components>{components_xml}</components></object>'
+    )
+    resources_end = re.search(r"</(?:[A-Za-z_][\w.-]*:)?resources>", model_text)
+    if resources_end is None:
+        raise ValueError("Exported 3MF model has no resources closing tag")
+    model_text = (
+        model_text[: resources_end.start()]
+        + assembly_xml
+        + model_text[resources_end.start() :]
+    )
+
+    build_pattern = re.compile(
+        r"(<(?:[A-Za-z_][\w.-]*:)?build\b[^>]*>).*?(</(?:[A-Za-z_][\w.-]*:)?build>)",
+        re.DOTALL,
+    )
+    model_text, build_replacements = build_pattern.subn(
+        rf'\1<item objectid="{assembly_id}" />\2', model_text, count=1
+    )
+    if build_replacements != 1:
+        raise ValueError("Exported 3MF model does not contain exactly one build section")
 
     entries[model_index] = (
         model_info,
