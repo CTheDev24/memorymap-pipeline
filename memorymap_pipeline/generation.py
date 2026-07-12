@@ -162,7 +162,8 @@ def generate_memory_map(
         frame.print_width_mm - frame.margin_mm,
         frame.print_height_mm - frame.margin_mm,
     )
-    z_offset = request.base_thickness_mm if request.include_base else 0.0
+    # Overlay layers start at the top of the base plate, which is z=0 in model space.
+    z_offset = 0.0
     warnings: list[str] = []
 
     base_mesh = (

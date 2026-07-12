@@ -85,3 +85,12 @@ def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
     assert min(y for _, y, _ in vertices) >= -tolerance
     assert max(x for x, _, _ in vertices) <= frame.print_width_mm + tolerance
     assert max(y for _, y, _ in vertices) <= frame.print_height_mm + tolerance
+    assert result.route_mesh is not None
+    assert result.roads_mesh is not None
+    assert result.buildings_mesh is not None
+    assert result.route_mesh.bounds[0, 2] == pytest.approx(0.0, abs=tolerance)
+    assert result.roads_mesh.bounds[0, 2] == pytest.approx(0.0, abs=tolerance)
+    assert result.buildings_mesh.bounds[0, 2] == pytest.approx(0.0, abs=tolerance)
+    assert result.route_mesh.bounds[1, 2] == pytest.approx(request.route_height_mm, abs=tolerance)
+    assert result.roads_mesh.bounds[1, 2] > 0.0
+    assert result.buildings_mesh.bounds[1, 2] > 0.0

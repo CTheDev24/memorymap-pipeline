@@ -117,8 +117,8 @@ def main() -> None:
         except Exception as exc:  # Debug rendering must not block model generation.
             logger.warning("Could not write repaired-route debug image: %s", exc)
 
-    # extrude polygon to create route mesh sitting on top of the base plate
-    z_offset = base_thickness_mm if args.include_base else 0.0
+    # Extrude overlay layers so they start at the base top plane (z=0).
+    z_offset = 0.0
     route_mesh = route_mesh_from_polygon(poly_to_use, height_mm=route_height_mm, z_offset=z_offset)
     # build roads (separate body)
     roads_mesh = None

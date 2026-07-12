@@ -4,7 +4,9 @@ import time
 import zipfile
 from io import BytesIO
 
+import pytest
 from fastapi.testclient import TestClient
+from xml.etree import ElementTree as ET
 
 from memorymap_pipeline.api import create_app
 
@@ -54,6 +56,14 @@ def test_preview_and_generate(tmp_path):
         result = client.get(job["result_url"])
         assert result.status_code == 200
         assert zipfile.is_zipfile(BytesIO(result.content))
+
+        with zipfile.ZipFile(BytesIO(result.content)) as archive:
+            model_name = next(name for name in archive.namelist() if name.lower().endswith(".model"))
+            root = ET.fromstring(archive.read(model_name))
+        namespace = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+        z_values = [float(item.attrib["z"]) for item in root.findall(".//m:vertex", namespace)]
+        assert min(z_values) == pytest.approx(-1.0)
+        assert max(z_values) == pytest.approx(2.0)
 
 
 def test_frame_validation(tmp_path):

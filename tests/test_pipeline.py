@@ -75,6 +75,43 @@ def test_buildings_run_when_roads_are_disabled(tmp_path: Path, monkeypatch) -> N
     assert call["bbox"] == pytest.approx((40.0, 40.001, -74.002, -74.0))
 
 
+def test_cli_overlay_layers_start_at_base_top(tmp_path: Path, monkeypatch) -> None:
+    gpx_path = tmp_path / "route.gpx"
+    gpx_path.write_text(
+        """<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
+<trkpt lat="40.0" lon="-74.0"/><trkpt lat="40.001" lon="-74.002"/>
+</trkseg></trk></gpx>""",
+        encoding="utf-8",
+    )
+
+    captured: dict[str, float] = {}
+
+    class DummyMesh:
+        def apply_translation(self, _offset):
+            pass
+
+    def fake_route_mesh_from_polygon(_polygon, height_mm, z_offset=0.0):
+        captured["z_offset"] = z_offset
+        captured["height_mm"] = height_mm
+        return DummyMesh()
+
+    monkeypatch.setattr("memorymap_pipeline.cli.route_mesh_from_polygon", fake_route_mesh_from_polygon)
+    monkeypatch.setattr("memorymap_pipeline.cli.download_and_build_roads", lambda **kwargs: (None, None))
+    monkeypatch.setattr("memorymap_pipeline.cli.download_and_build_buildings", lambda **kwargs: (None, None))
+    monkeypatch.setattr("memorymap_pipeline.cli.center_meshes_to_base", lambda *args, **kwargs: None)
+    monkeypatch.setattr("memorymap_pipeline.cli.export_3mf", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["memorymap-pipeline", str(gpx_path), str(tmp_path / "out.3mf")],
+    )
+
+    main()
+
+    assert captured["z_offset"] == pytest.approx(0.0)
+    assert captured["height_mm"] == pytest.approx(2.0)
+
+
 # ---------------------------------------------------------------------------
 # _extract_real_height_m
 # ---------------------------------------------------------------------------

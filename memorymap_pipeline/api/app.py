@@ -114,7 +114,7 @@ def _run_generation(job: JobRecord, route: Route, request: GenerateRequest) -> N
         polygon = clipped.buffer(request.route_width_mm / 2, cap_style=1, join_style=1)
         job.progress = 55
         route_mesh = route_mesh_from_polygon(polygon, request.route_height_mm,
-                                             z_offset=request.base_thickness_mm)
+                             z_offset=0.0)
         base = build_base_plate(request.frame.print_width_mm, request.frame.print_height_mm,
                                 request.base_thickness_mm)
         if request.layers.roads:
