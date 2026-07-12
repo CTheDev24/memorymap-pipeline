@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 import pytest
+from shapely.geometry import box
 
 generation = pytest.importorskip(
     "memorymap_pipeline.generation",
@@ -19,6 +20,7 @@ generation = pytest.importorskip(
 from memorymap_pipeline.config import load_config
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
 from memorymap_pipeline.map_frame import MapFrame
+from memorymap_pipeline.mesh import build_base_plate, export_3mf, route_mesh_from_polygon
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -52,6 +54,19 @@ def _model_materials(path: Path) -> dict[str, str]:
         item.attrib["name"]: palettes[item.attrib["pid"]][int(item.attrib["pindex"])]
         for item in resources.findall("m:object", namespace)
         if "pid" in item.attrib and "pindex" in item.attrib
+    }
+
+
+def test_partial_export_assigns_materials_only_to_present_objects(tmp_path: Path) -> None:
+    output = tmp_path / "route-only-layers.3mf"
+    base = build_base_plate(40.0, 30.0, 1.0)
+    route = route_mesh_from_polygon(box(5.0, 5.0, 35.0, 6.0), 2.2, -0.2)
+
+    export_3mf(output, base, route)
+
+    assert _model_materials(output) == {
+        "Base_White": "#FFFFFFFF",
+        "Route_Accent": "#FF6633FF",
     }
 
 

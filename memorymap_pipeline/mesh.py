@@ -209,8 +209,8 @@ def _apply_3mf_materials(output_path: Path) -> None:
             model_text,
             count=1,
         )
-        if replacements != 1:
-            raise ValueError(f"Exported 3MF model is missing object {object_name}")
+        if replacements > 1:
+            raise ValueError(f"Exported 3MF model contains duplicate object {object_name}")
 
     entries[model_index] = (
         model_info,
