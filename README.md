@@ -176,6 +176,26 @@ run directly inside the application; no localhost server or external browser is 
 The map itself uses online MapLibre/OpenStreetMap tiles, so map imagery and OSM layer
 downloads still require an internet connection.
 
+### Building parts and roofs
+
+Building generation follows the core OpenStreetMap Simple 3D Buildings tags. Both
+`building=*` outlines and `building:part=*` footprints are downloaded. Where parts overlap
+a parent outline, the part geometry replaces that area so the parent is not extruded through
+the detailed volumes.
+
+Supported vertical tags are `height`, `min_height`, `building:levels`,
+`building:min_level`, `roof:height`, and `roof:levels`. Explicit `height` includes the roof;
+when height is derived from `building:levels`, the tagged roof height is added above those
+levels. Supported `roof:shape` values are `flat`, `gabled`, `hipped`, `pyramidal`, and
+`skillion`. Unknown shapes remain flat. A non-flat shape without a roof height receives a
+conservative one-storey roof.
+
+All building bodies and roofs remain in the gray `Buildings_Verification` component of the
+colored multipart 3MF. Ground-level volumes retain the configured 0.2 mm local embed without
+reducing their visible height. Elevated parts honor `min_height` and overlap their supporting
+volume by up to the same embed depth. Roof direction and more specialized roof shapes are not
+yet modeled; supported roofs are aligned to the footprint's minimum rotated rectangle.
+
 To build a distributable Windows executable, install the packaging extra and run:
 
 ```powershell

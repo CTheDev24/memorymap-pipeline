@@ -1,15 +1,151 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable
+from dataclasses import dataclass
 
 import numpy as np
 import shapely.geometry as geom
 import shapely.ops as ops
+from shapely.ops import triangulate
+from trimesh import Trimesh
 
 from .geometry import repair_polygon
 from .mesh import route_mesh_from_polygon
 from .projection import apply_transform, project_lonlat_array
+
+
+SUPPORTED_ROOF_SHAPES = {"flat", "gabled", "hipped", "pyramidal", "skillion"}
+
+
+@dataclass(frozen=True)
+class BuildingDimensions:
+    min_height_m: float
+    total_height_m: float
+    roof_height_m: float
+    roof_shape: str
+
+    @property
+    def eave_height_m(self) -> float:
+        return max(self.min_height_m, self.total_height_m - self.roof_height_m)
+
+
+def _number_m(value: object, *, allow_zero: bool = False) -> float | None:
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else None
+    if value is None:
+        return None
+    try:
+        raw = str(value).strip().lower()
+        number = (
+            float(raw[:-2].strip()) * 0.3048
+            if raw.endswith("ft")
+            else float(raw.replace("m", "").strip())
+        )
+    except (TypeError, ValueError):
+        return None
+    if number < 0.0 or (number == 0.0 and not allow_zero):
+        return None
+    return number
+
+
+def _building_dimensions(
+    tags: dict, default_height_m: float, levels_to_m: float, max_height_m: float
+) -> BuildingDimensions:
+    """Interpret supported OSM Simple 3D Buildings tags in metres."""
+    min_height = _number_m(tags.get("min_height"), allow_zero=True)
+    if min_height is None:
+        min_levels = _number_m(tags.get("building:min_level"), allow_zero=True)
+        min_height = (min_levels or 0.0) * levels_to_m
+    roof_height = _number_m(tags.get("roof:height"), allow_zero=True)
+    if roof_height is None:
+        roof_levels = _number_m(tags.get("roof:levels"), allow_zero=True)
+        roof_height = (roof_levels or 0.0) * levels_to_m
+    explicit_height = _number_m(tags.get("height"))
+    levels = _number_m(tags.get("building:levels"))
+    if explicit_height is not None and explicit_height <= max_height_m:
+        total_height = explicit_height
+    elif levels is not None and levels * levels_to_m + roof_height <= max_height_m:
+        total_height = levels * levels_to_m + roof_height
+    else:
+        total_height = _extract_real_height_m(tags, default_height_m, levels_to_m, max_height_m)
+    total_height = min(max(total_height, min_height + 0.01), max_height_m)
+    roof_height = min(roof_height, total_height - min_height)
+    shape = str(tags.get("roof:shape", "flat")).strip().lower()
+    if shape not in SUPPORTED_ROOF_SHAPES:
+        shape = "flat"
+    if shape == "flat":
+        roof_height = 0.0
+    if shape != "flat" and roof_height <= 0.0:
+        roof_height = min(levels_to_m, total_height - min_height)
+    return BuildingDimensions(min_height, total_height, roof_height, shape)
+
+
+def _roof_mesh(
+    polygon: geom.Polygon, eave_z: float, roof_height_mm: float, shape: str
+) -> Trimesh | None:
+    """Create a faceted roof over an arbitrary footprint using oriented bounds."""
+    if shape == "flat" or roof_height_mm <= 0.0:
+        return None
+    corners = np.asarray(polygon.minimum_rotated_rectangle.exterior.coords[:4], dtype=float)
+    edges = np.roll(corners, -1, axis=0) - corners
+    lengths = np.linalg.norm(edges, axis=1)
+    long_i = int(np.argmax(lengths))
+    long_axis = edges[long_i] / max(lengths[long_i], 1e-9)
+    short_axis = np.array([-long_axis[1], long_axis[0]])
+    center = np.asarray(polygon.centroid.coords[0], dtype=float)
+    projected = corners - center
+    half_long = max(np.max(np.abs(projected @ long_axis)), 1e-9)
+    half_short = max(np.max(np.abs(projected @ short_axis)), 1e-9)
+
+    def z_at(x: float, y: float) -> float:
+        delta = np.array([x, y]) - center
+        u = float(np.clip((delta @ long_axis) / half_long, -1.0, 1.0))
+        v = float(np.clip((delta @ short_axis) / half_short, -1.0, 1.0))
+        if shape == "skillion":
+            factor = (v + 1.0) / 2.0
+        elif shape == "gabled":
+            factor = 1.0 - abs(v)
+        elif shape == "hipped":
+            factor = min(1.0 - abs(v), (half_long / half_short) * (1.0 - abs(u)))
+        else:
+            factor = 1.0 - max(abs(u), abs(v))
+        return eave_z + roof_height_mm * max(0.0, factor)
+
+    vertices: list[list[float]] = []
+    faces: list[list[int]] = []
+    seeds: list[geom.Point] = []
+    if shape == "gabled":
+        seeds = [
+            geom.Point(*(center - long_axis * half_long)),
+            geom.Point(*(center + long_axis * half_long)),
+        ]
+    elif shape == "hipped":
+        ridge_half = max(0.0, half_long - half_short)
+        seeds = [
+            geom.Point(*(center - long_axis * ridge_half)),
+            geom.Point(*(center + long_axis * ridge_half)),
+        ]
+    elif shape == "pyramidal":
+        seeds = [geom.Point(*center)]
+    triangulation_input = (
+        geom.GeometryCollection([polygon, geom.MultiPoint(seeds)]) if seeds else polygon
+    )
+    for triangle in triangulate(triangulation_input):
+        clipped = triangle.intersection(polygon)
+        if clipped.geom_type != "Polygon" or clipped.area <= 1e-10:
+            continue
+        coords = list(clipped.exterior.coords)[:-1]
+        first = len(vertices)
+        vertices.extend([[x, y, z_at(x, y)] for x, y in coords])
+        faces.extend([[first, first + i, first + i + 1] for i in range(1, len(coords) - 1)])
+    ring = list(polygon.exterior.coords)[:-1]
+    for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
+        i = len(vertices)
+        vertices.extend(
+            [[x1, y1, eave_z], [x2, y2, eave_z], [x2, y2, z_at(x2, y2)], [x1, y1, z_at(x1, y1)]]
+        )
+        faces.extend([[i, i + 1, i + 2], [i, i + 2, i + 3]])
+    return Trimesh(np.asarray(vertices), np.asarray(faces), process=True) if faces else None
 
 
 def _transform_shapely_polygon(
@@ -33,7 +169,11 @@ def _transform_shapely_polygon(
         lats = coords[:, 1]
         projected = project_lonlat_array(lats, lons, center_lat=center_lat, center_lon=center_lon)
         frame = transform.get("map_frame")
-        transformed = frame.transform_projected(projected) if frame is not None else apply_transform(projected, transform)
+        transformed = (
+            frame.transform_projected(projected)
+            if frame is not None
+            else apply_transform(projected, transform)
+        )
         return [(float(x), float(y)) for x, y in transformed]
 
     exterior = _transform_ring(polygon.exterior.coords)
@@ -223,7 +363,9 @@ def download_and_build_buildings(
                 if radius_m is not None:
                     try:
                         gdf = ox.geometries_from_point(
-                            (center_lat, center_lon), tags={"building": True}, dist=radius_m
+                            (center_lat, center_lon),
+                            tags={"building": True, "building:part": True},
+                            dist=radius_m,
                         )
                         cols = list(gdf.columns)
                         for _, row in gdf.iterrows():
@@ -234,7 +376,9 @@ def download_and_build_buildings(
                         break
                     except Exception:
                         lat_delta = radius_m / 111000.0
-                        lon_delta = radius_m / (111000.0 * max(0.000001, np.cos(np.deg2rad(center_lat))))
+                        lon_delta = radius_m / (
+                            111000.0 * max(0.000001, np.cos(np.deg2rad(center_lat)))
+                        )
                         bbox_for_query = (
                             center_lat - lat_delta,
                             center_lon - lon_delta,
@@ -245,7 +389,11 @@ def download_and_build_buildings(
                     lat_min, lat_max, lon_min, lon_max = bbox
                     try:
                         gdf = ox.geometries_from_bbox(
-                            lat_max, lat_min, lon_max, lon_min, tags={"building": True}
+                            lat_max,
+                            lat_min,
+                            lon_max,
+                            lon_min,
+                            tags={"building": True, "building:part": True},
                         )
                         cols = list(gdf.columns)
                         for _, row in gdf.iterrows():
@@ -272,6 +420,7 @@ def download_and_build_buildings(
                         f"[out:json][timeout:25];\n"
                         f"(\n"
                         f'  way["building"]({south},{west},{north},{east});\n'
+                        f'  way["building:part"]({south},{west},{north},{east});\n'
                         f");\n"
                         f"out body geom;\n"
                     )
@@ -318,12 +467,10 @@ def download_and_build_buildings(
             return None, None
 
     # Margin-inset plate boundary used for clip/omit decisions
-    plate_box = geom.box(
-        margin_mm, margin_mm, map_width_mm - margin_mm, map_height_mm - margin_mm
-    )
+    plate_box = geom.box(margin_mm, margin_mm, map_width_mm - margin_mm, map_height_mm - margin_mm)
 
     # Transform each polygon to mm coords, extract its height, clip, and filter
-    poly_height_pairs: list[tuple[geom.base.BaseGeometry, float]] = []
+    elements: list[tuple[geom.base.BaseGeometry, BuildingDimensions, bool]] = []
 
     for g, tags in geo_with_tags:
         if g is None:
@@ -335,7 +482,7 @@ def download_and_build_buildings(
         else:
             continue
 
-        real_h = _extract_real_height_m(
+        dimensions = _building_dimensions(
             tags,
             default_height_m=building_default_height_m,
             levels_to_m=building_levels_to_m,
@@ -383,45 +530,67 @@ def download_and_build_buildings(
             if clipped.is_empty:
                 continue
 
-            poly_height_pairs.append((clipped, real_h))
+            elements.append((clipped, dimensions, "building:part" in tags))
 
-    if not poly_height_pairs:
+    if not elements:
         return None, None
 
+    part_union = ops.unary_union([poly for poly, _dims, is_part in elements if is_part])
+    if not part_union.is_empty:
+        resolved: list[tuple[geom.base.BaseGeometry, BuildingDimensions, bool]] = []
+        for poly, dims, is_part in elements:
+            remainder = poly if is_part else poly.difference(part_union)
+            if not remainder.is_empty:
+                resolved.append((remainder, dims, is_part))
+        elements = resolved
+
     # Proportional height scaling: tallest building in scene → max_print_height_mm
-    all_real_heights = [h for _, h in poly_height_pairs]
+    all_real_heights = [dims.total_height_m for _, dims, _ in elements]
     max_real_h = max(all_real_heights)
     height_scale = (max_print_height_mm / max_real_h) if max_real_h > 0.0 else 1.0
 
     logging.info(
         "Buildings: %d footprints | real heights %.1f–%.1f m | "
         "scale %.4f mm/m | extrusions %.2f–%.2f mm",
-        len(poly_height_pairs),
+        len(elements),
         min(all_real_heights),
         max_real_h,
         height_scale,
-        min(max(min_building_height_mm, h * height_scale) for _, h in poly_height_pairs),
-        max(max(min_building_height_mm, h * height_scale) for _, h in poly_height_pairs),
+        min(max(min_building_height_mm, h * height_scale) for h in all_real_heights),
+        max(max(min_building_height_mm, h * height_scale) for h in all_real_heights),
     )
 
     # Extrude each building individually then concatenate into one mesh
     meshes = []
-    for poly, real_h in poly_height_pairs:
-        extrusion_mm = max(min_building_height_mm, real_h * height_scale)
-        parts: list[geom.Polygon] = (
-            list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
-        )
+    surface_z = z_offset + embed_depth_mm
+    for poly, dimensions, _is_part in elements:
+        parts: list[geom.Polygon] = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
         for part in parts:
             if part.is_empty:
                 continue
             try:
+                bottom_mm = dimensions.min_height_m * height_scale
+                eave_mm = max(
+                    bottom_mm + min_building_height_mm, dimensions.eave_height_m * height_scale
+                )
+                effective_embed = (
+                    embed_depth_mm if bottom_mm <= 1e-9 else min(embed_depth_mm, bottom_mm)
+                )
                 meshes.append(
                     route_mesh_from_polygon(
                         part,
-                        height_mm=extrusion_mm + embed_depth_mm,
-                        z_offset=z_offset,
+                        height_mm=(eave_mm - bottom_mm) + effective_embed,
+                        z_offset=surface_z + bottom_mm - effective_embed,
                     )
                 )
+                roof = _roof_mesh(
+                    part,
+                    eave_z=surface_z + eave_mm,
+                    roof_height_mm=dimensions.roof_height_m * height_scale,
+                    shape=dimensions.roof_shape,
+                )
+                if roof is not None:
+                    meshes.append(roof)
             except Exception as exc:
                 logging.warning("Failed creating building mesh: %s", exc)
 
@@ -435,18 +604,16 @@ def download_and_build_buildings(
             final_mesh = meshes[0]
 
     # Union of all clipped footprints (used for debug overlay and return value)
-    unioned = ops.unary_union([p for p, _ in poly_height_pairs])
+    unioned = ops.unary_union([p for p, _dims, _is_part in elements])
 
     if debug:
         try:
             import matplotlib.pyplot as plt
 
             fig, ax = plt.subplots(figsize=(6, 8))
-            for poly, _real_h in poly_height_pairs:
+            for poly, _dimensions, _is_part in elements:
                 try:
-                    parts = (
-                        list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
-                    )
+                    parts = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
                     for part in parts:
                         x, y = part.exterior.xy
                         ax.fill(x, y, alpha=0.6, fc="cyan", ec="black")
@@ -478,4 +645,3 @@ def download_and_build_buildings(
             pass
 
     return unioned, final_mesh
-
