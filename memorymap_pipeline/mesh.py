@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-import xml.etree.ElementTree as ET
+import re
 import zipfile
 
 import numpy as np
@@ -24,9 +24,6 @@ MESH_MATERIALS = {
     "Roads_Black": ("Black", "#000000FF"),
     "Buildings_Verification": ("Gray", "#808080FF"),
 }
-
-THREE_MF_CORE_NAMESPACE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
-
 
 def embedded_feature_dimensions(
     visible_height_mm: float,
@@ -164,7 +161,12 @@ def center_meshes_to_base(meshes: list[Trimesh], width_mm: float, height_mm: flo
 
 
 def _apply_3mf_materials(output_path: Path) -> None:
-    """Add uniform, slicer-visible materials to named objects in a 3MF archive."""
+    """Inject slicer-visible materials without reserializing the model XML.
+
+    Some slicers reject otherwise valid 3MF files when the core namespace is rewritten
+    with generated prefixes. Preserve the exporter document and make only targeted text
+    insertions instead.
+    """
     with zipfile.ZipFile(output_path, "r") as source:
         entries = [(info, source.read(info.filename)) for info in source.infolist()]
 
@@ -176,37 +178,43 @@ def _apply_3mf_materials(output_path: Path) -> None:
         raise ValueError("Exported 3MF archive does not contain a model document")
 
     model_info, model_data = entries[model_index]
-    root = ET.fromstring(model_data)
-    core = f"{{{THREE_MF_CORE_NAMESPACE}}}"
-    resources = root.find(f"{core}resources")
-    if resources is None:
+    model_text = model_data.decode("utf-8")
+    resource_match = re.search(r"<(?:[A-Za-z_][\w.-]*:)?resources\b[^>]*>", model_text)
+    if resource_match is None:
         raise ValueError("Exported 3MF model does not contain resources")
 
-    used_ids = {
-        int(element.attrib["id"])
-        for element in resources
-        if element.attrib.get("id", "").isdigit()
-    }
+    used_ids = {int(value) for value in re.findall(r'\bid="(\d+)"', model_text)}
     material_id = max(used_ids, default=0) + 1
-    materials = ET.SubElement(resources, f"{core}basematerials", {"id": str(material_id)})
+    material_xml = [f'<basematerials id="{material_id}">']
     material_indices: dict[str, int] = {}
     for index, (object_name, (material_name, display_color)) in enumerate(MESH_MATERIALS.items()):
-        ET.SubElement(
-            materials,
-            f"{core}base",
-            {"name": material_name, "displaycolor": display_color},
+        material_xml.append(
+            f'<base name="{material_name}" displaycolor="{display_color}" />'
         )
         material_indices[object_name] = index
+    material_xml.append("</basematerials>")
+    insertion_point = resource_match.end()
+    model_text = (
+        model_text[:insertion_point]
+        + "".join(material_xml)
+        + model_text[insertion_point:]
+    )
 
-    for object_element in resources.findall(f"{core}object"):
-        object_name = object_element.attrib.get("name")
-        if object_name in material_indices:
-            object_element.set("pid", str(material_id))
-            object_element.set("pindex", str(material_indices[object_name]))
+    for object_name, material_index in material_indices.items():
+        object_pattern = re.compile(
+            rf'(<(?:[A-Za-z_][\w.-]*:)?object\b(?=[^>]*\bname="{re.escape(object_name)}")[^>]*)(>)'
+        )
+        model_text, replacements = object_pattern.subn(
+            rf'\1 pid="{material_id}" pindex="{material_index}"\2',
+            model_text,
+            count=1,
+        )
+        if replacements != 1:
+            raise ValueError(f"Exported 3MF model is missing object {object_name}")
 
     entries[model_index] = (
         model_info,
-        ET.tostring(root, encoding="utf-8", xml_declaration=True),
+        model_text.encode("utf-8"),
     )
     temporary_path = output_path.with_name(f"{output_path.name}.materials.tmp")
     try:
