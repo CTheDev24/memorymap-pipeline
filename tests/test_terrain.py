@@ -205,8 +205,9 @@ def test_generation_service_drapes_route_and_exports_recessed_water(tmp_path: Pa
             frame=frame,
             output_path=output,
             include_roads=False,
-            include_buildings=False,
+            include_buildings=True,
             config=config,
+            buildings_file=Path(__file__).parent / "fixtures" / "frame_buildings.geojson",
             elevation_grid=_grid(
                 [[30.0, 30.3, 30.6], [29.8, 30.1, 30.4], [29.5, 29.8, 30.1]]
             ),
@@ -216,7 +217,9 @@ def test_generation_service_drapes_route_and_exports_recessed_water(tmp_path: Pa
     assert output.is_file()
     assert result.base_mesh is not None and result.base_mesh.is_watertight
     assert result.route_mesh is not None
+    assert result.buildings_mesh is not None
     assert result.water_mesh is not None
     assert result.stats["terrain"]["source"] == "fixture"
     assert result.stats["terrain"]["flatness_rating"] == 5
     assert result.stats["layers"]["water"] is not None
+    assert result.buildings_mesh.bounds[0, 2] > -0.2

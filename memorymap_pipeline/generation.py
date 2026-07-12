@@ -300,14 +300,13 @@ def generate_memory_map(
             buildings_file=str(request.buildings_file) if request.buildings_file else None,
             overlay_roads=unioned_roads,
             route_points=scaled,
+            terrain_height_at=terrain_surface.sample if terrain_surface is not None else None,
             )
         finally:
             logging.getLogger().removeHandler(collector)
         if buildings_mesh is None:
             warnings.append("No building geometry was available inside the selected frame.")
             warnings.extend(f"Building detail: {message}" for message in collector.messages[-4:])
-        elif terrain_surface is not None:
-            buildings_mesh = drape_mesh(buildings_mesh, terrain_surface)
     progress(85, "Building mesh complete")
 
     if all(mesh is None for mesh in (base_mesh, route_mesh, roads_mesh, buildings_mesh, water_mesh)):

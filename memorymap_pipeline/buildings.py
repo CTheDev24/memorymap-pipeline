@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 import shapely.geometry as geom
@@ -319,6 +320,7 @@ def download_and_build_buildings(
     buildings_file: str | None = None,
     overlay_roads: object | None = None,
     route_points: np.ndarray | None = None,
+    terrain_height_at: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
@@ -569,6 +571,12 @@ def download_and_build_buildings(
             if part.is_empty:
                 continue
             try:
+                terrain_z = 0.0
+                if terrain_height_at is not None:
+                    centroid = part.centroid
+                    terrain_z = float(
+                        np.asarray(terrain_height_at(centroid.x, centroid.y)).reshape(-1)[0]
+                    )
                 bottom_mm = dimensions.min_height_m * height_scale
                 eave_mm = max(
                     bottom_mm + min_building_height_mm, dimensions.eave_height_m * height_scale
@@ -580,12 +588,12 @@ def download_and_build_buildings(
                     route_mesh_from_polygon(
                         part,
                         height_mm=(eave_mm - bottom_mm) + effective_embed,
-                        z_offset=surface_z + bottom_mm - effective_embed,
+                        z_offset=surface_z + terrain_z + bottom_mm - effective_embed,
                     )
                 )
                 roof = _roof_mesh(
                     part,
-                    eave_z=surface_z + eave_mm,
+                    eave_z=surface_z + terrain_z + eave_mm,
                     roof_height_mm=dimensions.roof_height_m * height_scale,
                     shape=dimensions.roof_shape,
                 )
