@@ -122,8 +122,6 @@ def _roof_mesh(
             factor = 1.0 - max(abs(u), abs(v))
         return eave_z + roof_height_mm * max(0.0, factor)
 
-    vertices: list[list[float]] = []
-    faces: list[list[int]] = []
     seeds: list[geom.Point] = []
     if shape == "gabled":
         seeds = [
@@ -141,22 +139,67 @@ def _roof_mesh(
     triangulation_input = (
         geom.GeometryCollection([polygon, geom.MultiPoint(seeds)]) if seeds else polygon
     )
+    xy_vertices: list[tuple[float, float]] = []
+    vertex_indices: dict[tuple[float, float], int] = {}
+    top_faces: list[list[int]] = []
+
+    def vertex_index(x: float, y: float) -> int:
+        key = (round(float(x), 12), round(float(y), 12))
+        if key not in vertex_indices:
+            vertex_indices[key] = len(xy_vertices)
+            xy_vertices.append((float(x), float(y)))
+        return vertex_indices[key]
+
     for triangle in triangulate(triangulation_input):
-        clipped = triangle.intersection(polygon)
-        if clipped.geom_type != "Polygon" or clipped.area <= 1e-10:
+        if triangle.area <= 1e-10 or not polygon.covers(triangle):
             continue
-        coords = list(clipped.exterior.coords)[:-1]
-        first = len(vertices)
-        vertices.extend([[x, y, z_at(x, y)] for x, y in coords])
-        faces.extend([[first, first + i, first + i + 1] for i in range(1, len(coords) - 1)])
-    ring = list(polygon.exterior.coords)[:-1]
-    for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
-        i = len(vertices)
-        vertices.extend(
-            [[x1, y1, eave_z], [x2, y2, eave_z], [x2, y2, z_at(x2, y2)], [x1, y1, z_at(x1, y1)]]
+        coords = list(triangle.exterior.coords)[:3]
+        signed_area = sum(
+            coords[i][0] * coords[(i + 1) % 3][1] - coords[(i + 1) % 3][0] * coords[i][1]
+            for i in range(3)
         )
-        faces.extend([[i, i + 1, i + 2], [i, i + 2, i + 3]])
-    return Trimesh(np.asarray(vertices), np.asarray(faces), process=True) if faces else None
+        if signed_area < 0.0:
+            coords.reverse()
+        top_faces.append([vertex_index(x, y) for x, y in coords])
+    if not top_faces:
+        return None
+
+    vertices = [[x, y, z_at(x, y)] for x, y in xy_vertices]
+    bottom_indices: list[int] = []
+    for top_index, (x, y) in enumerate(xy_vertices):
+        if abs(vertices[top_index][2] - eave_z) <= 1e-9:
+            bottom_indices.append(top_index)
+        else:
+            bottom_indices.append(len(vertices))
+            vertices.append([x, y, eave_z])
+    faces = list(top_faces)
+    faces.extend(
+        [[bottom_indices[c], bottom_indices[b], bottom_indices[a]] for a, b, c in top_faces]
+    )
+
+    edge_counts: dict[tuple[int, int], int] = {}
+    directed_edges: dict[tuple[int, int], tuple[int, int]] = {}
+    for face in top_faces:
+        for a, b in zip(face, face[1:] + face[:1]):
+            key = (min(a, b), max(a, b))
+            edge_counts[key] = edge_counts.get(key, 0) + 1
+            directed_edges.setdefault(key, (a, b))
+    for key, count in edge_counts.items():
+        if count != 1:
+            continue
+        a, b = directed_edges[key]
+        bottom_a = bottom_indices[a]
+        bottom_b = bottom_indices[b]
+        if a == bottom_a and b == bottom_b:
+            continue
+        if a == bottom_a:
+            faces.append([a, bottom_b, b])
+        elif b == bottom_b:
+            faces.append([a, bottom_a, b])
+        else:
+            faces.extend([[a, bottom_a, bottom_b], [a, bottom_b, b]])
+
+    return Trimesh(np.asarray(vertices), np.asarray(faces), process=True)
 
 
 def _transform_shapely_polygon(
