@@ -27,6 +27,7 @@ Notes:
   one multipart object and read the assignments from standard 3MF base materials.
 - Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`.
 - Route, road, and building heights are visible heights measured above the base plate.
+- Building heights follow the physical map scale by default; only unusually tall outliers are adaptively compressed to the GUI maximum (25 mm by default, 31.75 mm hard limit).
 - Raised features overlap the base by `feature_embed_depth` (0.2 mm by default) to keep short geometry printable without changing its visible height.
 - Debug plots for roads can be enabled by setting `roads_debug` to `true` in the config.
 

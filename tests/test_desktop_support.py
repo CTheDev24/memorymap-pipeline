@@ -60,3 +60,43 @@ def test_launcher_initializes_and_shows_window(monkeypatch):
     assert main(["memorymap"]) == 7
     assert ("show",) in events
     assert events[-1] == ("exec",)
+
+def test_orientation_toggle_swaps_dimensions_and_live_frame():
+    pytest.importorskip("PySide6")
+    from memorymap_pipeline.desktop.window import MemoryMapWindow
+
+    class Spin:
+        def __init__(self, value):
+            self._value = value
+
+        def value(self):
+            return self._value
+
+        def setValue(self, value):
+            self._value = value
+
+    scripts = []
+
+    class Page:
+        def runJavaScript(self, script):
+            scripts.append(script)
+
+    current = {
+        "print_width_mm": 240.0,
+        "print_height_mm": 190.0,
+        "coverage_width_m": 2400.0,
+        "coverage_height_m": 1900.0,
+    }
+    window = type("WindowState", (), {})()
+    window.print_width = Spin(240.0)
+    window.print_height = Spin(190.0)
+    window.default_frame = current.copy()
+    window.current_frame = current.copy()
+    window.map_view = type("View", (), {"page": lambda self: Page()})()
+
+    MemoryMapWindow._orientation_changed(window, False)
+
+    assert (window.print_width.value(), window.print_height.value()) == (190.0, 240.0)
+    assert window.current_frame["coverage_width_m"] == 1900.0
+    assert window.current_frame["coverage_height_m"] == 2400.0
+    assert scripts and "setFrame" in scripts[-1]

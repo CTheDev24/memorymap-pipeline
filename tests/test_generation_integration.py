@@ -158,6 +158,7 @@ def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
     assert result.roads_mesh.bounds[1, 2] == pytest.approx(
         request.config["road_height"], abs=tolerance
     )
-    assert result.buildings_mesh.bounds[1, 2] == pytest.approx(
-        request.config["max_print_height_mm"], abs=tolerance
+    assert 0.0 < result.buildings_mesh.bounds[1, 2]
+    assert result.buildings_mesh.bounds[1, 2] <= (
+        request.config["max_print_height_mm"] + tolerance
     )

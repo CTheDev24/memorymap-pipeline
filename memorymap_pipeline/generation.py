@@ -327,6 +327,10 @@ def generate_memory_map(
             overlay_roads=unioned_roads,
             route_points=scaled,
             terrain_height_at=terrain_surface.sample if terrain_surface is not None else None,
+            building_scale_mm_per_m=min(
+                frame.printable_width_mm / frame.coverage_width_m,
+                frame.printable_height_mm / frame.coverage_height_m,
+            ) * float(config.get("building_vertical_exaggeration", 1.0)),
             )
         finally:
             logging.getLogger().removeHandler(collector)

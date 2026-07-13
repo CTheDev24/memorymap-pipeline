@@ -144,10 +144,12 @@ class MemoryMapWindow(QMainWindow):
         terrain_form = QFormLayout(terrain_box)
         self.terrain_relief = self._spin(3.0, 0.5, 12.0)
         self.water_recess = self._spin(0.4, 0.1, 3.0)
+        self.building_max_height = self._spin(25.0, 1.0, 31.75)
         self.terrain_relief.setEnabled(False)
         self.water_recess.setEnabled(False)
         terrain_form.addRow("Maximum relief", self.terrain_relief)
         terrain_form.addRow("Water recess", self.water_recess)
+        terrain_form.addRow("Maximum building height", self.building_max_height)
         outer.addWidget(terrain_box)
         self.generate = QPushButton("Generate 3MF")
         self.generate.setEnabled(False)
@@ -218,11 +220,30 @@ class MemoryMapWindow(QMainWindow):
 
     @Slot(bool)
     def _orientation_changed(self, landscape: bool) -> None:
-        if not landscape:
+        is_landscape = self.print_width.value() >= self.print_height.value()
+        if landscape == is_landscape:
             return
-        if self.print_width.value() < self.print_height.value():
-            self.print_width.setValue(self.print_height.value())
-            self.print_height.setValue(190)
+        width, height = self.print_height.value(), self.print_width.value()
+        self.print_width.setValue(width)
+        self.print_height.setValue(height)
+
+        for frame in (self.default_frame, self.current_frame):
+            if frame is None:
+                continue
+            frame["print_width_mm"], frame["print_height_mm"] = width, height
+            frame["coverage_width_m"], frame["coverage_height_m"] = (
+                frame["coverage_height_m"],
+                frame["coverage_width_m"],
+            )
+
+        if self.current_frame is not None:
+            if self.default_frame is not None:
+                self.map_view.page().runJavaScript(
+                    f"window.defaultFrame={json.dumps(self.default_frame)};"
+                )
+            self.map_view.page().runJavaScript(
+                f"setFrame({json.dumps(self.current_frame)});"
+            )
 
     @Slot(dict)
     def _remember_frame(self, frame: dict) -> None:
@@ -267,6 +288,7 @@ class MemoryMapWindow(QMainWindow):
                     "water_enabled": self.water_layer.isChecked(),
                     "terrain_max_relief_mm": self.terrain_relief.value(),
                     "water_recess_mm": self.water_recess.value(),
+                    "max_print_height_mm": self.building_max_height.value(),
                 },
             }
             thread = QThread(self); worker = GenerationWorker(payload)

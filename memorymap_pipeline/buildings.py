@@ -393,6 +393,42 @@ def _overpass_geometry(element: dict) -> geom.base.BaseGeometry | None:
     return result
 
 
+def _adaptive_height_mapper(
+    real_heights_m: list[float],
+    scale_mm_per_m: float,
+    max_height_mm: float,
+    min_height_mm: float,
+) -> Callable[[float], float]:
+    """Map real heights at print scale, compressing only the tallest outliers."""
+    if not real_heights_m or scale_mm_per_m <= 0.0:
+        return lambda height_m: max(min_height_mm, min(max_height_mm, height_m))
+    maximum_real = max(real_heights_m)
+    maximum_raw = maximum_real * scale_mm_per_m
+    if maximum_raw <= max_height_mm:
+        return lambda height_m: max(
+            min_height_mm, min(max_height_mm, height_m * scale_mm_per_m)
+        )
+
+    knee_real = float(np.percentile(real_heights_m, 95))
+    if knee_real >= maximum_real:
+        compression = max_height_mm / maximum_raw
+        return lambda height_m: max(
+            min_height_mm, min(max_height_mm, height_m * scale_mm_per_m * compression)
+        )
+
+    knee_raw = min(knee_real * scale_mm_per_m, max_height_mm * 0.8)
+    lower_scale = knee_raw / knee_real if knee_real > 0.0 else scale_mm_per_m
+
+    def mapped(height_m: float) -> float:
+        if height_m <= knee_real:
+            visible = height_m * lower_scale
+        else:
+            fraction = (height_m - knee_real) / (maximum_real - knee_real)
+            visible = knee_raw + fraction * (max_height_mm - knee_raw)
+        return max(min_height_mm, min(max_height_mm, visible))
+
+    return mapped
+
 def download_and_build_buildings(
     bbox: tuple[float, float, float, float] | None,
     center_lat: float,
@@ -404,7 +440,7 @@ def download_and_build_buildings(
     debug: bool = False,
     z_offset: float = 0.0,
     embed_depth_mm: float = 0.0,
-    max_print_height_mm: float = 31.75,
+    max_print_height_mm: float = 25.0,
     min_building_height_mm: float = 0.4,
     building_default_height_m: float = 6.0,
     building_levels_to_m: float = 3.0,
@@ -415,11 +451,12 @@ def download_and_build_buildings(
     overlay_roads: object | None = None,
     route_points: np.ndarray | None = None,
     terrain_height_at: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None,
+    building_scale_mm_per_m: float | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
-    Each building's visible height is proportional to its real-world OSM height so
-    that the tallest building in the scene prints at ``max_print_height_mm``.  Buildings
+    Each building follows the physical horizontal map scale. Heights are adaptively
+    compressed only when tall outliers exceed the configured maximum. Buildings
     where more than ``building_clip_threshold`` of their footprint lies outside the
     margin-inset build area are omitted; the remainder are clipped to that boundary.
 
@@ -629,20 +666,33 @@ def download_and_build_buildings(
                 resolved.append((remainder, dims, is_part))
         elements = resolved
 
-    # Proportional height scaling: tallest building in scene → max_print_height_mm
+    # Preserve geographic scale for ordinary buildings and compress only tall outliers.
     all_real_heights = [dims.total_height_m for _, dims, _ in elements]
-    max_real_h = max(all_real_heights)
-    height_scale = (max_print_height_mm / max_real_h) if max_real_h > 0.0 else 1.0
+    if building_scale_mm_per_m is None:
+        frame = transform.get("map_frame")
+        if frame is not None:
+            building_scale_mm_per_m = min(
+                frame.printable_width_mm / frame.coverage_width_m,
+                frame.printable_height_mm / frame.coverage_height_m,
+            )
+        else:
+            building_scale_mm_per_m = float(transform.get("scale", 1.0))
+    map_height = _adaptive_height_mapper(
+        all_real_heights,
+        building_scale_mm_per_m,
+        max_print_height_mm,
+        min_building_height_mm,
+    )
 
     logging.info(
         "Buildings: %d footprints | real heights %.1f–%.1f m | "
-        "scale %.4f mm/m | extrusions %.2f–%.2f mm",
+        "map scale %.4f mm/m | extrusions %.2f–%.2f mm",
         len(elements),
         min(all_real_heights),
-        max_real_h,
-        height_scale,
-        min(max(min_building_height_mm, h * height_scale) for h in all_real_heights),
-        max(max(min_building_height_mm, h * height_scale) for h in all_real_heights),
+        max(all_real_heights),
+        building_scale_mm_per_m,
+        min(map_height(h) for h in all_real_heights),
+        max(map_height(h) for h in all_real_heights),
     )
 
     # Extrude each building individually then concatenate into one mesh
@@ -660,9 +710,9 @@ def download_and_build_buildings(
                     terrain_z = float(
                         np.asarray(terrain_height_at(centroid.x, centroid.y)).reshape(-1)[0]
                     )
-                bottom_mm = dimensions.min_height_m * height_scale
+                bottom_mm = map_height(dimensions.min_height_m) if dimensions.min_height_m > 0.0 else 0.0
                 eave_mm = max(
-                    bottom_mm + min_building_height_mm, dimensions.eave_height_m * height_scale
+                    bottom_mm + min_building_height_mm, map_height(dimensions.eave_height_m)
                 )
                 effective_embed = (
                     embed_depth_mm if bottom_mm <= 1e-9 else min(embed_depth_mm, bottom_mm)
@@ -677,7 +727,7 @@ def download_and_build_buildings(
                 roof = _roof_mesh(
                     part,
                     eave_z=surface_z + terrain_z + eave_mm,
-                    roof_height_mm=dimensions.roof_height_m * height_scale,
+                    roof_height_mm=max(0.0, map_height(dimensions.total_height_m) - eave_mm),
                     shape=dimensions.roof_shape,
                     orientation=dimensions.roof_orientation,
                 )

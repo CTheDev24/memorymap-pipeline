@@ -5,7 +5,7 @@ import sys
 import pytest
 from shapely.geometry import box
 
-from memorymap_pipeline.buildings import _extract_real_height_m
+from memorymap_pipeline.buildings import _adaptive_height_mapper, _extract_real_height_m
 from memorymap_pipeline.cli import main
 from memorymap_pipeline.config import DEFAULT_CONFIG, load_config
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
@@ -276,3 +276,17 @@ def test_building_entirely_outside_omitted():
     result = _clip_fraction(building, plate, clip_threshold=0.5)
     assert result is None
 
+
+
+def test_adaptive_height_mapper_preserves_map_scale_for_low_rise_scene():
+    mapper = _adaptive_height_mapper([3.0, 6.0, 12.0], 0.2, 25.0, 0.4)
+    assert mapper(3.0) == pytest.approx(0.6)
+    assert mapper(6.0) == pytest.approx(1.2)
+    assert mapper(12.0) == pytest.approx(2.4)
+
+
+def test_adaptive_height_mapper_caps_tall_outliers():
+    heights = [6.0] * 20 + [20.0, 300.0]
+    mapper = _adaptive_height_mapper(heights, 0.2, 25.0, 0.4)
+    assert mapper(6.0) < mapper(20.0) < mapper(300.0)
+    assert mapper(300.0) == pytest.approx(25.0)
