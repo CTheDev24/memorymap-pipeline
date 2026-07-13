@@ -26,10 +26,10 @@ from .roads import download_and_build_roads
 from .terrain import ElevationGrid, build_terrain_mesh, drape_mesh, terrain_surface_from_grid
 from .terrain_providers import Usgs3depProvider
 from .water import (
-    build_water_mesh,
+    build_terrain_mesh_with_water,
+    build_vector_water_mesh,
     download_water_polygons,
-    rasterize_water_mask,
-    recess_water_surface,
+    prepare_water_bodies,
 )
 
 
@@ -190,6 +190,7 @@ def generate_memory_map(
     transform = {"map_frame": frame}
     terrain_surface = None
     water_mesh = None
+    water_bodies = []
     if request.include_base and bool(config.get("terrain_enabled", False)):
         grid_size = int(config.get("terrain_grid_size", 96))
         elevation_grid = request.elevation_grid
@@ -222,22 +223,29 @@ def generate_memory_map(
                     water_file=request.water_file,
                 )
             if water_polygons:
-                water_mask = rasterize_water_mask(water_polygons, terrain_surface)
-                terrain_surface = recess_water_surface(
+                water_bodies = prepare_water_bodies(
+                    water_polygons,
                     terrain_surface,
-                    water_mask,
                     float(config.get("water_recess_mm", 0.4)),
                     minimum_height_mm=-request.base_thickness_mm
                     + float(config.get("water_embed_depth_mm", 0.2)),
+                    shoreline_tolerance_mm=float(
+                        config.get("water_shoreline_tolerance_mm", 0.1)
+                    ),
                 )
-                water_mesh = build_water_mesh(
-                    terrain_surface,
-                    water_mask,
+                water_mesh = build_vector_water_mesh(
+                    water_bodies,
                     float(config.get("water_embed_depth_mm", 0.2)),
                 )
             else:
                 warnings.append("Water is enabled but no water polygons were supplied.")
-        base_mesh = build_terrain_mesh(terrain_surface, request.base_thickness_mm)
+        base_mesh = (
+            build_terrain_mesh_with_water(
+                terrain_surface, request.base_thickness_mm, water_bodies
+            )
+            if water_bodies
+            else build_terrain_mesh(terrain_surface, request.base_thickness_mm)
+        )
     else:
         base_mesh = (
             build_base_plate(frame.print_width_mm, frame.print_height_mm, request.base_thickness_mm)

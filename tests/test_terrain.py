@@ -6,7 +6,7 @@ import zipfile
 import numpy as np
 import pytest
 from PIL import Image
-from shapely.geometry import box
+from shapely.geometry import LineString, box
 
 from memorymap_pipeline.mesh import export_3mf, route_mesh_from_polygon
 from memorymap_pipeline import generation
@@ -22,10 +22,10 @@ from memorymap_pipeline.terrain import (
 )
 from memorymap_pipeline.terrain_providers import Usgs3depProvider
 from memorymap_pipeline.water import (
-    build_water_mesh,
+    build_terrain_mesh_with_water,
+    build_vector_water_mesh,
     download_water_polygons,
-    rasterize_water_mask,
-    recess_water_surface,
+    prepare_water_bodies,
 )
 
 
@@ -167,14 +167,21 @@ def test_water_is_recessed_and_exported_as_gray_assembly_part(tmp_path: Path) ->
         height_mm=80.0,
         horizontal_span_m=10_000.0,
     )
-    mask = rasterize_water_mask([box(25.0, 20.0, 75.0, 60.0)], surface)
-    recessed = recess_water_surface(surface, mask, recess_mm=0.4)
-    water = build_water_mesh(recessed, mask, embed_depth_mm=0.2)
+    bayou = LineString([(-5.0, 20.0), (25.0, 30.0), (55.0, 25.0), (105.0, 55.0)]).buffer(
+        4.0, resolution=8
+    )
+    bodies = prepare_water_bodies([bayou], surface, recess_mm=0.4)
+    water = build_vector_water_mesh(bodies, embed_depth_mm=0.2)
     assert water is not None
-    assert np.all(recessed.heights_mm[mask] == pytest.approx(surface.heights_mm[mask] - 0.4))
+    assert len(bodies) == 1
+    assert water.is_watertight
+    assert len(water.split()) == 1
+    assert bodies[0].level_mm <= float(surface.sample(25.0, 30.0)) - 0.4
 
     output = tmp_path / "terrain-water.3mf"
-    export_3mf(output, build_terrain_mesh(recessed, 1.0), None, water_mesh=water)
+    terrain = build_terrain_mesh_with_water(surface, 1.0, bodies)
+    assert terrain.is_watertight
+    export_3mf(output, terrain, None, water_mesh=water)
     with zipfile.ZipFile(output) as archive:
         model_name = next(name for name in archive.namelist() if name.lower().endswith(".model"))
         root = ET.fromstring(archive.read(model_name))

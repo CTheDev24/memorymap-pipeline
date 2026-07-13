@@ -98,7 +98,8 @@ maximum relief, and water recess controls. Its initial configuration is:
   "terrain_min_relief_mm": 1.5,
   "water_enabled": false,
   "water_recess_mm": 0.4,
-  "water_embed_depth_mm": 0.2
+  "water_embed_depth_mm": 0.2,
+  "water_shoreline_tolerance_mm": 0.1
 }
 ```
 
@@ -114,6 +115,12 @@ while the structural base remains underneath. When Water is enabled, desktop gen
 downloads OSM areas tagged `natural=water`, `waterway=riverbank`, or reservoir/basin land
 use and transforms them into the print frame. Local water files or pre-transformed
 polygons remain available for offline tests.
+
+Connected water polygons are merged before meshing, so a river such as Buffalo Bayou is
+one continuous vector solid rather than a collection of terrain-grid rectangles. The
+terrain is partitioned along the same shoreline and cut down to the water level. A 0.1 mm
+print-space simplification removes insignificant OSM noise while preserving islands and
+inner openings.
 
 To omit the base plate:
 

@@ -19,5 +19,6 @@
   "water_enabled": false,
   "water_recess_mm": 0.4,
   "water_embed_depth_mm": 0.2,
+  "water_shoreline_tolerance_mm": 0.1,
   "margin": 8.0
 }
