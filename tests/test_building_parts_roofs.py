@@ -4,7 +4,7 @@ import zipfile
 
 import numpy as np
 import pytest
-from shapely.geometry import box
+from shapely.geometry import Polygon, box
 
 from memorymap_pipeline.buildings import _building_dimensions, _overpass_geometry, _roof_mesh
 from memorymap_pipeline.generation import GenerationRequest, generate_memory_map
@@ -39,6 +39,21 @@ def test_supported_roofs_reach_tagged_height(shape: str) -> None:
     assert mesh is not None
     assert mesh.bounds[0, 2] == pytest.approx(5.0)
     assert mesh.bounds[1, 2] == pytest.approx(8.0)
+    assert mesh.is_watertight
+    assert mesh.volume > 0.0
+    assert np.all(np.bincount(mesh.edges_unique_inverse) == 2)
+
+
+def test_roof_solid_preserves_polygon_inner_ring() -> None:
+    polygon = Polygon(
+        [(0, 0), (10, 0), (10, 10), (0, 10)],
+        holes=[[(3, 3), (7, 3), (7, 7), (3, 7)]],
+    )
+    mesh = _roof_mesh(polygon, eave_z=5.0, roof_height_mm=3.0, shape="skillion")
+    assert mesh is not None
+    assert mesh.is_watertight
+    assert mesh.volume == pytest.approx(polygon.area * 1.5, rel=1e-6)
+    assert np.all(np.bincount(mesh.edges_unique_inverse) == 2)
 
 
 def test_unknown_roof_shape_falls_back_to_flat() -> None:
