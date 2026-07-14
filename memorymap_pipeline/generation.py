@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
+
 from shapely.geometry import box
 from trimesh.util import concatenate
 
@@ -198,9 +200,30 @@ def generate_memory_map(
             if config.get("terrain_provider", "usgs-3dep") != "usgs-3dep":
                 raise ValueError(f"Unsupported terrain provider: {config.get('terrain_provider')}")
             cache_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "MemoryMap" / "dem-cache"
-            elevation_grid = Usgs3depProvider().fetch(
-                bbox, (grid_size, grid_size), cache_dir
+            provider = Usgs3depProvider(
+                timeout_seconds=float(config.get("terrain_request_timeout_seconds", 20.0)),
+                max_attempts=int(config.get("terrain_request_attempts", 3)),
+                backoff_seconds=float(config.get("terrain_retry_backoff_seconds", 0.5)),
             )
+            try:
+                elevation_grid = provider.fetch(
+                    bbox, (grid_size, grid_size), cache_dir
+                )
+            except Exception as exc:
+                if not bool(config.get("terrain_flat_fallback", True)):
+                    raise
+                warnings.append(
+                    f"USGS terrain unavailable; using a flat base for this generation: {exc}"
+                )
+                south, north, west, east = bbox
+                elevation_grid = ElevationGrid(
+                    np.zeros((grid_size, grid_size), dtype=float),
+                    south,
+                    north,
+                    west,
+                    east,
+                    "flat-fallback",
+                )
         terrain_surface = terrain_surface_from_grid(
             elevation_grid,
             frame.print_width_mm,

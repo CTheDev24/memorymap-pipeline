@@ -4,6 +4,7 @@ from hashlib import sha256
 from io import BytesIO
 import json
 from pathlib import Path
+import time
 from typing import Any
 
 import numpy as np
@@ -24,9 +25,38 @@ class Usgs3depProvider:
 
     name = "usgs-3dep"
 
-    def __init__(self, session: Any | None = None, timeout_seconds: float = 60.0) -> None:
+    def __init__(
+        self,
+        session: Any | None = None,
+        timeout_seconds: float = 20.0,
+        max_attempts: int = 3,
+        backoff_seconds: float = 0.5,
+    ) -> None:
+        if timeout_seconds <= 0 or max_attempts < 1 or backoff_seconds < 0:
+            raise ValueError("Terrain request retry settings are invalid")
         self.session = session or requests.Session()
         self.timeout_seconds = timeout_seconds
+        self.max_attempts = max_attempts
+        self.backoff_seconds = backoff_seconds
+
+    def _get(self, url: str, **kwargs: Any) -> Any:
+        last_error: Exception | None = None
+        for attempt in range(self.max_attempts):
+            try:
+                response = self.session.get(
+                    url,
+                    timeout=self.timeout_seconds,
+                    **kwargs,
+                )
+                response.raise_for_status()
+                return response
+            except (requests.RequestException, OSError) as exc:
+                last_error = exc
+                if attempt + 1 < self.max_attempts and self.backoff_seconds:
+                    time.sleep(self.backoff_seconds * (2 ** attempt))
+        raise RuntimeError(
+            f"USGS 3DEP request failed after {self.max_attempts} attempts: {last_error}"
+        ) from last_error
 
     def fetch(
         self,
@@ -57,17 +87,14 @@ class Usgs3depProvider:
         if cache_path.is_file():
             payload = cache_path.read_bytes()
         else:
-            metadata_response = self.session.get(
+            metadata_response = self._get(
                 USGS_3DEP_EXPORT_URL,
                 params=request,
-                timeout=self.timeout_seconds,
             )
-            metadata_response.raise_for_status()
             metadata = metadata_response.json()
             if "error" in metadata or not metadata.get("href"):
                 raise RuntimeError(f"USGS 3DEP export failed: {metadata.get('error', metadata)}")
-            image_response = self.session.get(metadata["href"], timeout=self.timeout_seconds)
-            image_response.raise_for_status()
+            image_response = self._get(metadata["href"])
             payload = image_response.content
             cache_path.write_bytes(payload)
 

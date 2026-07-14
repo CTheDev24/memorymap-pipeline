@@ -5,6 +5,7 @@ import zipfile
 
 import numpy as np
 import pytest
+import requests
 from PIL import Image
 from shapely.geometry import LineString, Point, box
 
@@ -159,6 +160,64 @@ def test_usgs_provider_decodes_and_caches_float_dem(tmp_path: Path) -> None:
     assert second.elevations_m == pytest.approx(values)
     assert session.calls == 2  # the second provider call is served entirely from cache
 
+
+class FlakyTerrainSession(FakeSession):
+    def get(self, url: str, **kwargs) -> FakeResponse:
+        self.calls += 1
+        if self.calls == 1:
+            return FakeResponse(metadata={"href": "https://example.test/elevation.tif"})
+        if self.calls == 2:
+            raise requests.ReadTimeout("temporary USGS timeout")
+        return FakeResponse(content=self.tiff)
+
+
+def test_usgs_provider_retries_transient_image_timeout(tmp_path: Path) -> None:
+    values = np.array([[4.0, 5.0], [6.0, 7.0]], dtype=np.float32)
+    payload = BytesIO()
+    Image.fromarray(values, mode="F").save(payload, format="TIFF")
+    session = FlakyTerrainSession(payload.getvalue())
+    provider = Usgs3depProvider(
+        session=session,
+        timeout_seconds=1.0,
+        max_attempts=3,
+        backoff_seconds=0.0,
+    )
+
+    result = provider.fetch((35.9, 36.0, -86.9, -86.8), (2, 2), tmp_path)
+
+    assert result.elevations_m == pytest.approx(values)
+    assert session.calls == 3
+
+
+def test_generation_falls_back_to_flat_terrain_after_usgs_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    route = load_route_from_gpx(Path(__file__).parent / "fixtures" / "frame_route.gpx")
+    frame = MapFrame.fit_route(route.points, 120.0, 90.0, margin_mm=5.0)
+
+    def fail_fetch(*_args, **_kwargs):
+        raise RuntimeError("USGS unavailable")
+
+    monkeypatch.setattr(Usgs3depProvider, "fetch", fail_fetch)
+    result = generation.generate_memory_map(
+        generation.GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=tmp_path / "flat-fallback.3mf",
+            include_route=False,
+            include_roads=False,
+            include_buildings=False,
+            config={
+                "terrain_enabled": True,
+                "terrain_grid_size": 4,
+                "terrain_flat_fallback": True,
+            },
+        )
+    )
+
+    assert result.output_path.is_file()
+    assert result.stats["terrain"]["source"] == "flat-fallback"
+    assert any("using a flat base" in warning for warning in result.warnings)
 
 def test_water_is_recessed_and_exported_as_gray_assembly_part(tmp_path: Path) -> None:
     surface = terrain_surface_from_grid(
