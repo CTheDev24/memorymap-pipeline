@@ -31,9 +31,9 @@ DEFAULT_CONFIG = {
     "terrain_min_relief_mm": 1.5,
     "water_enabled": False,
     "water_recess_mm": 0.4,
-    # one printable gray layer at the recessed water surface
-    "water_mesh_thickness_mm": 0.2,
-    "water_support_overlap_mm": 0.0,
+    # 0.2 mm remains exclusively gray above 0.4 mm embedded in white support
+    "water_mesh_thickness_mm": 0.6,
+    "water_support_overlap_mm": 0.4,
     # minimum white material retained below every water body
     "water_base_skin_mm": 0.4,
     "water_shoreline_tolerance_mm": 0.1,

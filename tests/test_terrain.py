@@ -295,7 +295,7 @@ def test_water_is_recessed_and_exported_as_gray_assembly_part(tmp_path: Path) ->
         4.0, resolution=8
     )
     bodies = prepare_water_bodies([bayou], surface, recess_mm=0.4)
-    water = build_vector_water_mesh(bodies, thickness_mm=0.2)
+    water = build_vector_water_mesh(bodies, thickness_mm=0.6)
     assert water is not None
     assert len(bodies) == 1
     assert water.is_watertight
@@ -372,7 +372,7 @@ def test_generation_service_drapes_route_and_exports_recessed_water(tmp_path: Pa
     assert result.stats["terrain"]["flatness_rating"] == 5
     assert result.stats["layers"]["water"] is not None
     assert result.buildings_mesh.bounds[0, 2] > -0.2
-    assert result.water_mesh.bounds[1, 2] - result.water_mesh.bounds[0, 2] == pytest.approx(0.2)
+    assert result.water_mesh.bounds[1, 2] - result.water_mesh.bounds[0, 2] == pytest.approx(0.6)
     assert result.water_mesh.bounds[0, 2] >= -0.6 - 1e-9
 
 

@@ -137,9 +137,9 @@ def prepare_water_bodies(
 
 def build_vector_water_mesh(
     water_bodies: list[WaterBody],
-    thickness_mm: float = 0.2,
+    thickness_mm: float = 0.6,
 ) -> Trimesh | None:
-    """Build a single printable gray layer at each recessed water surface."""
+    """Build water solids with 0.2 mm exposed above their embedded support."""
     if thickness_mm <= 0:
         raise ValueError("Water mesh thickness must be positive")
     meshes = [
@@ -169,8 +169,8 @@ def build_terrain_mesh_with_water(
     surface: TerrainSurface,
     base_thickness_mm: float,
     water_bodies: list[WaterBody],
-    water_mesh_thickness_mm: float = 0.2,
-    support_overlap_mm: float = 0.0,
+    water_mesh_thickness_mm: float = 0.6,
+    support_overlap_mm: float = 0.4,
 ) -> Trimesh:
     """Create terrain with a recessed support cavity below each water body."""
     if base_thickness_mm <= 0:
