@@ -109,7 +109,7 @@ class MemoryMapWindow(QMainWindow):
         form.addRow("Orientation", orientation_row)
         self.print_width = self._spin(240, 10, 1000)
         self.print_height = self._spin(190, 10, 1000)
-        self.margin = self._spin(8, 0, 100)
+        self.margin = self._spin(5, 0, 100)
         self.route_width = self._spin(1.5, .1, 20)
         form.addRow("Width (mm)", self.print_width)
         form.addRow("Height (mm)", self.print_height)
@@ -227,14 +227,34 @@ class MemoryMapWindow(QMainWindow):
         self.print_width.setValue(width)
         self.print_height.setValue(height)
 
-        for frame in (self.default_frame, self.current_frame):
-            if frame is None:
-                continue
-            frame["print_width_mm"], frame["print_height_mm"] = width, height
-            frame["coverage_width_m"], frame["coverage_height_m"] = (
-                frame["coverage_height_m"],
-                frame["coverage_width_m"],
+        if self.route is not None:
+            frame = MapFrame.fit_route(
+                self.route.points,
+                width,
+                height,
+                self.margin.value(),
             )
+            fitted = {
+                "center_lat": frame.center_lat,
+                "center_lon": frame.center_lon,
+                "coverage_width_m": frame.coverage_width_m,
+                "coverage_height_m": frame.coverage_height_m,
+                "rotation_degrees": frame.rotation_degrees,
+                "print_width_mm": frame.print_width_mm,
+                "print_height_mm": frame.print_height_mm,
+                "margin_mm": frame.margin_mm,
+            }
+            self.default_frame = fitted
+            self.current_frame = fitted.copy()
+        else:
+            for frame in (self.default_frame, self.current_frame):
+                if frame is None:
+                    continue
+                frame["print_width_mm"], frame["print_height_mm"] = width, height
+                frame["coverage_width_m"], frame["coverage_height_m"] = (
+                    frame["coverage_height_m"],
+                    frame["coverage_width_m"],
+                )
 
         if self.current_frame is not None:
             if self.default_frame is not None:

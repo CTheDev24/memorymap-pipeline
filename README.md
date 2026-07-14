@@ -56,7 +56,7 @@ Create a JSON file such as `memorymap-pipeline/config.json`:
   "route_width": 1.2,
   "base_thickness": 1.0,
   "feature_embed_depth": 0.2,
-  "margin": 8.0
+  "margin": 5.0
 }
 ```
 

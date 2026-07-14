@@ -6,7 +6,13 @@ import numpy as np
 import pytest
 from shapely.geometry import Polygon, box
 
-from memorymap_pipeline.buildings import _building_dimensions, _overpass_geometry, _roof_mesh
+from memorymap_pipeline.buildings import (
+    OVERPASS_TIMEOUT,
+    _building_dimensions,
+    _configure_overpass,
+    _overpass_geometry,
+    _roof_mesh,
+)
 from memorymap_pipeline.generation import GenerationRequest, generate_memory_map
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
 from memorymap_pipeline.map_frame import MapFrame
@@ -145,3 +151,16 @@ def test_offline_parts_fixture_generates_embedded_colored_layer(tmp_path: Path) 
         component.attrib["objectid"]
         for component in assembly.findall("m:components/m:component", ns)
     }
+
+def test_overpass_configuration_supports_osmnx_2_settings() -> None:
+    settings = type(
+        "Settings",
+        (),
+        {"overpass_url": "old", "requests_timeout": 180},
+    )()
+    osmnx = type("Osmnx", (), {"settings": settings})()
+
+    _configure_overpass(osmnx, "https://example.test/interpreter")
+
+    assert settings.overpass_url == "https://example.test/interpreter"
+    assert settings.requests_timeout == OVERPASS_TIMEOUT == 20

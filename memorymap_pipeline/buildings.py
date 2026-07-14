@@ -350,8 +350,18 @@ OVERPASS_ENDPOINTS = [
     "https://overpass.kumi.systems/api/interpreter",
 ]
 
-OVERPASS_TIMEOUT = 60
+OVERPASS_TIMEOUT = 20
 
+
+def _configure_overpass(osmnx: object, endpoint: str) -> None:
+    """Configure both legacy and current OSMnx Overpass settings."""
+    settings = osmnx.settings
+    if hasattr(settings, "overpass_url"):
+        settings.overpass_url = endpoint
+    if hasattr(settings, "overpass_endpoint"):
+        settings.overpass_endpoint = endpoint
+    if hasattr(settings, "requests_timeout"):
+        settings.requests_timeout = OVERPASS_TIMEOUT
 
 def _overpass_geometry(element: dict) -> geom.base.BaseGeometry | None:
     """Build polygon geometry from an Overpass way or multipolygon relation."""
@@ -491,11 +501,14 @@ def download_and_build_buildings(
 
         for endpoint in OVERPASS_ENDPOINTS:
             try:
-                ox.settings.overpass_endpoint = endpoint
+                _configure_overpass(ox, endpoint)
 
                 if radius_m is not None:
                     try:
-                        gdf = ox.geometries_from_point(
+                        features_from_point = getattr(
+                            ox, "features_from_point", None
+                        ) or getattr(ox, "geometries_from_point")
+                        gdf = features_from_point(
                             (center_lat, center_lon),
                             tags={"building": True, "building:part": True},
                             dist=radius_m,
@@ -521,13 +534,19 @@ def download_and_build_buildings(
                 else:
                     lat_min, lat_max, lon_min, lon_max = bbox
                     try:
-                        gdf = ox.geometries_from_bbox(
-                            lat_max,
-                            lat_min,
-                            lon_max,
-                            lon_min,
-                            tags={"building": True, "building:part": True},
-                        )
+                        features_from_bbox = getattr(
+                            ox, "features_from_bbox", None
+                        ) or getattr(ox, "geometries_from_bbox")
+                        if hasattr(ox, "features_from_bbox"):
+                            gdf = features_from_bbox(
+                                (lon_min, lat_min, lon_max, lat_max),
+                                tags={"building": True, "building:part": True},
+                            )
+                        else:
+                            gdf = features_from_bbox(
+                                lat_max, lat_min, lon_max, lon_min,
+                                tags={"building": True, "building:part": True},
+                            )
                         cols = list(gdf.columns)
                         for _, row in gdf.iterrows():
                             g = row.geometry
@@ -549,7 +568,7 @@ def download_and_build_buildings(
                     south, west, north, east = bbox_for_query
                     # Use "out body geom" so tags are included in the response
                     query = (
-                        f"[out:json][timeout:25];\n"
+                        f"[out:json][timeout:18];\n"
                         f"(\n"
                         f'  way["building"]({south},{west},{north},{east});\n'
                         f'  way["building:part"]({south},{west},{north},{east});\n'

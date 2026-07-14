@@ -46,6 +46,7 @@ def test_load_config_does_not_mutate_defaults(tmp_path: Path) -> None:
     config_path.write_text(json.dumps({"portrait": {"map_width": 123.0}}), encoding="utf-8")
     assert load_config(config_path)["portrait"]["map_width"] == 123.0
     assert DEFAULT_CONFIG["portrait"]["map_width"] == 190.0
+    assert DEFAULT_CONFIG["margin"] == 5.0
     assert load_config()["portrait"]["map_width"] == 190.0
 
 

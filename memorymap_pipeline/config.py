@@ -14,7 +14,7 @@ DEFAULT_CONFIG = {
     "base_thickness": 1.0,
     # overlap raised features into the base; feature heights remain visible heights
     "feature_embed_depth": 0.2,
-    "margin": 8.0,
+    "margin": 5.0,
     # terrain/water scaffold (disabled until selected by a client)
     "terrain_enabled": False,
     "terrain_provider": "usgs-3dep",

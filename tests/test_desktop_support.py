@@ -64,6 +64,8 @@ def test_launcher_initializes_and_shows_window(monkeypatch):
 def test_orientation_toggle_swaps_dimensions_and_live_frame():
     pytest.importorskip("PySide6")
     from memorymap_pipeline.desktop.window import MemoryMapWindow
+    from memorymap_pipeline.gpx_loader import Route, RoutePoint
+    from memorymap_pipeline.map_frame import MapFrame
 
     class Spin:
         def __init__(self, value):
@@ -92,11 +94,21 @@ def test_orientation_toggle_swaps_dimensions_and_live_frame():
     window.print_height = Spin(190.0)
     window.default_frame = current.copy()
     window.current_frame = current.copy()
+    window.margin = Spin(5.0)
+    window.route = Route([
+        RoutePoint(latitude=36.1600, longitude=-86.7900),
+        RoutePoint(latitude=36.1700, longitude=-86.7700),
+    ])
     window.map_view = type("View", (), {"page": lambda self: Page()})()
 
     MemoryMapWindow._orientation_changed(window, False)
 
     assert (window.print_width.value(), window.print_height.value()) == (190.0, 240.0)
-    assert window.current_frame["coverage_width_m"] == 1900.0
-    assert window.current_frame["coverage_height_m"] == 2400.0
+    frame = MapFrame(**window.current_frame)
+    transformed = frame.transform_points(window.route.points)
+    assert transformed[:, 0].min() >= 5.0 - 0.01
+    assert transformed[:, 0].max() <= 185.0 + 0.01
+    assert transformed[:, 1].min() >= 5.0 - 0.01
+    assert transformed[:, 1].max() <= 235.0 + 0.01
+    assert window.current_frame["margin_mm"] == 5.0
     assert scripts and "setFrame" in scripts[-1]
