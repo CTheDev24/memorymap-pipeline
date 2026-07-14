@@ -240,8 +240,8 @@ Workflow artifacts are temporary, commit-specific test builds. The accompanying
 Create and push a semantic version tag after the target commit is tested:
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+git tag v2.0.0
+git push origin v2.0.0
 ```
 
 The tag triggers the release workflow, which tests and packages the exact tagged source,
