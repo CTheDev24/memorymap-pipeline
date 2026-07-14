@@ -137,16 +137,16 @@ def prepare_water_bodies(
 
 def build_vector_water_mesh(
     water_bodies: list[WaterBody],
-    embed_depth_mm: float = 0.2,
+    thickness_mm: float = 0.6,
 ) -> Trimesh | None:
-    """Build one continuous gray solid for each connected vector water body."""
-    if embed_depth_mm <= 0:
-        raise ValueError("Water embed depth must be positive")
+    """Build printable gray solids with enough depth to survive slicing."""
+    if thickness_mm <= 0:
+        raise ValueError("Water mesh thickness must be positive")
     meshes = [
         route_mesh_from_polygon(
             body.geometry,
-            height_mm=embed_depth_mm,
-            z_offset=body.level_mm - embed_depth_mm,
+            height_mm=thickness_mm,
+            z_offset=body.level_mm - thickness_mm,
         )
         for body in water_bodies
     ]
@@ -169,20 +169,20 @@ def build_terrain_mesh_with_water(
     surface: TerrainSurface,
     base_thickness_mm: float,
     water_bodies: list[WaterBody],
-    water_embed_depth_mm: float = 0.2,
-    support_overlap_mm: float = 0.05,
+    water_mesh_thickness_mm: float = 0.6,
+    support_overlap_mm: float = 0.2,
 ) -> Trimesh:
     """Create terrain with a recessed support cavity below each water body."""
     if base_thickness_mm <= 0:
         raise ValueError("Terrain base thickness must be positive")
-    if water_embed_depth_mm <= 0:
-        raise ValueError("Water embed depth must be positive")
-    if not 0 <= support_overlap_mm < water_embed_depth_mm:
-        raise ValueError("Water support overlap must be smaller than embed depth")
+    if water_mesh_thickness_mm <= 0:
+        raise ValueError("Water mesh thickness must be positive")
+    if not 0 <= support_overlap_mm < water_mesh_thickness_mm:
+        raise ValueError("Water support overlap must be smaller than mesh thickness")
     plate = shapely_box(0.0, 0.0, surface.width_mm, surface.height_mm)
     water_union = unary_union([body.geometry for body in water_bodies])
     support_levels = {
-        id(body): body.level_mm - water_embed_depth_mm + support_overlap_mm
+        id(body): body.level_mm - water_mesh_thickness_mm + support_overlap_mm
         for body in water_bodies
     }
     rows, columns = surface.heights_mm.shape

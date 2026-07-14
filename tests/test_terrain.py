@@ -295,7 +295,7 @@ def test_water_is_recessed_and_exported_as_gray_assembly_part(tmp_path: Path) ->
         4.0, resolution=8
     )
     bodies = prepare_water_bodies([bayou], surface, recess_mm=0.4)
-    water = build_vector_water_mesh(bodies, embed_depth_mm=0.2)
+    water = build_vector_water_mesh(bodies, thickness_mm=0.6)
     assert water is not None
     assert len(bodies) == 1
     assert water.is_watertight
@@ -313,9 +313,10 @@ def test_water_is_recessed_and_exported_as_gray_assembly_part(tmp_path: Path) ->
     ])
     support_faces = centers[upward & inside_water]
     assert len(support_faces) > 0
-    expected_support = bodies[0].level_mm - 0.2 + 0.05
+    expected_support = bodies[0].level_mm - 0.6 + 0.2
     assert support_faces[:, 2] == pytest.approx(expected_support)
     assert water.bounds[1, 2] == pytest.approx(bodies[0].level_mm)
+    assert water.bounds[1, 2] - support_faces[:, 2].max() == pytest.approx(0.4)
     assert water.bounds[1, 2] > support_faces[:, 2].max()
     export_3mf(output, terrain, None, water_mesh=water)
     with zipfile.ZipFile(output) as archive:

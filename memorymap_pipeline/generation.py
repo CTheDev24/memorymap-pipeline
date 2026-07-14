@@ -273,7 +273,7 @@ def generate_memory_map(
                     terrain_surface,
                     float(config.get("water_recess_mm", 0.4)),
                     minimum_height_mm=-request.base_thickness_mm
-                    + float(config.get("water_embed_depth_mm", 0.2)),
+                    + float(config.get("water_mesh_thickness_mm", 0.6)),
                     shoreline_tolerance_mm=float(
                         config.get("water_shoreline_tolerance_mm", 0.1)
                     ),
@@ -281,7 +281,7 @@ def generate_memory_map(
                 )
                 water_mesh = build_vector_water_mesh(
                     water_bodies,
-                    float(config.get("water_embed_depth_mm", 0.2)),
+                    float(config.get("water_mesh_thickness_mm", 0.6)),
                 )
             else:
                 warnings.append("Water is enabled but no water polygons were supplied.")
@@ -290,8 +290,8 @@ def generate_memory_map(
                 terrain_surface,
                 request.base_thickness_mm,
                 water_bodies,
-                float(config.get("water_embed_depth_mm", 0.2)),
-                float(config.get("water_support_overlap_mm", 0.05)),
+                float(config.get("water_mesh_thickness_mm", 0.6)),
+                float(config.get("water_support_overlap_mm", 0.2)),
             )
             if water_bodies
             else build_terrain_mesh(terrain_surface, request.base_thickness_mm)
