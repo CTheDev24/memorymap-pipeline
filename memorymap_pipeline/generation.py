@@ -277,6 +277,7 @@ def generate_memory_map(
                     shoreline_tolerance_mm=float(
                         config.get("water_shoreline_tolerance_mm", 0.1)
                     ),
+                    margin_mm=frame.margin_mm,
                 )
                 water_mesh = build_vector_water_mesh(
                     water_bodies,

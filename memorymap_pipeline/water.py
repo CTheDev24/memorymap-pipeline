@@ -102,14 +102,22 @@ def prepare_water_bodies(
     recess_mm: float = 0.4,
     minimum_height_mm: float = -0.8,
     shoreline_tolerance_mm: float = 0.1,
+    margin_mm: float = 0.0,
 ) -> list[WaterBody]:
     """Merge connected vector water polygons and assign one level to each body."""
-    if recess_mm < 0 or shoreline_tolerance_mm < 0:
-        raise ValueError("Water recess cannot be negative")
+    if recess_mm < 0 or shoreline_tolerance_mm < 0 or margin_mm < 0:
+        raise ValueError("Water recess, tolerance, and margin cannot be negative")
     valid = [geometry for geometry in geometries if geometry is not None and not geometry.is_empty]
     if not valid:
         return []
-    plate = shapely_box(0.0, 0.0, surface.width_mm, surface.height_mm)
+    if surface.width_mm <= 2 * margin_mm or surface.height_mm <= 2 * margin_mm:
+        raise ValueError("Water margin is too large for the terrain dimensions")
+    plate = shapely_box(
+        margin_mm,
+        margin_mm,
+        surface.width_mm - margin_mm,
+        surface.height_mm - margin_mm,
+    )
     edge_inset = max(0.01, shoreline_tolerance_mm / 2.0)
     water_clip = plate.buffer(-edge_inset, join_style="mitre")
     merged = unary_union(valid).buffer(0).intersection(water_clip)

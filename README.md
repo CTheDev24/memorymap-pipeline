@@ -29,6 +29,7 @@ Notes:
 - Route, road, and building heights are visible heights measured above the base plate.
 - Building heights follow the physical map scale by default; only unusually tall outliers are adaptively compressed to the GUI maximum (25 mm by default, 31.75 mm hard limit).
 - Recessed water is exported as a gray top layer over a shallow terrain support cavity, preventing slicers from resolving coincident water/base faces as white.
+- Water is clipped to the same margin-inset printable bounds as route, road, and building layers.
 - USGS terrain requests are cached and retried, then fall back to the public global AWS Terrarium DEM; a clearly reported flat base is used only if both elevation services fail.
 - Raised features overlap the base by `feature_embed_depth` (0.2 mm by default) to keep short geometry printable without changing its visible height.
 - Debug plots for roads can be enabled by setting `roads_debug` to `true` in the config.

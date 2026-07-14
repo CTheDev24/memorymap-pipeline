@@ -264,6 +264,26 @@ def test_generation_falls_back_to_flat_terrain_after_usgs_failure(
     assert result.stats["terrain"]["source"] == "flat-fallback"
     assert any("using a flat base" in warning for warning in result.warnings)
 
+def test_water_is_clipped_to_the_print_margin() -> None:
+    surface = terrain_surface_from_grid(
+        _grid([[10.0, 10.0], [10.0, 10.0]]),
+        width_mm=100.0,
+        height_mm=80.0,
+        horizontal_span_m=1_000.0,
+    )
+    bodies = prepare_water_bodies(
+        [box(-10.0, -10.0, 110.0, 90.0)],
+        surface,
+        margin_mm=5.0,
+    )
+    water = build_vector_water_mesh(bodies)
+
+    assert water is not None
+    assert water.bounds[0, 0] >= 5.0
+    assert water.bounds[0, 1] >= 5.0
+    assert water.bounds[1, 0] <= 95.0
+    assert water.bounds[1, 1] <= 75.0
+
 def test_water_is_recessed_and_exported_as_gray_assembly_part(tmp_path: Path) -> None:
     surface = terrain_surface_from_grid(
         _grid([[30.0, 35.0, 40.0], [25.0, 30.0, 35.0], [20.0, 25.0, 30.0]]),
