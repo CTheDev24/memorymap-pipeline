@@ -241,7 +241,11 @@ def generate_memory_map(
                 warnings.append("Water is enabled but no water polygons were supplied.")
         base_mesh = (
             build_terrain_mesh_with_water(
-                terrain_surface, request.base_thickness_mm, water_bodies
+                terrain_surface,
+                request.base_thickness_mm,
+                water_bodies,
+                float(config.get("water_embed_depth_mm", 0.2)),
+                float(config.get("water_support_overlap_mm", 0.05)),
             )
             if water_bodies
             else build_terrain_mesh(terrain_surface, request.base_thickness_mm)

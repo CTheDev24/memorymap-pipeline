@@ -6,7 +6,7 @@ import zipfile
 import numpy as np
 import pytest
 from PIL import Image
-from shapely.geometry import LineString, box
+from shapely.geometry import LineString, Point, box
 
 from memorymap_pipeline.mesh import export_3mf, route_mesh_from_polygon
 from memorymap_pipeline import generation
@@ -181,6 +181,18 @@ def test_water_is_recessed_and_exported_as_gray_assembly_part(tmp_path: Path) ->
     output = tmp_path / "terrain-water.3mf"
     terrain = build_terrain_mesh_with_water(surface, 1.0, bodies)
     assert terrain.is_watertight
+    centers = terrain.triangles_center
+    upward = terrain.face_normals[:, 2] > 0.9
+    inside_water = np.asarray([
+        bodies[0].geometry.buffer(-0.01).contains(Point(x, y))
+        for x, y in centers[:, :2]
+    ])
+    support_faces = centers[upward & inside_water]
+    assert len(support_faces) > 0
+    expected_support = bodies[0].level_mm - 0.2 + 0.05
+    assert support_faces[:, 2] == pytest.approx(expected_support)
+    assert water.bounds[1, 2] == pytest.approx(bodies[0].level_mm)
+    assert water.bounds[1, 2] > support_faces[:, 2].max()
     export_3mf(output, terrain, None, water_mesh=water)
     with zipfile.ZipFile(output) as archive:
         model_name = next(name for name in archive.namelist() if name.lower().endswith(".model"))

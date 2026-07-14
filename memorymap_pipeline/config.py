@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     "water_enabled": False,
     "water_recess_mm": 0.4,
     "water_embed_depth_mm": 0.2,
+    "water_support_overlap_mm": 0.05,
     "water_shoreline_tolerance_mm": 0.1,
     # Road generation defaults
     "road_height": 0.8,

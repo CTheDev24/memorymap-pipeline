@@ -161,12 +161,22 @@ def build_terrain_mesh_with_water(
     surface: TerrainSurface,
     base_thickness_mm: float,
     water_bodies: list[WaterBody],
+    water_embed_depth_mm: float = 0.2,
+    support_overlap_mm: float = 0.05,
 ) -> Trimesh:
-    """Create a watertight terrain solid partitioned along smooth vector shorelines."""
+    """Create terrain with a recessed support cavity below each water body."""
     if base_thickness_mm <= 0:
         raise ValueError("Terrain base thickness must be positive")
+    if water_embed_depth_mm <= 0:
+        raise ValueError("Water embed depth must be positive")
+    if not 0 <= support_overlap_mm < water_embed_depth_mm:
+        raise ValueError("Water support overlap must be smaller than embed depth")
     plate = shapely_box(0.0, 0.0, surface.width_mm, surface.height_mm)
     water_union = unary_union([body.geometry for body in water_bodies])
+    support_levels = {
+        id(body): body.level_mm - water_embed_depth_mm + support_overlap_mm
+        for body in water_bodies
+    }
     rows, columns = surface.heights_mm.shape
     xs = np.linspace(0.0, surface.width_mm, columns)
     ys = np.linspace(surface.height_mm, 0.0, rows)
@@ -210,7 +220,11 @@ def build_terrain_mesh_with_water(
             cell = shapely_box(xs[column], ys[row + 1], xs[column + 1], ys[row])
             add_region(cell.difference(water_union), surface.sample)
             for body in water_bodies:
-                add_region(cell.intersection(body.geometry), body.level_mm, True)
+                add_region(
+                    cell.intersection(body.geometry),
+                    support_levels[id(body)],
+                    True,
+                )
 
     boundary_tolerance = 1e-7
     for count, first, second, level in water_edges.values():
@@ -279,7 +293,7 @@ def build_terrain_mesh_with_water(
             add_outer_wall(part, surface.sample)
         for body in water_bodies:
             for part in line_parts(segment.intersection(body.geometry)):
-                add_outer_wall(part, body.level_mm)
+                add_outer_wall(part, support_levels[id(body)])
 
     for row in range(rows - 1):
         for column in range(columns - 1):
