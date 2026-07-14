@@ -17,6 +17,7 @@ from .buildings import download_and_build_buildings
 from .config import DEFAULT_CONFIG
 from .geometry import buffered_polygon_from_points, repair_polygon
 from .gpx_loader import Route
+from .landscape import build_landscape_surface_mesh, download_landscape_polygons
 from .map_frame import MapFrame
 from .mesh import (
     build_base_plate,
@@ -87,6 +88,7 @@ class GenerationRequest:
     elevation_grid: ElevationGrid | None = None
     water_polygons: list[Any] | None = None
     water_file: str | Path | None = None
+    landscape_file: str | Path | None = None
 
 
 @dataclass
@@ -99,6 +101,8 @@ class GenerationResult:
     roads_mesh: Any | None = None
     buildings_mesh: Any | None = None
     water_mesh: Any | None = None
+    vegetation_mesh: Any | None = None
+    sand_mesh: Any | None = None
 
     @property
     def meshes(self) -> dict[str, Any]:
@@ -110,6 +114,8 @@ class GenerationResult:
                 "roads": self.roads_mesh,
                 "buildings": self.buildings_mesh,
                 "water": self.water_mesh,
+                "vegetation": self.vegetation_mesh,
+                "sand": self.sand_mesh,
             }.items()
             if mesh is not None
         }
@@ -192,6 +198,8 @@ def generate_memory_map(
     transform = {"map_frame": frame}
     terrain_surface = None
     water_mesh = None
+    vegetation_mesh = None
+    sand_mesh = None
     water_bodies = []
     if request.include_base and bool(config.get("terrain_enabled", False)):
         grid_size = int(config.get("terrain_grid_size", 96))
@@ -254,6 +262,36 @@ def generate_memory_map(
             float(config.get("terrain_max_relief_mm", 3.0)),
             float(config.get("terrain_min_relief_mm", 1.5)),
         )
+        if bool(config.get("landscape_materials_enabled", False)):
+            landscape_polygons = download_landscape_polygons(
+                bbox=bbox,
+                center_lat=frame.center_lat,
+                center_lon=frame.center_lon,
+                transform=transform,
+                map_width_mm=frame.print_width_mm,
+                map_height_mm=frame.print_height_mm,
+                radius_m=radius,
+                landscape_file=request.landscape_file,
+            )
+            surface_thickness = float(
+                config.get("landscape_surface_thickness_mm", 0.2)
+            )
+            vegetation_mesh = build_landscape_surface_mesh(
+                landscape_polygons["vegetation"],
+                terrain_surface,
+                surface_thickness,
+                frame.margin_mm,
+            )
+            sand_mesh = build_landscape_surface_mesh(
+                landscape_polygons["sand"],
+                terrain_surface,
+                surface_thickness,
+                frame.margin_mm,
+            )
+            if vegetation_mesh is None and sand_mesh is None:
+                warnings.append(
+                    "Landscape materials are enabled but no tagged vegetation or sand polygons were available."
+                )
         if bool(config.get("water_enabled", False)):
             water_polygons = request.water_polygons
             if water_polygons is None:
@@ -390,9 +428,22 @@ def generate_memory_map(
             warnings.extend(f"Building detail: {message}" for message in collector.messages[-4:])
     progress(85, "Building mesh complete")
 
-    if all(mesh is None for mesh in (base_mesh, route_mesh, roads_mesh, buildings_mesh, water_mesh)):
+    if all(mesh is None for mesh in (
+        base_mesh, route_mesh, roads_mesh, buildings_mesh, water_mesh,
+        vegetation_mesh, sand_mesh,
+    )):
         raise ValueError("No printable layers were generated")
-    export_3mf(output_path, base_mesh, route_mesh, roads_mesh, buildings_mesh, water_mesh)
+    export_3mf(
+        output_path,
+        base_mesh,
+        route_mesh,
+        roads_mesh,
+        buildings_mesh,
+        water_mesh,
+        vegetation_mesh,
+        sand_mesh,
+        landscape_materials=bool(config.get("landscape_materials_enabled", False)),
+    )
     stats = {
         "route_points": len(request.route.points),
         "roads": _geometry_count(unioned_roads),
@@ -412,6 +463,8 @@ def generate_memory_map(
             "roads": _mesh_stats(roads_mesh),
             "buildings": _mesh_stats(buildings_mesh),
             "water": _mesh_stats(water_mesh),
+            "vegetation": _mesh_stats(vegetation_mesh),
+            "sand": _mesh_stats(sand_mesh),
         },
     }
     progress(100, "3MF export complete")
@@ -424,6 +477,8 @@ def generate_memory_map(
         roads_mesh=roads_mesh,
         buildings_mesh=buildings_mesh,
         water_mesh=water_mesh,
+        vegetation_mesh=vegetation_mesh,
+        sand_mesh=sand_mesh,
     )
 
 

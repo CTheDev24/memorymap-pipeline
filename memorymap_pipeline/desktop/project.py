@@ -18,6 +18,7 @@ class DesktopProject:
     include_buildings: bool = True
     include_terrain: bool = False
     include_water: bool = False
+    include_landscape_materials: bool = False
     terrain_relief_mm: float = 3.0
     water_recess_mm: float = 0.4
     route_width_mm: float = 1.2
@@ -43,6 +44,7 @@ class DesktopProject:
                 "buildings": self.include_buildings,
                 "terrain": self.include_terrain,
                 "water": self.include_water,
+                "landscape_materials": self.include_landscape_materials,
             },
             "route": {"width_mm": self.route_width_mm, "height_mm": self.route_height_mm},
             "terrain": {
@@ -69,6 +71,7 @@ class DesktopProject:
                 include_buildings=bool(layers.get("buildings", True)),
                 include_terrain=bool(layers.get("terrain", False)),
                 include_water=bool(layers.get("water", False)),
+                include_landscape_materials=bool(layers.get("landscape_materials", False)),
                 terrain_relief_mm=float(terrain.get("relief_mm", 3.0)),
                 water_recess_mm=float(terrain.get("water_recess_mm", 0.4)),
                 route_width_mm=float(route.get("width_mm", 1.2)),

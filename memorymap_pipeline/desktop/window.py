@@ -126,8 +126,10 @@ class MemoryMapWindow(QMainWindow):
         self.roads_layer = QCheckBox("Roads"); self.roads_layer.setChecked(True)
         self.buildings_layer = QCheckBox("Buildings"); self.buildings_layer.setChecked(True)
         self.terrain_layer = QCheckBox("Terrain (USGS 3DEP)")
-        self.water_layer = QCheckBox("Water (gray, recessed)")
+        self.water_layer = QCheckBox("Water (recessed)")
+        self.landscape_materials = QCheckBox("Landscape materials (green/tan/blue)")
         self.water_layer.setEnabled(False)
+        self.landscape_materials.setEnabled(False)
         self.terrain_layer.toggled.connect(self._terrain_toggled)
         self.water_layer.toggled.connect(self._water_toggled)
         for control in (
@@ -135,6 +137,7 @@ class MemoryMapWindow(QMainWindow):
             self.roads_layer,
             self.buildings_layer,
             self.terrain_layer,
+            self.landscape_materials,
             self.water_layer,
         ):
             layer_layout.addWidget(control)
@@ -279,8 +282,10 @@ class MemoryMapWindow(QMainWindow):
     def _terrain_toggled(self, enabled: bool) -> None:
         self.terrain_relief.setEnabled(enabled)
         self.water_layer.setEnabled(enabled)
+        self.landscape_materials.setEnabled(enabled)
         if not enabled:
             self.water_layer.setChecked(False)
+            self.landscape_materials.setChecked(False)
         self.water_recess.setEnabled(enabled and self.water_layer.isChecked())
 
     @Slot(bool)
@@ -306,6 +311,7 @@ class MemoryMapWindow(QMainWindow):
                 "config": {
                     "terrain_enabled": self.terrain_layer.isChecked(),
                     "water_enabled": self.water_layer.isChecked(),
+                    "landscape_materials_enabled": self.landscape_materials.isChecked(),
                     "terrain_max_relief_mm": self.terrain_relief.value(),
                     "water_recess_mm": self.water_recess.value(),
                     "max_print_height_mm": self.building_max_height.value(),

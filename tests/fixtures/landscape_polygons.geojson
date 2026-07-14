@@ -1,0 +1,20 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"leisure": "park", "name": "Fixture Park"},
+      "geometry": {"type": "Polygon", "coordinates": [[[-95.3707, 29.7597], [-95.3701, 29.7597], [-95.3701, 29.7602], [-95.3707, 29.7602], [-95.3707, 29.7597]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"natural": "beach", "surface": "sand"},
+      "geometry": {"type": "Polygon", "coordinates": [[[-95.3699, 29.7598], [-95.3694, 29.7598], [-95.3694, 29.7602], [-95.3699, 29.7602], [-95.3699, 29.7598]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"landuse": "farmland"},
+      "geometry": {"type": "Polygon", "coordinates": [[[-95.3706, 29.7603], [-95.3702, 29.7603], [-95.3702, 29.7605], [-95.3706, 29.7605], [-95.3706, 29.7603]]]}
+    }
+  ]
+}

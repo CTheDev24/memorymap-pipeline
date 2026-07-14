@@ -24,6 +24,8 @@
     "terrain_flat_fallback":  true,
     "terrain_max_relief_mm":  3.0,
     "terrain_min_relief_mm":  1.5,
+    "landscape_materials_enabled":  false,
+    "landscape_surface_thickness_mm":  0.2,
     "water_enabled":  false,
     "water_recess_mm":  0.4,
     "water_mesh_thickness_mm":  0.6,
