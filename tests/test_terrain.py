@@ -21,7 +21,11 @@ from memorymap_pipeline.terrain import (
     drape_mesh,
     terrain_surface_from_grid,
 )
-from memorymap_pipeline.terrain_providers import Usgs3depProvider
+from memorymap_pipeline.terrain_providers import (
+    TerrariumProvider,
+    Usgs3depProvider,
+    _decode_terrarium,
+)
 from memorymap_pipeline.water import (
     build_terrain_mesh_with_water,
     build_vector_water_mesh,
@@ -189,6 +193,46 @@ def test_usgs_provider_retries_transient_image_timeout(tmp_path: Path) -> None:
     assert session.calls == 3
 
 
+def test_terrarium_decoder_returns_elevation_metres() -> None:
+    image = Image.new("RGB", (1, 1), (128, 10, 128))
+    assert _decode_terrarium(image)[0, 0] == pytest.approx(10.5)
+
+
+def test_generation_uses_global_dem_when_usgs_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    route = load_route_from_gpx(Path(__file__).parent / "fixtures" / "frame_route.gpx")
+    frame = MapFrame.fit_route(route.points, 120.0, 90.0, margin_mm=5.0)
+
+    def fail_usgs(*_args, **_kwargs):
+        raise RuntimeError("USGS unavailable")
+
+    def global_grid(_self, bounds, grid_size, _cache_dir):
+        south, north, west, east = bounds
+        rows, columns = grid_size
+        values = np.arange(rows * columns, dtype=float).reshape(rows, columns)
+        return ElevationGrid(
+            values, south, north, west, east, "aws-terrarium"
+        )
+
+    monkeypatch.setattr(Usgs3depProvider, "fetch", fail_usgs)
+    monkeypatch.setattr(TerrariumProvider, "fetch", global_grid)
+    result = generation.generate_memory_map(
+        generation.GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=tmp_path / "global-fallback.3mf",
+            include_route=False,
+            include_roads=False,
+            include_buildings=False,
+            config={"terrain_enabled": True, "terrain_grid_size": 4},
+        )
+    )
+
+    assert result.stats["terrain"]["source"] == "aws-terrarium"
+    assert any("global DEM fallback" in warning for warning in result.warnings)
+    assert not any("flat base" in warning for warning in result.warnings)
+
 def test_generation_falls_back_to_flat_terrain_after_usgs_failure(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -199,6 +243,7 @@ def test_generation_falls_back_to_flat_terrain_after_usgs_failure(
         raise RuntimeError("USGS unavailable")
 
     monkeypatch.setattr(Usgs3depProvider, "fetch", fail_fetch)
+    monkeypatch.setattr(TerrariumProvider, "fetch", fail_fetch)
     result = generation.generate_memory_map(
         generation.GenerationRequest(
             route=route,

@@ -26,7 +26,7 @@ from .mesh import (
 )
 from .roads import download_and_build_roads
 from .terrain import ElevationGrid, build_terrain_mesh, drape_mesh, terrain_surface_from_grid
-from .terrain_providers import Usgs3depProvider
+from .terrain_providers import TerrariumProvider, Usgs3depProvider
 from .water import (
     build_terrain_mesh_with_water,
     build_vector_water_mesh,
@@ -209,21 +209,43 @@ def generate_memory_map(
                 elevation_grid = provider.fetch(
                     bbox, (grid_size, grid_size), cache_dir
                 )
-            except Exception as exc:
-                if not bool(config.get("terrain_flat_fallback", True)):
-                    raise
+            except Exception as usgs_exc:
                 warnings.append(
-                    f"USGS terrain unavailable; using a flat base for this generation: {exc}"
+                    f"USGS terrain unavailable; trying the global DEM fallback: {usgs_exc}"
                 )
-                south, north, west, east = bbox
-                elevation_grid = ElevationGrid(
-                    np.zeros((grid_size, grid_size), dtype=float),
-                    south,
-                    north,
-                    west,
-                    east,
-                    "flat-fallback",
+                global_provider = TerrariumProvider(
+                    timeout_seconds=float(
+                        config.get("terrain_fallback_timeout_seconds", 15.0)
+                    ),
+                    max_attempts=int(config.get("terrain_fallback_attempts", 2)),
+                    backoff_seconds=float(
+                        config.get("terrain_retry_backoff_seconds", 0.5)
+                    ),
+                    zoom=int(config.get("terrain_fallback_zoom", 12)),
                 )
+                try:
+                    elevation_grid = global_provider.fetch(
+                        bbox, (grid_size, grid_size), cache_dir
+                    )
+                except Exception as fallback_exc:
+                    if not bool(config.get("terrain_flat_fallback", True)):
+                        raise RuntimeError(
+                            f"USGS terrain failed ({usgs_exc}); "
+                            f"global DEM fallback failed ({fallback_exc})"
+                        ) from fallback_exc
+                    warnings.append(
+                        "Global terrain fallback unavailable; using a flat base for "
+                        f"this generation: {fallback_exc}"
+                    )
+                    south, north, west, east = bbox
+                    elevation_grid = ElevationGrid(
+                        np.zeros((grid_size, grid_size), dtype=float),
+                        south,
+                        north,
+                        west,
+                        east,
+                        "flat-fallback",
+                    )
         terrain_surface = terrain_surface_from_grid(
             elevation_grid,
             frame.print_width_mm,
