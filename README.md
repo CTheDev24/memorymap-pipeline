@@ -28,7 +28,7 @@ Notes:
 - Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`.
 - Route, road, and building heights are visible heights measured above the base plate.
 - Building heights follow the physical map scale by default; only unusually tall outliers are adaptively compressed to the GUI maximum (25 mm by default, 31.75 mm hard limit).
-- Recessed water has 0.4 mm of exclusively gray printable depth above a 0.2 mm structural overlap, preventing coincident faces and thin layers from disappearing during slicing.
+- Water surfaces are recessed 0.4 mm. The gray water is one 0.2 mm printable layer over white base material, with at least a 0.4 mm white bottom skin so water never appears on the underside.
 - Water is clipped to the same margin-inset printable bounds as route, road, and building layers.
 - USGS terrain requests are cached and retried, then fall back to the public global AWS Terrarium DEM; a clearly reported flat base is used only if both elevation services fail.
 - Raised features overlap the base by `feature_embed_depth` (0.2 mm by default) to keep short geometry printable without changing its visible height.
@@ -102,8 +102,9 @@ maximum relief, and water recess controls. Its initial configuration is:
   "terrain_min_relief_mm": 1.5,
   "water_enabled": false,
   "water_recess_mm": 0.4,
-  "water_mesh_thickness_mm": 0.6,
-  "water_support_overlap_mm": 0.2,
+  "water_mesh_thickness_mm": 0.2,
+  "water_support_overlap_mm": 0.0,
+  "water_base_skin_mm": 0.4,
   "water_shoreline_tolerance_mm": 0.1
 }
 ```

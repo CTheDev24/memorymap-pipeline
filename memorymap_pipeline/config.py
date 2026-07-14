@@ -31,9 +31,11 @@ DEFAULT_CONFIG = {
     "terrain_min_relief_mm": 1.5,
     "water_enabled": False,
     "water_recess_mm": 0.4,
-    # 0.4 mm remains exclusively gray above the 0.2 mm structural overlap
-    "water_mesh_thickness_mm": 0.6,
-    "water_support_overlap_mm": 0.2,
+    # one printable gray layer at the recessed water surface
+    "water_mesh_thickness_mm": 0.2,
+    "water_support_overlap_mm": 0.0,
+    # minimum white material retained below every water body
+    "water_base_skin_mm": 0.4,
     "water_shoreline_tolerance_mm": 0.1,
     # Road generation defaults
     "road_height": 0.8,
