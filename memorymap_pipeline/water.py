@@ -1,0 +1,322 @@
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+from shapely.geometry import LineString, Polygon, box as shapely_box
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
+from trimesh import Trimesh
+from trimesh.creation import triangulate_polygon
+from trimesh.util import concatenate
+
+from .terrain import TerrainSurface
+from .buildings import _transform_shapely_polygon
+from .mesh import route_mesh_from_polygon
+
+
+WATER_TAGS = {
+    "natural": "water",
+    "waterway": "riverbank",
+    "landuse": ["reservoir", "basin"],
+}
+
+
+@dataclass(frozen=True)
+class WaterBody:
+    geometry: Polygon
+    level_mm: float
+
+
+def download_water_polygons(
+    bbox: tuple[float, float, float, float],
+    center_lat: float,
+    center_lon: float,
+    transform: dict,
+    map_width_mm: float,
+    map_height_mm: float,
+    radius_m: float | None = None,
+    water_file: str | Path | None = None,
+) -> list[BaseGeometry]:
+    """Load OSM water areas and transform them into clipped print-space polygons."""
+    try:
+        import geopandas as gpd
+
+        if water_file is not None:
+            data = gpd.read_file(water_file)
+        else:
+            import osmnx as ox
+
+            fetch_point = getattr(ox, "features_from_point", None) or getattr(
+                ox, "geometries_from_point", None
+            )
+            fetch_bbox = getattr(ox, "features_from_bbox", None) or getattr(
+                ox, "geometries_from_bbox", None
+            )
+            if radius_m is not None and fetch_point is not None:
+                data = fetch_point(
+                    (center_lat, center_lon), tags=WATER_TAGS, dist=radius_m
+                )
+            elif fetch_bbox is not None:
+                lat_min, lat_max, lon_min, lon_max = bbox
+                try:
+                    data = fetch_bbox((lon_min, lat_min, lon_max, lat_max), tags=WATER_TAGS)
+                except TypeError:
+                    data = fetch_bbox(lat_max, lat_min, lon_max, lon_min, tags=WATER_TAGS)
+            else:
+                raise RuntimeError("Installed OSMnx does not expose a feature query API")
+    except Exception as exc:
+        logging.warning("Failed to load water polygons: %s", exc)
+        return []
+
+    from shapely.geometry import box as shapely_box
+
+    print_bounds = shapely_box(0.0, 0.0, map_width_mm, map_height_mm)
+    transformed: list[BaseGeometry] = []
+    for geometry in data.geometry:
+        if geometry is None or geometry.is_empty:
+            continue
+        parts = list(geometry.geoms) if geometry.geom_type == "MultiPolygon" else [geometry]
+        for part in parts:
+            if part.geom_type != "Polygon":
+                continue
+            try:
+                print_polygon = _transform_shapely_polygon(
+                    part,
+                    center_lat=center_lat,
+                    center_lon=center_lon,
+                    transform=transform,
+                ).intersection(print_bounds)
+            except Exception:
+                continue
+            if not print_polygon.is_empty:
+                transformed.append(print_polygon)
+    return transformed
+
+
+def prepare_water_bodies(
+    geometries: list[BaseGeometry],
+    surface: TerrainSurface,
+    recess_mm: float = 0.4,
+    minimum_height_mm: float = -0.8,
+    shoreline_tolerance_mm: float = 0.1,
+    margin_mm: float = 0.0,
+) -> list[WaterBody]:
+    """Merge connected vector water polygons and assign one level to each body."""
+    if recess_mm < 0 or shoreline_tolerance_mm < 0 or margin_mm < 0:
+        raise ValueError("Water recess, tolerance, and margin cannot be negative")
+    valid = [geometry for geometry in geometries if geometry is not None and not geometry.is_empty]
+    if not valid:
+        return []
+    if surface.width_mm <= 2 * margin_mm or surface.height_mm <= 2 * margin_mm:
+        raise ValueError("Water margin is too large for the terrain dimensions")
+    plate = shapely_box(
+        margin_mm,
+        margin_mm,
+        surface.width_mm - margin_mm,
+        surface.height_mm - margin_mm,
+    )
+    edge_inset = max(0.01, shoreline_tolerance_mm / 2.0)
+    water_clip = plate.buffer(-edge_inset, join_style="mitre")
+    merged = unary_union(valid).buffer(0).intersection(water_clip)
+    if shoreline_tolerance_mm:
+        merged = merged.simplify(shoreline_tolerance_mm, preserve_topology=True)
+    parts = list(merged.geoms) if merged.geom_type == "MultiPolygon" else [merged]
+    bodies: list[WaterBody] = []
+    for part in parts:
+        if part.geom_type != "Polygon" or part.is_empty or part.area <= 1e-8:
+            continue
+        coordinates = np.asarray(part.exterior.coords, dtype=float)
+        boundary_heights = surface.sample(coordinates[:, 0], coordinates[:, 1])
+        level = max(minimum_height_mm, float(np.min(boundary_heights)) - recess_mm)
+        bodies.append(WaterBody(part, level))
+    return bodies
+
+
+def build_vector_water_mesh(
+    water_bodies: list[WaterBody],
+    thickness_mm: float = 0.6,
+) -> Trimesh | None:
+    """Build water solids with 0.2 mm exposed above their embedded support."""
+    if thickness_mm <= 0:
+        raise ValueError("Water mesh thickness must be positive")
+    meshes = [
+        route_mesh_from_polygon(
+            body.geometry,
+            height_mm=thickness_mm,
+            z_offset=body.level_mm - thickness_mm,
+        )
+        for body in water_bodies
+    ]
+    if not meshes:
+        return None
+    return meshes[0] if len(meshes) == 1 else concatenate(meshes)
+
+
+def _polygon_parts(geometry: BaseGeometry) -> list[Polygon]:
+    if geometry.is_empty:
+        return []
+    if geometry.geom_type == "Polygon":
+        return [geometry]
+    if geometry.geom_type == "MultiPolygon":
+        return [part for part in geometry.geoms if not part.is_empty]
+    return []
+
+
+def build_terrain_mesh_with_water(
+    surface: TerrainSurface,
+    base_thickness_mm: float,
+    water_bodies: list[WaterBody],
+    water_mesh_thickness_mm: float = 0.6,
+    support_overlap_mm: float = 0.4,
+) -> Trimesh:
+    """Create terrain with a recessed support cavity below each water body."""
+    if base_thickness_mm <= 0:
+        raise ValueError("Terrain base thickness must be positive")
+    if water_mesh_thickness_mm <= 0:
+        raise ValueError("Water mesh thickness must be positive")
+    if not 0 <= support_overlap_mm < water_mesh_thickness_mm:
+        raise ValueError("Water support overlap must be smaller than mesh thickness")
+    plate = shapely_box(0.0, 0.0, surface.width_mm, surface.height_mm)
+    water_union = unary_union([body.geometry for body in water_bodies])
+    support_levels = {
+        id(body): body.level_mm - water_mesh_thickness_mm + support_overlap_mm
+        for body in water_bodies
+    }
+    rows, columns = surface.heights_mm.shape
+    xs = np.linspace(0.0, surface.width_mm, columns)
+    ys = np.linspace(surface.height_mm, 0.0, rows)
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+    water_edges: dict[tuple[tuple[float, float], tuple[float, float]], list] = {}
+
+    def add_region(
+        region: BaseGeometry,
+        z_value,
+        track_water_edges: bool = False,
+        reverse: bool = False,
+    ) -> None:
+        for polygon in _polygon_parts(region):
+            points, triangles = triangulate_polygon(polygon)
+            start = len(vertices)
+            for x, y in points:
+                z = float(z_value(x, y)) if callable(z_value) else float(z_value)
+                vertices.append((float(x), float(y), z))
+            faces.extend(
+                tuple(start + int(index) for index in (face[::-1] if reverse else face))
+                for face in triangles
+            )
+            if track_water_edges:
+                for triangle in triangles:
+                    for first_index, second_index in (
+                        (triangle[0], triangle[1]),
+                        (triangle[1], triangle[2]),
+                        (triangle[2], triangle[0]),
+                    ):
+                        first = tuple(float(value) for value in points[first_index])
+                        second = tuple(float(value) for value in points[second_index])
+                        key = tuple(sorted((first, second)))
+                        if key in water_edges:
+                            water_edges[key][0] += 1
+                        else:
+                            water_edges[key] = [1, first, second, float(z_value)]
+
+    for row in range(rows - 1):
+        for column in range(columns - 1):
+            cell = shapely_box(xs[column], ys[row + 1], xs[column + 1], ys[row])
+            add_region(cell.difference(water_union), surface.sample)
+            for body in water_bodies:
+                add_region(
+                    cell.intersection(body.geometry),
+                    support_levels[id(body)],
+                    True,
+                )
+
+    boundary_tolerance = 1e-7
+    for count, first, second, level in water_edges.values():
+        segment = LineString([first, second])
+        if count != 1 or segment.length <= 1e-9:
+            continue
+        if plate.boundary.buffer(boundary_tolerance).covers(segment):
+            continue
+        x1, y1 = first
+        x2, y2 = second
+        land1 = float(surface.sample(x1, y1))
+        land2 = float(surface.sample(x2, y2))
+        start = len(vertices)
+        vertices.extend(
+            (
+                (x1, y1, land1),
+                (x2, y2, land2),
+                (x2, y2, level),
+                (x1, y1, level),
+            )
+        )
+        faces.extend(((start, start + 2, start + 1), (start, start + 3, start + 2)))
+
+    perimeter_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    perimeter_segments.extend(((xs[i], 0.0), (xs[i + 1], 0.0)) for i in range(columns - 1))
+    perimeter_segments.extend(
+        ((surface.width_mm, ys[i]), (surface.width_mm, ys[i + 1])) for i in range(rows - 1)
+    )
+    perimeter_segments.extend(
+        ((xs[i + 1], surface.height_mm), (xs[i], surface.height_mm))
+        for i in range(columns - 2, -1, -1)
+    )
+    perimeter_segments.extend(((0.0, ys[i + 1]), (0.0, ys[i])) for i in range(rows - 2, -1, -1))
+    def line_parts(geometry: BaseGeometry) -> list[LineString]:
+        if geometry.is_empty:
+            return []
+        if geometry.geom_type == "LineString":
+            return [geometry]
+        if geometry.geom_type == "MultiLineString":
+            return list(geometry.geoms)
+        return []
+
+    def add_outer_wall(line: LineString, top_value) -> None:
+        coordinates = list(line.coords)
+        if len(coordinates) < 2:
+            return
+        first, second = coordinates[0], coordinates[-1]
+        x1, y1 = first
+        x2, y2 = second
+        top1 = float(top_value(x1, y1)) if callable(top_value) else float(top_value)
+        top2 = float(top_value(x2, y2)) if callable(top_value) else float(top_value)
+        start = len(vertices)
+        vertices.extend(
+            (
+                (x1, y1, -base_thickness_mm),
+                (x2, y2, -base_thickness_mm),
+                (x2, y2, top2),
+                (x1, y1, top1),
+            )
+        )
+        faces.extend(((start, start + 1, start + 2), (start, start + 2, start + 3)))
+
+    for first, second in perimeter_segments:
+        segment = LineString([first, second])
+        for part in line_parts(segment.difference(water_union)):
+            add_outer_wall(part, surface.sample)
+        for body in water_bodies:
+            for part in line_parts(segment.intersection(body.geometry)):
+                add_outer_wall(part, support_levels[id(body)])
+
+    for row in range(rows - 1):
+        for column in range(columns - 1):
+            cell = shapely_box(xs[column], ys[row + 1], xs[column + 1], ys[row])
+            add_region(
+                cell.difference(water_union),
+                -base_thickness_mm,
+                reverse=True,
+            )
+            for body in water_bodies:
+                add_region(
+                    cell.intersection(body.geometry),
+                    -base_thickness_mm,
+                    reverse=True,
+                )
+    mesh = Trimesh(np.asarray(vertices), np.asarray(faces), process=True)
+    mesh.remove_unreferenced_vertices()
+    return mesh

@@ -36,16 +36,19 @@ def download_and_build_roads(
     road_types: Iterable[str],
     road_widths: dict,
     road_height_mm: float,
+    network_type: str = "all",
     map_width_mm: float = 190.0,
     map_height_mm: float = 190.0,
     margin_mm: float = 8.0,
     debug: bool = False,
     z_offset: float = 0.0,
+    embed_depth_mm: float = 0.0,
     radius_m: float | None = None,
     roads_file: str | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download OSM drivable roads within bbox (lat_min, lat_max, lon_min, lon_max), buffer them
-    using widths from road_widths (mm), and extrude into a mesh sitting on top of the base.
+    using widths from road_widths (mm). ``road_height_mm`` is the visible height above
+    the base; ``embed_depth_mm`` extends the mesh downward for a reliable overlap.
 
     Returns (buffered_polygons (shapely), mesh_or_none).
     """
@@ -76,11 +79,11 @@ def download_and_build_roads(
             try:
                 ox.settings.overpass_endpoint = endpoint
                 if radius_m is not None:
-                    G = ox.graph_from_point((center_lat, center_lon), dist=radius_m, network_type="drive")
+                    G = ox.graph_from_point((center_lat, center_lon), dist=radius_m, network_type=network_type)
                 else:
                     lat_min, lat_max, lon_min, lon_max = bbox
                     bbox_tuple = (lat_max, lat_min, lon_max, lon_min)
-                    G = ox.graph_from_bbox(bbox_tuple, network_type="drive")
+                    G = ox.graph_from_bbox(bbox_tuple, network_type=network_type)
                 edges = ox.graph_to_gdfs(G, nodes=False, edges=True, fill_edge_geometry=True)
                 break
             except Exception as exc:
@@ -120,7 +123,8 @@ def download_and_build_roads(
         lats = coords[:, 1]
 
         projected = project_lonlat_array(lats, lons, center_lat=center_lat, center_lon=center_lon)
-        transformed = apply_transform(projected, transform)
+        frame = transform.get("map_frame")
+        transformed = frame.transform_projected(projected) if frame is not None else apply_transform(projected, transform)
 
         # build shapely LineString in mm coordinates
         line = LineString([(float(x), float(y)) for x, y in transformed])
@@ -152,7 +156,9 @@ def download_and_build_roads(
             for p in parts:
                 if p.is_empty:
                     continue
-                mesh = route_mesh_from_polygon(p, height_mm=road_height_mm, z_offset=z_offset)
+                mesh = route_mesh_from_polygon(
+                    p, height_mm=road_height_mm + embed_depth_mm, z_offset=z_offset
+                )
                 meshes.append(mesh)
     except Exception as exc:  # pragma: no cover - mesh library issues
         logging.warning("Failed creating road meshes: %s", exc)

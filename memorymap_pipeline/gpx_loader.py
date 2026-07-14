@@ -30,7 +30,9 @@ def load_route_from_gpx(path: str | Path) -> Route:
         lat = float(trkpt.attrib["lat"])
         lon = float(trkpt.attrib["lon"])
         ele = None
-        ele_node = trkpt.find("gpx:ele", namespace) or trkpt.find("{*}ele")
+        ele_node = trkpt.find("gpx:ele", namespace)
+        if ele_node is None:
+            ele_node = trkpt.find("{*}ele")
         if ele_node is not None and ele_node.text is not None:
             ele = float(ele_node.text)
         points.append(RoutePoint(latitude=lat, longitude=lon, elevation=ele))

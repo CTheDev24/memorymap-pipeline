@@ -1,0 +1,10 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type":"Feature","properties":{"building":"yes","height":"18"},"geometry":{"type":"Polygon","coordinates":[[[-95.3704,29.7598],[-95.3696,29.7598],[-95.3696,29.7604],[-95.3704,29.7604],[-95.3704,29.7598]]]}},
+    {"type":"Feature","properties":{"building:part":"yes","building:levels":"3","roof:height":"3","roof:shape":"gabled"},"geometry":{"type":"Polygon","coordinates":[[[-95.3703,29.7599],[-95.3700,29.7599],[-95.3700,29.7603],[-95.3703,29.7603],[-95.3703,29.7599]]]}},
+    {"type":"Feature","properties":{"building:part":"yes","height":"18","min_height":"9","roof:height":"2","roof:shape":"hipped"},"geometry":{"type":"Polygon","coordinates":[[[-95.36995,29.7599],[-95.3697,29.7599],[-95.3697,29.7603],[-95.36995,29.7603],[-95.36995,29.7599]]]}},
+    {"type":"Feature","properties":{"building":"yes","height":"12","roof:height":"3","roof:shape":"pyramidal"},"geometry":{"type":"Polygon","coordinates":[[[-95.3703,29.7605],[-95.3700,29.7605],[-95.3700,29.76075],[-95.3703,29.76075],[-95.3703,29.7605]]]}},
+    {"type":"Feature","properties":{"building":"yes","building:levels":"2","roof:height":"2","roof:shape":"skillion"},"geometry":{"type":"Polygon","coordinates":[[[-95.3699,29.7605],[-95.3696,29.7605],[-95.3696,29.76075],[-95.3699,29.76075],[-95.3699,29.7605]]]}}
+  ]
+}

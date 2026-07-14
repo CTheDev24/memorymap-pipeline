@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memorymap-pipeline"
+version = "2.0.0"
+description = "Convert GPX tracks and nearby map data into printable 3MF memory maps."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "geopandas>=0.13",
+  "fastapi>=0.115",
+  "lxml>=4.9",
+  "mapbox-earcut>=1.0",
+  "matplotlib>=3.7",
+  "networkx>=3.1",
+  "numpy>=1.26",
+  "osmnx>=1.7",
+  "pillow>=10.0",
+  "python-multipart>=0.0.9",
+  "requests>=2.28",
+  "shapely>=2.0",
+  "trimesh>=4.4",
+  "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+dev = ["httpx>=0.27", "pytest>=8.0", "ruff>=0.5"]
+desktop = ["PySide6>=6.8"]
+package = ["PyInstaller>=6.0"]
+
+[project.scripts]
+memorymap-pipeline = "memorymap_pipeline.cli:main"
+memorymap-api = "memorymap_pipeline.api.__main__:main"
+memorymap-desktop = "memorymap_pipeline.desktop.launcher:main"
+
+[tool.setuptools.packages.find]
+include = ["memorymap_pipeline*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

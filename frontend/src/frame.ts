@@ -1,0 +1,4 @@
+import type{Position}from'geojson';import type{Frame}from'./api';const M=111320;
+export function frameRing(f:Frame):Position[]{const lat=f.center.latitude,lon=f.center.longitude,dx=f.coverage_width_m/(2*M*Math.cos(lat*Math.PI/180)),dy=f.coverage_height_m/(2*M),a=f.rotation_degrees*Math.PI/180;return[[-dx,-dy],[dx,-dy],[dx,dy],[-dx,dy],[-dx,-dy]].map(([x,y])=>[lon+x*Math.cos(a)-y*Math.sin(a),lat+x*Math.sin(a)+y*Math.cos(a)])}
+export function moveFrame(f:Frame,dlon:number,dlat:number):Frame{return{...f,center:{longitude:f.center.longitude+dlon,latitude:f.center.latitude+dlat}}}
+export function orientFrame(f:Frame,target:Frame['orientation']):Frame{return f.orientation===target?f:{...f,orientation:target,coverage_width_m:f.coverage_height_m,coverage_height_m:f.coverage_width_m,print_width_mm:f.print_height_mm,print_height_mm:f.print_width_mm}}

@@ -1,0 +1,109 @@
+name: Release Windows desktop app
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v* tag to build and release (for example, v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Test, package, and publish
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Release tag '$env:RELEASE_TAG' must look like v1.2.3 or v1.2.3-rc.1."
+          }
+
+      - name: Check out tagged source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build and test dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[desktop,package,dev]"
+
+      - name: Run tests
+        shell: pwsh
+        run: python -m pytest
+
+      - name: Build desktop executable
+        shell: pwsh
+        run: pyinstaller --noconfirm --clean memorymap-desktop.spec
+
+      - name: Prepare release files
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath "dist/MemoryMap.exe")) {
+            throw "PyInstaller did not produce dist/MemoryMap.exe."
+          }
+          $archive = & pyi-archive_viewer -r -b "dist/MemoryMap.exe" 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or $archive -notmatch "osmnx-[^\\/]+\.dist-info[\\/]METADATA") {
+            throw "The executable archive is invalid or missing OSMnx package metadata."
+          }
+          $asset = "MemoryMap-Studio-$env:RELEASE_TAG-windows-x64.exe"
+          Copy-Item -LiteralPath "dist/MemoryMap.exe" -Destination $asset
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $asset).Hash.ToLowerInvariant()
+          "$hash  $asset" | Set-Content -Encoding ascii "$asset.sha256"
+          "RELEASE_ASSET=$asset" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: MemoryMap-Studio-${{ env.RELEASE_TAG }}-windows-x64
+          path: |
+            ${{ env.RELEASE_ASSET }}
+            ${{ env.RELEASE_ASSET }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $prerelease = $env:RELEASE_TAG.Contains("-")
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG $env:RELEASE_ASSET "$env:RELEASE_ASSET.sha256" --clobber --repo $env:GITHUB_REPOSITORY
+          } else {
+            $arguments = @(
+              "release", "create", $env:RELEASE_TAG,
+              $env:RELEASE_ASSET, "$env:RELEASE_ASSET.sha256",
+              "--verify-tag", "--generate-notes", "--title", "MemoryMap Studio $env:RELEASE_TAG",
+              "--repo", $env:GITHUB_REPOSITORY
+            )
+            if ($prerelease) { $arguments += "--prerelease" }
+            & gh @arguments
+          }

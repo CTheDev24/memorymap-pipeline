@@ -1,10 +1,15 @@
 from pathlib import Path
+import json
+import sys
 
 import pytest
 from shapely.geometry import box
 
-from memorymap_pipeline.buildings import _extract_real_height_m
+from memorymap_pipeline.buildings import _adaptive_height_mapper, _extract_real_height_m
+from memorymap_pipeline.cli import main
+from memorymap_pipeline.config import DEFAULT_CONFIG, load_config
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
+from memorymap_pipeline.mesh import embedded_feature_dimensions
 from memorymap_pipeline.projection import normalize_and_scale_points, project_points
 
 
@@ -34,6 +39,92 @@ def test_parse_and_scale_route(tmp_path: Path) -> None:
     assert scaled[:, 0].max() <= 241.0
     assert scaled[:, 1].min() >= 0.0
     assert scaled[:, 1].max() <= 190.0
+
+
+def test_load_config_does_not_mutate_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"portrait": {"map_width": 123.0}}), encoding="utf-8")
+    assert load_config(config_path)["portrait"]["map_width"] == 123.0
+    assert DEFAULT_CONFIG["portrait"]["map_width"] == 190.0
+    assert DEFAULT_CONFIG["margin"] == 5.0
+    assert load_config()["portrait"]["map_width"] == 190.0
+
+
+def test_buildings_run_when_roads_are_disabled(tmp_path: Path, monkeypatch) -> None:
+    gpx_path = tmp_path / "route.gpx"
+    gpx_path.write_text(
+        """<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
+<trkpt lat="40.0" lon="-74.0"/><trkpt lat="40.001" lon="-74.002"/>
+</trkseg></trk></gpx>""",
+        encoding="utf-8",
+    )
+    call = {}
+
+    def fake_buildings(**kwargs):
+        call.update(kwargs)
+        return None, None
+
+    monkeypatch.setattr("memorymap_pipeline.cli.download_and_build_buildings", fake_buildings)
+    monkeypatch.setattr("memorymap_pipeline.cli.export_3mf", lambda *args: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["memorymap-pipeline", str(gpx_path), str(tmp_path / "out.3mf"), "--no-roads", "--no-base"],
+    )
+
+    main()
+
+    assert call["bbox"] == pytest.approx((40.0, 40.001, -74.002, -74.0))
+
+
+def test_cli_overlay_layers_embed_below_base_top(tmp_path: Path, monkeypatch) -> None:
+    gpx_path = tmp_path / "route.gpx"
+    gpx_path.write_text(
+        """<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>
+<trkpt lat="40.0" lon="-74.0"/><trkpt lat="40.001" lon="-74.002"/>
+</trkseg></trk></gpx>""",
+        encoding="utf-8",
+    )
+
+    captured: dict[str, float] = {}
+
+    class DummyMesh:
+        def apply_translation(self, _offset):
+            pass
+
+    def fake_route_mesh_from_polygon(_polygon, height_mm, z_offset=0.0):
+        captured["z_offset"] = z_offset
+        captured["height_mm"] = height_mm
+        return DummyMesh()
+
+    monkeypatch.setattr("memorymap_pipeline.cli.route_mesh_from_polygon", fake_route_mesh_from_polygon)
+    monkeypatch.setattr("memorymap_pipeline.cli.download_and_build_roads", lambda **kwargs: (None, None))
+    monkeypatch.setattr("memorymap_pipeline.cli.download_and_build_buildings", lambda **kwargs: (None, None))
+    monkeypatch.setattr("memorymap_pipeline.cli.center_meshes_to_base", lambda *args, **kwargs: None)
+    monkeypatch.setattr("memorymap_pipeline.cli.export_3mf", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["memorymap-pipeline", str(gpx_path), str(tmp_path / "out.3mf")],
+    )
+
+    main()
+
+    assert captured["z_offset"] == pytest.approx(-0.2)
+    assert captured["height_mm"] == pytest.approx(2.2)
+
+
+def test_embedded_feature_height_remains_visible_above_base() -> None:
+    extrusion, bottom_z, embed = embedded_feature_dimensions(0.6, 1.0, 0.2)
+    assert embed == pytest.approx(0.2)
+    assert bottom_z == pytest.approx(-0.2)
+    assert extrusion == pytest.approx(0.8)
+    assert bottom_z + extrusion == pytest.approx(0.6)
+
+
+def test_feature_embed_is_clamped_to_base_and_disabled_without_base() -> None:
+    assert embedded_feature_dimensions(0.6, 0.1, 0.2) == pytest.approx((0.7, -0.1, 0.1))
+    assert embedded_feature_dimensions(0.6, 0.0, 0.2) == pytest.approx((0.6, 0.0, 0.0))
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +180,15 @@ def test_height_zero_not_used():
     # Zero-height tags should be ignored and fall back
     tags = {"height": "0", "building:levels": "0"}
     assert _extract_real_height_m(tags, **_DEFAULTS) == pytest.approx(6.0)
+
+
+def test_height_uses_roof_levels_when_main_levels_are_missing():
+    assert _extract_real_height_m({"roof:levels": "2"}, **_DEFAULTS) == pytest.approx(12.0)
+
+
+def test_height_uses_conservative_building_type_estimate():
+    assert _extract_real_height_m({"building": "apartments"}, **_DEFAULTS) == pytest.approx(12.0)
+    assert _extract_real_height_m({"building": "garage"}, **_DEFAULTS) == pytest.approx(3.0)
 
 
 # ---------------------------------------------------------------------------
@@ -177,3 +277,17 @@ def test_building_entirely_outside_omitted():
     result = _clip_fraction(building, plate, clip_threshold=0.5)
     assert result is None
 
+
+
+def test_adaptive_height_mapper_preserves_map_scale_for_low_rise_scene():
+    mapper = _adaptive_height_mapper([3.0, 6.0, 12.0], 0.2, 25.0, 0.4)
+    assert mapper(3.0) == pytest.approx(0.6)
+    assert mapper(6.0) == pytest.approx(1.2)
+    assert mapper(12.0) == pytest.approx(2.4)
+
+
+def test_adaptive_height_mapper_caps_tall_outliers():
+    heights = [6.0] * 20 + [20.0, 300.0]
+    mapper = _adaptive_height_mapper(heights, 0.2, 25.0, 0.4)
+    assert mapper(6.0) < mapper(20.0) < mapper(300.0)
+    assert mapper(300.0) == pytest.approx(25.0)

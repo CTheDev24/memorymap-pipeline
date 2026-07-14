@@ -18,7 +18,9 @@ def project_points(points: Sequence[object], center_lat: float, center_lon: floa
     y = np.cos(lat0) * np.sin(lat) - np.sin(lat0) * np.cos(lat) * np.cos(lon - lon0)
 
     projected = np.column_stack((x, y))
-    scale = 111319.49
+    # The trigonometric terms above operate in radians, so convert with the
+    # Web Mercator sphere radius (metres per radian), not metres per degree.
+    scale = 6378137.0
     return projected * scale
 
 
@@ -37,7 +39,7 @@ def project_lonlat_array(latitudes: np.ndarray, longitudes: np.ndarray, center_l
     y = np.cos(lat0) * np.sin(lat) - np.sin(lat0) * np.cos(lat) * np.cos(lon - lon0)
 
     projected = np.column_stack((x, y))
-    scale = 111319.49
+    scale = 6378137.0
     return projected * scale
 
 

@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 from .config import load_config
 from .gpx_loader import load_route_from_gpx
-from .mesh import build_base_plate, center_meshes_to_base, export_3mf, route_mesh_from_polygon
+from .mesh import (
+    build_base_plate,
+    center_meshes_to_base,
+    embedded_feature_dimensions,
+    export_3mf,
+    route_mesh_from_polygon,
+)
 from .projection import (
-    normalize_scale_and_center_points,
     project_points,
     compute_normalize_center_transform,
     apply_transform,
@@ -18,6 +24,9 @@ from .buildings import download_and_build_buildings
 import matplotlib.pyplot as plt
 
 
+logger = logging.getLogger(__name__)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Convert a GPX route into a Bambu-ready 3MF memory map")
     parser.add_argument("input_gpx", type=Path, help="Path to the input GPX file")
@@ -25,7 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=None, help="Path to a JSON configuration file")
     parser.add_argument("--orientation", choices=["portrait", "landscape"], default=None, help="Map orientation (auto if omitted)")
     parser.add_argument("--route-width-mm", type=float, default=None, help="Route width in millimeters")
-    parser.add_argument("--route-height-mm", type=float, default=None, help="Raised route height in millimeters")
+    parser.add_argument(
+        "--route-height-mm",
+        type=float,
+        default=None,
+        help="Visible route height above the base plate in millimeters",
+    )
     parser.add_argument("--base-thickness-mm", type=float, default=None, help="Base plate thickness in millimeters")
     parser.add_argument("--no-base", dest="include_base", action="store_false", help="Do not include the base plate in the exported 3MF")
     parser.add_argument("--margin-mm", type=float, default=None, help="Margin from the map edge in millimeters")
@@ -80,9 +94,11 @@ def main() -> None:
 
     # build buffered polygon and validate/repair
     poly = buffered_polygon_from_points(scaled, route_width_mm)
-    is_valid, explanation = validate_polygon(poly)
+    is_valid, _explanation = validate_polygon(poly)
     if not is_valid:
         repaired, repaired_valid, repaired_explanation = repair_polygon(poly)
+        if not repaired_valid:
+            raise ValueError(f"Unable to repair route polygon: {repaired_explanation}")
         poly_to_use = repaired
     else:
         poly_to_use = poly
@@ -97,8 +113,8 @@ def main() -> None:
         ax.set_aspect("equal", adjustable="box")
         fig.savefig(out_dir / "buffered_before.png", dpi=150)
         plt.close(fig)
-    except Exception:
-        pass
+    except Exception as exc:  # Debug rendering must not block model generation.
+        logger.warning("Could not write route debug image: %s", exc)
 
     if not is_valid:
         try:
@@ -109,64 +125,66 @@ def main() -> None:
             ax.set_aspect("equal", adjustable="box")
             fig.savefig(out_dir / "buffered_after.png", dpi=150)
             plt.close(fig)
-        except Exception:
-            pass
+        except Exception as exc:  # Debug rendering must not block model generation.
+            logger.warning("Could not write repaired-route debug image: %s", exc)
 
-    # extrude polygon to create route mesh sitting on top of the base plate
-    z_offset = base_thickness_mm if args.include_base else 0.0
-    route_mesh = route_mesh_from_polygon(poly_to_use, height_mm=route_height_mm, z_offset=z_offset)
+    route_extrusion_mm, z_offset, feature_embed_mm = embedded_feature_dimensions(
+        route_height_mm,
+        base_thickness_mm if args.include_base else 0.0,
+        float(config.get("feature_embed_depth", 0.2)),
+    )
+    route_mesh = route_mesh_from_polygon(
+        poly_to_use, height_mm=route_extrusion_mm, z_offset=z_offset
+    )
     # build roads (separate body)
     roads_mesh = None
     unioned = None
     if args.include_roads:
-        try:
-            unioned, roads_mesh = download_and_build_roads(
-                bbox=(min(latitudes), max(latitudes), min(longitudes), max(longitudes)),
-                center_lat=center_lat,
-                center_lon=center_lon,
-                transform=transform,
-                road_types=config.get("road_types", []),
-                road_widths=config.get("road_widths", {}),
-                road_height_mm=config.get("road_height", 0.8),
-                map_width_mm=map_width,
-                map_height_mm=map_height,
-                margin_mm=margin_mm,
-                debug=config.get("roads_debug", False),
-                z_offset=z_offset,
-                radius_m=config.get("road_query_radius_m", None),
-                roads_file=str(args.roads_file) if args.roads_file is not None else None,
-            )
-        except Exception:
-            unioned = None
+        unioned, roads_mesh = download_and_build_roads(
+            bbox=(min(latitudes), max(latitudes), min(longitudes), max(longitudes)),
+            center_lat=center_lat,
+            center_lon=center_lon,
+            transform=transform,
+            road_types=config.get("road_types", []),
+            road_widths=config.get("road_widths", {}),
+            road_height_mm=config.get("road_height", 0.8),
+            network_type=config.get("road_network_type", "all"),
+            map_width_mm=map_width,
+            map_height_mm=map_height,
+            margin_mm=margin_mm,
+            debug=config.get("roads_debug", False),
+            z_offset=z_offset,
+            embed_depth_mm=feature_embed_mm,
+            radius_m=config.get("road_query_radius_m", None),
+            roads_file=str(args.roads_file) if args.roads_file is not None else None,
+        )
     # build buildings (verification overlay)
     buildings_mesh = None
     unioned_buildings = None
     if args.include_buildings:
-        try:
-            buildings_file_arg = str(args.buildings_file) if args.buildings_file is not None else None
-            unioned_buildings, buildings_mesh = download_and_build_buildings(
-                bbox=(min(latitudes), max(latitudes), min(longitudes), max(longitudes)),
-                center_lat=center_lat,
-                center_lon=center_lon,
-                transform=transform,
-                map_width_mm=map_width,
-                map_height_mm=map_height,
-                margin_mm=margin_mm,
-                debug=config.get("buildings_debug", False),
-                z_offset=z_offset,
-                max_print_height_mm=config.get("max_print_height_mm", 31.75),
-                min_building_height_mm=config.get("min_building_height_mm", 0.4),
-                building_default_height_m=config.get("building_default_height_m", 6.0),
-                building_levels_to_m=config.get("building_levels_to_m", 3.0),
-                building_max_real_height_m=config.get("building_max_real_height_m", 400.0),
-                building_clip_threshold=config.get("building_clip_threshold", 0.5),
-                radius_m=config.get("road_query_radius_m", None),
-                buildings_file=buildings_file_arg,
-                overlay_roads=unioned,
-                route_points=scaled,
-            )
-        except Exception:
-            unioned_buildings = None
+        buildings_file_arg = str(args.buildings_file) if args.buildings_file is not None else None
+        unioned_buildings, buildings_mesh = download_and_build_buildings(
+            bbox=(min(latitudes), max(latitudes), min(longitudes), max(longitudes)),
+            center_lat=center_lat,
+            center_lon=center_lon,
+            transform=transform,
+            map_width_mm=map_width,
+            map_height_mm=map_height,
+            margin_mm=margin_mm,
+            debug=config.get("buildings_debug", False),
+            z_offset=z_offset,
+            embed_depth_mm=feature_embed_mm,
+            max_print_height_mm=config.get("max_print_height_mm", 31.75),
+            min_building_height_mm=config.get("min_building_height_mm", 0.4),
+            building_default_height_m=config.get("building_default_height_m", 6.0),
+            building_levels_to_m=config.get("building_levels_to_m", 3.0),
+            building_max_real_height_m=config.get("building_max_real_height_m", 400.0),
+            building_clip_threshold=config.get("building_clip_threshold", 0.5),
+            radius_m=config.get("road_query_radius_m", None),
+            buildings_file=buildings_file_arg,
+            overlay_roads=unioned,
+            route_points=scaled,
+        )
 
     if base_mesh is not None:
         center_meshes_to_base([route_mesh] + ([roads_mesh] if roads_mesh is not None else []) + ([buildings_mesh] if buildings_mesh is not None else []), map_width, map_height)

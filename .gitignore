@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Generated applications
+build/
+dist/
+*.exe
+
+# Runtime logs
+*.log
+
+# Frontend dependencies
+node_modules/
+
+# Generated Memory Map files
+*.3mf
+
+# Environment/secrets
+.env
+.env.*
