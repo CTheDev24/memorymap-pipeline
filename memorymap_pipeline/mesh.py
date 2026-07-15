@@ -17,6 +17,10 @@ MESH_COLORS = {
     "roads": np.array([0, 0, 0, 255], dtype=np.uint8),
     "buildings": np.array([128, 128, 128, 255], dtype=np.uint8),
     "water": np.array([128, 128, 128, 255], dtype=np.uint8),
+    "terrain": np.array([79, 138, 60, 255], dtype=np.uint8),
+    "vegetation": np.array([79, 138, 60, 255], dtype=np.uint8),
+    "sand": np.array([216, 184, 120, 255], dtype=np.uint8),
+    "water_blue": np.array([59, 130, 208, 255], dtype=np.uint8),
 }
 
 MESH_MATERIALS = {
@@ -25,6 +29,10 @@ MESH_MATERIALS = {
     "Roads_Black": ("Black", "#000000FF"),
     "Buildings_Verification": ("Gray", "#808080FF"),
     "Water_Gray": ("Gray Water", "#808080FF"),
+    "Terrain_Green": ("Terrain Green", "#4F8A3CFF"),
+    "Vegetation_Green": ("Vegetation Green", "#4F8A3CFF"),
+    "Sand_Tan": ("Beach and Sand", "#D8B878FF"),
+    "Water_Blue": ("Water Blue", "#3B82D0FF"),
 }
 
 def embedded_feature_dimensions(
@@ -272,6 +280,9 @@ def export_3mf(
     roads_mesh: Trimesh | None = None,
     buildings_mesh: Trimesh | None = None,
     water_mesh: Trimesh | None = None,
+    vegetation_mesh: Trimesh | None = None,
+    sand_mesh: Trimesh | None = None,
+    landscape_materials: bool = False,
 ) -> None:
     from trimesh.exchange.export import export_mesh
 
@@ -284,8 +295,8 @@ def export_3mf(
             base_mesh.metadata = base_mesh.metadata or {}
         except Exception:
             base_mesh.metadata = {}
-        base_mesh.metadata["name"] = "Base_White"
-        base_mesh.visual.face_colors = MESH_COLORS["base"]
+        base_mesh.metadata["name"] = "Terrain_Green" if landscape_materials else "Base_White"
+        base_mesh.visual.face_colors = MESH_COLORS["terrain" if landscape_materials else "base"]
         meshes.append(base_mesh)
 
     if route_mesh is not None:
@@ -320,9 +331,23 @@ def export_3mf(
             water_mesh.metadata = water_mesh.metadata or {}
         except Exception:
             water_mesh.metadata = {}
-        water_mesh.metadata["name"] = "Water_Gray"
-        water_mesh.visual.face_colors = MESH_COLORS["water"]
+        water_mesh.metadata["name"] = "Water_Blue" if landscape_materials else "Water_Gray"
+        water_mesh.visual.face_colors = MESH_COLORS[
+            "water_blue" if landscape_materials else "water"
+        ]
         meshes.append(water_mesh)
+
+    if vegetation_mesh is not None:
+        vegetation_mesh.metadata = vegetation_mesh.metadata or {}
+        vegetation_mesh.metadata["name"] = "Vegetation_Green"
+        vegetation_mesh.visual.face_colors = MESH_COLORS["vegetation"]
+        meshes.append(vegetation_mesh)
+
+    if sand_mesh is not None:
+        sand_mesh.metadata = sand_mesh.metadata or {}
+        sand_mesh.metadata["name"] = "Sand_Tan"
+        sand_mesh.visual.face_colors = MESH_COLORS["sand"]
+        meshes.append(sand_mesh)
 
     export_mesh(
         meshes,

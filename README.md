@@ -100,6 +100,8 @@ maximum relief, and water recess controls. Its initial configuration is:
   "terrain_grid_size": 96,
   "terrain_max_relief_mm": 3.0,
   "terrain_min_relief_mm": 1.5,
+  "landscape_materials_enabled": false,
+  "landscape_surface_thickness_mm": 0.2,
   "water_enabled": false,
   "water_recess_mm": 0.4,
   "water_mesh_thickness_mm": 0.6,
@@ -127,6 +129,17 @@ one continuous vector solid rather than a collection of terrain-grid rectangles.
 terrain is partitioned along the same shoreline and cut down to the water level. A 0.1 mm
 print-space simplification removes insignificant OSM noise while preserving islands and
 inner openings.
+
+Enable `landscape_materials_enabled` to export slicer-ready `Terrain_Green`,
+`Vegetation_Green`, `Sand_Tan`, and (when water is enabled) `Water_Blue` parts.
+This is opt-in, so existing projects retain the white base and gray water names/colors.
+Vegetation comes only from unambiguous OSM area tags such as `natural=wood`,
+`natural=grassland`, `landuse=forest`, `landuse=meadow`, and `leisure=park`; sand uses
+`natural=beach`, `natural=sand`, or `surface=sand`. Ambiguous cover such as farmland,
+bare rock, and generic unpaved surfaces is not recolored. The 0.2 mm landscape skins
+follow the elevation surface, remain clipped to the print margin, and overlap the
+terrain slightly for multipart slicing. Local GeoJSON can be supplied through
+`GenerationRequest.landscape_file` for deterministic/offline generation.
 
 To omit the base plate:
 

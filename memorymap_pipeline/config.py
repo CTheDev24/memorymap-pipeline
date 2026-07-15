@@ -29,6 +29,9 @@ DEFAULT_CONFIG = {
     "terrain_flat_fallback": True,
     "terrain_max_relief_mm": 3.0,
     "terrain_min_relief_mm": 1.5,
+    # opt-in colored terrain/vegetation/sand/water parts; legacy colors remain default
+    "landscape_materials_enabled": False,
+    "landscape_surface_thickness_mm": 0.2,
     "water_enabled": False,
     "water_recess_mm": 0.4,
     # 0.2 mm remains exclusively gray above 0.4 mm embedded in white support
