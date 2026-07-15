@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
-
+from shapely import contains_xy
 from shapely.geometry import box
 from trimesh.util import concatenate
 
@@ -80,7 +80,7 @@ class GenerationRequest:
     include_buildings: bool = True
     route_width_mm: float = 1.2
     route_height_mm: float = 2.0
-    base_thickness_mm: float = 1.0
+    base_thickness_mm: float = 1.6
     config: dict[str, Any] = field(default_factory=dict)
     roads_file: str | Path | None = None
     buildings_file: str | Path | None = None
@@ -145,6 +145,28 @@ def _route_mesh(polygon: Any, height_mm: float, z_offset: float) -> Any | None:
     if not meshes:
         return None
     return meshes[0] if len(meshes) == 1 else concatenate(meshes)
+
+
+def _feature_support_sampler(
+    terrain_surface: Any, water_bodies: list[Any]
+) -> Callable[[Any, Any], np.ndarray]:
+    """Sample the actual printable surface, including recessed water tops."""
+    if not water_bodies:
+        return terrain_surface.sample
+
+    buffered_water = [
+        (body.geometry.buffer(1e-7), float(body.level_mm)) for body in water_bodies
+    ]
+
+    def sample(x_mm, y_mm):
+        x = np.asarray(x_mm, dtype=float)
+        y = np.asarray(y_mm, dtype=float)
+        heights = np.asarray(terrain_surface.sample(x, y), dtype=float).copy()
+        for geometry, level in buffered_water:
+            heights = np.where(contains_xy(geometry, x, y), level, heights)
+        return heights
+
+    return sample
 
 
 def _mesh_stats(mesh: Any | None) -> dict[str, int] | None:
@@ -303,6 +325,11 @@ def generate_memory_map(
             if request.include_base
             else None
         )
+    feature_support_at = (
+        _feature_support_sampler(terrain_surface, water_bodies)
+        if terrain_surface is not None
+        else None
+    )
     route_mesh = None
     if request.include_route:
         route_polygon = buffered_polygon_from_points(scaled, request.route_width_mm).intersection(printable)
@@ -311,8 +338,8 @@ def generate_memory_map(
             if not valid:
                 warnings.append(f"Route polygon repair failed: {explanation}")
         route_mesh = _route_mesh(route_polygon, route_extrusion_mm, z_offset)
-        if route_mesh is not None and terrain_surface is not None:
-            route_mesh = drape_mesh(route_mesh, terrain_surface)
+        if route_mesh is not None and feature_support_at is not None:
+            route_mesh = drape_mesh(route_mesh, feature_support_at)
         if route_mesh is None:
             warnings.append("The route does not intersect the printable frame.")
     progress(25, "Route mesh complete")
@@ -346,8 +373,8 @@ def generate_memory_map(
         if roads_mesh is None:
             warnings.append("No road geometry was available inside the selected frame.")
             warnings.extend(f"Road detail: {message}" for message in collector.messages[-4:])
-        elif terrain_surface is not None:
-            roads_mesh = drape_mesh(roads_mesh, terrain_surface)
+        elif feature_support_at is not None:
+            roads_mesh = drape_mesh(roads_mesh, feature_support_at)
     progress(55, "Road mesh complete")
 
     unioned_buildings = None
@@ -377,12 +404,18 @@ def generate_memory_map(
             buildings_file=str(request.buildings_file) if request.buildings_file else None,
             overlay_roads=unioned_roads,
             route_points=scaled,
-            terrain_height_at=terrain_surface.sample if terrain_surface is not None else None,
-            building_scale_mm_per_m=min(
-                frame.printable_width_mm / frame.coverage_width_m,
-                frame.printable_height_mm / frame.coverage_height_m,
-            ) * float(config.get("building_vertical_exaggeration", 1.0)),
-            )
+            terrain_height_at=feature_support_at,
+            building_scale_mm_per_m=(
+                min(
+                    frame.printable_width_mm / frame.coverage_width_m,
+                    frame.printable_height_mm / frame.coverage_height_m,
+                )
+                * float(config.get("building_vertical_exaggeration", 1.0))
+            ),
+            extend_elevated_parts_to_ground=bool(
+                config.get("extend_elevated_building_parts_to_ground", True)
+            ),
+        )
         finally:
             logging.getLogger().removeHandler(collector)
         if buildings_mesh is None:

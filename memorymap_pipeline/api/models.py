@@ -38,7 +38,7 @@ class GenerateRequest(BaseModel):
     layers: LayerSettings = Field(default_factory=LayerSettings)
     route_width_mm: float = Field(default=1.2, gt=0, le=20)
     route_height_mm: float = Field(default=2, gt=0, le=50)
-    base_thickness_mm: float = Field(default=1, gt=0, le=20)
+    base_thickness_mm: float = Field(default=1.6, gt=0, le=20)
 
 
 class JobStatus(BaseModel):

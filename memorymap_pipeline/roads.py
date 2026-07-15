@@ -145,6 +145,13 @@ def download_and_build_roads(
         return None, None
 
     unioned = ops.unary_union(buffered_polys)
+    # A geometric union may legally retain polygons which touch at only a point.
+    # Slicers weld those coincident vertices and create edges shared by three or
+    # more faces. A 0.01 mm morphological close is far below nozzle resolution,
+    # but turns those contacts into a printable manifold region.
+    topology_weld_mm = 0.01
+    unioned = unioned.buffer(topology_weld_mm).buffer(-topology_weld_mm)
+    unioned = unioned.intersection(clip_box)
     if not unioned.is_valid:
         unioned, ok, explanation = repair_polygon(unioned)
 

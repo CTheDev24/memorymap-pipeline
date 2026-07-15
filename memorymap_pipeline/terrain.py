@@ -204,8 +204,9 @@ def build_terrain_mesh(surface: TerrainSurface, base_thickness_mm: float) -> Tri
     return Trimesh(vertices=vertices, faces=np.asarray(faces, dtype=int), process=True)
 
 
-def drape_mesh(mesh: Trimesh, surface: TerrainSurface) -> Trimesh:
+def drape_mesh(mesh: Trimesh, surface: TerrainSurface | object) -> Trimesh:
     """Return a copy translated vertex-by-vertex onto the local terrain surface."""
     result = mesh.copy()
-    result.vertices[:, 2] += surface.sample(result.vertices[:, 0], result.vertices[:, 1])
+    sampler = getattr(surface, "sample", surface)
+    result.vertices[:, 2] += sampler(result.vertices[:, 0], result.vertices[:, 1])
     return result

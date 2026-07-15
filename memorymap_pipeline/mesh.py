@@ -117,18 +117,18 @@ def build_base_plate(width_mm: float, height_mm: float, thickness_mm: float = 2.
         [min_x, max_y, 0.0],
     ]
     faces = [
-        [0, 1, 2],
-        [0, 2, 3],
-        [4, 7, 5],
+        [0, 2, 1],
+        [0, 3, 2],
+        [4, 5, 6],
         [4, 6, 7],
-        [0, 4, 5],
-        [0, 5, 1],
-        [1, 5, 6],
-        [1, 6, 2],
-        [2, 6, 7],
-        [2, 7, 3],
-        [3, 7, 4],
-        [3, 4, 0],
+        [0, 1, 5],
+        [0, 5, 4],
+        [1, 2, 6],
+        [1, 6, 5],
+        [2, 3, 7],
+        [2, 7, 6],
+        [3, 0, 4],
+        [3, 4, 7],
     ]
     return Trimesh(vertices=np.array(verts, dtype=float), faces=np.array(faces, dtype=int))
 
@@ -275,6 +275,8 @@ def export_3mf(
 ) -> None:
     from trimesh.exchange.export import export_mesh
 
+    from .printability import audit_printability
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     meshes = []
@@ -323,6 +325,16 @@ def export_3mf(
         water_mesh.metadata["name"] = "Water_Gray"
         water_mesh.visual.face_colors = MESH_COLORS["water"]
         meshes.append(water_mesh)
+
+    audit_printability(
+        {
+            "base": base_mesh,
+            "route": route_mesh,
+            "roads": roads_mesh,
+            "buildings": buildings_mesh,
+            "water": water_mesh,
+        }
+    ).raise_for_errors()
 
     export_mesh(
         meshes,

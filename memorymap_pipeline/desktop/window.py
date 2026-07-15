@@ -110,7 +110,7 @@ class MemoryMapWindow(QMainWindow):
         self.print_width = self._spin(240, 10, 1000)
         self.print_height = self._spin(190, 10, 1000)
         self.margin = self._spin(5, 0, 100)
-        self.route_width = self._spin(1.5, .1, 20)
+        self.route_width = self._spin(1.2, .1, 20)
         form.addRow("Width (mm)", self.print_width)
         form.addRow("Height (mm)", self.print_height)
         form.addRow("Margin (mm)", self.margin)
