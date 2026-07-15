@@ -66,11 +66,14 @@ def _building_dimensions(
     explicit_height = _number_m(tags.get("height"))
     levels = _number_m(tags.get("building:levels"))
     levels_height = levels * levels_to_m + roof_height if levels is not None else None
+    is_building_part = "building:part" in tags
     explicit_height_is_plausible = (
         explicit_height is not None
         and explicit_height <= max_height_m
         and (
-            levels is None or explicit_height >= levels * MIN_PLAUSIBLE_LEVEL_HEIGHT_M
+            is_building_part
+            or levels is None
+            or explicit_height >= levels * MIN_PLAUSIBLE_LEVEL_HEIGHT_M
         )
     )
     if explicit_height_is_plausible:

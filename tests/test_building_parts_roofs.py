@@ -40,6 +40,23 @@ def test_explicit_height_includes_roof_and_min_height() -> None:
     assert dims.total_height_m == pytest.approx(20.0)
 
 
+def test_building_part_trusts_explicit_height_over_parent_level_count() -> None:
+    dims = _building_dimensions(
+        {
+            "building:part": "yes",
+            "height": "40",
+            "building:levels": "56",
+            "roof:height": "16",
+            "roof:shape": "gabled",
+        },
+        **DEFAULTS,
+    )
+
+    assert dims.total_height_m == pytest.approx(40.0)
+    assert dims.eave_height_m == pytest.approx(24.0)
+    assert dims.roof_height_m == pytest.approx(16.0)
+
+
 def test_tc_energy_style_fixture_retains_three_solid_pointed_crowns() -> None:
     fixture = Path(__file__).parent / "fixtures" / "tc_energy_style_crowns.geojson"
     features = json.loads(fixture.read_text(encoding="utf-8"))["features"]
