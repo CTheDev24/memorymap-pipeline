@@ -16,6 +16,7 @@ from .projection import apply_transform, project_lonlat_array
 
 
 SUPPORTED_ROOF_SHAPES = {"flat", "gabled", "hipped", "pyramidal", "skillion"}
+MIN_PLAUSIBLE_LEVEL_HEIGHT_M = 1.5
 
 
 @dataclass(frozen=True)
@@ -64,12 +65,25 @@ def _building_dimensions(
         roof_height = (roof_levels or 0.0) * levels_to_m
     explicit_height = _number_m(tags.get("height"))
     levels = _number_m(tags.get("building:levels"))
-    if explicit_height is not None and explicit_height <= max_height_m:
+    levels_height = levels * levels_to_m + roof_height if levels is not None else None
+    is_building_part = "building:part" in tags
+    explicit_height_is_plausible = (
+        explicit_height is not None
+        and explicit_height <= max_height_m
+        and (
+            is_building_part
+            or levels is None
+            or explicit_height >= levels * MIN_PLAUSIBLE_LEVEL_HEIGHT_M
+        )
+    )
+    if explicit_height_is_plausible:
         total_height = explicit_height
-    elif levels is not None and levels * levels_to_m + roof_height <= max_height_m:
-        total_height = levels * levels_to_m + roof_height
+    elif levels_height is not None and levels_height <= max_height_m:
+        total_height = levels_height
     else:
-        total_height = _extract_real_height_m(tags, default_height_m, levels_to_m, max_height_m)
+        total_height = _extract_real_height_m(
+            tags, default_height_m, levels_to_m, max_height_m
+        )
     total_height = min(max(total_height, min_height + 0.01), max_height_m)
     roof_height = min(roof_height, total_height - min_height)
     shape = str(tags.get("roof:shape", "flat")).strip().lower()
@@ -101,7 +115,13 @@ def _roof_mesh(
     long_i = int(np.argmax(lengths))
     long_axis = edges[long_i] / max(lengths[long_i], 1e-9)
     short_axis = np.array([-long_axis[1], long_axis[0]])
-    center = np.asarray(polygon.centroid.coords[0], dtype=float)
+    center_point = polygon.centroid
+    if shape == "pyramidal" and not polygon.covers(center_point):
+        # Concave crowns can have a centroid outside their footprint. In that
+        # case an exterior centroid seed is discarded by constrained
+        # triangulation and the roof silently loses its apex.
+        center_point = polygon.representative_point()
+    center = np.asarray(center_point.coords[0], dtype=float)
     projected = corners - center
     half_long = max(np.max(np.abs(projected @ long_axis)), 1e-9)
     half_short = max(np.max(np.abs(projected @ short_axis)), 1e-9)
@@ -125,10 +145,14 @@ def _roof_mesh(
 
     seeds: list[geom.Point] = []
     if shape == "gabled":
-        seeds = [
-            geom.Point(*(center - long_axis * half_long)),
-            geom.Point(*(center + long_axis * half_long)),
-        ]
+        ridge = geom.LineString(
+            [center - long_axis * half_long * 2.0, center + long_axis * half_long * 2.0]
+        ).intersection(polygon)
+        ridge_parts = list(ridge.geoms) if hasattr(ridge, "geoms") else [ridge]
+        for part in ridge_parts:
+            if not isinstance(part, geom.LineString) or part.is_empty:
+                continue
+            seeds.extend(geom.Point(coordinate) for coordinate in (part.coords[0], part.coords[-1]))
     elif shape == "hipped":
         ridge_half = max(0.0, half_long - half_short)
         seeds = [
@@ -151,9 +175,24 @@ def _roof_mesh(
             xy_vertices.append((float(x), float(y)))
         return vertex_indices[key]
 
+    candidate_triangles: list[geom.Polygon] = []
     for triangle in triangulate(triangulation_input):
-        if triangle.area <= 1e-10 or not polygon.covers(triangle):
+        if triangle.area <= 1e-10:
             continue
+        clipped = triangle.intersection(polygon)
+        clipped_parts = list(clipped.geoms) if hasattr(clipped, "geoms") else [clipped]
+        for clipped_part in clipped_parts:
+            if not isinstance(clipped_part, geom.Polygon) or clipped_part.area <= 1e-10:
+                continue
+            # Retriangulate clipped Delaunay faces so concave crowns retain
+            # their roof seeds without creating faces outside the footprint.
+            candidate_triangles.extend(
+                subtriangle
+                for subtriangle in triangulate(clipped_part)
+                if subtriangle.area > 1e-10 and clipped_part.covers(subtriangle)
+            )
+
+    for triangle in candidate_triangles:
         coords = list(triangle.exterior.coords)[:3]
         signed_area = sum(
             coords[i][0] * coords[(i + 1) % 3][1] - coords[(i + 1) % 3][0] * coords[i][1]
