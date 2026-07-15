@@ -1,10 +1,11 @@
+import json
 from pathlib import Path
 import xml.etree.ElementTree as ET
 import zipfile
 
 import numpy as np
 import pytest
-from shapely.geometry import Polygon, box
+from shapely.geometry import Polygon, box, shape
 
 from memorymap_pipeline.buildings import (
     OVERPASS_TIMEOUT,
@@ -38,6 +39,52 @@ def test_explicit_height_includes_roof_and_min_height() -> None:
     assert dims.eave_height_m == pytest.approx(16.0)
     assert dims.total_height_m == pytest.approx(20.0)
 
+
+def test_building_part_trusts_explicit_height_over_parent_level_count() -> None:
+    dims = _building_dimensions(
+        {
+            "building:part": "yes",
+            "height": "40",
+            "building:levels": "56",
+            "roof:height": "16",
+            "roof:shape": "gabled",
+        },
+        **DEFAULTS,
+    )
+
+    assert dims.total_height_m == pytest.approx(40.0)
+    assert dims.eave_height_m == pytest.approx(24.0)
+    assert dims.roof_height_m == pytest.approx(16.0)
+
+
+def test_tc_energy_style_fixture_retains_three_solid_pointed_crowns() -> None:
+    fixture = Path(__file__).parent / "fixtures" / "tc_energy_style_crowns.geojson"
+    features = json.loads(fixture.read_text(encoding="utf-8"))["features"]
+
+    # The source landmark tags currently report 40 m alongside 56 levels.
+    # A sub-metre average storey is implausible, so the level-derived height
+    # is the narrowest data-driven fallback and avoids flattening the tower.
+    tower = _building_dimensions(features[0]["properties"], **DEFAULTS)
+    assert tower.total_height_m == pytest.approx(168.0)
+
+    crown_meshes = []
+    for feature in features[1:]:
+        dimensions = _building_dimensions(feature["properties"], **DEFAULTS)
+        crown = _roof_mesh(
+            shape(feature["geometry"]),
+            eave_z=5.0,
+            roof_height_mm=3.0,
+            shape=dimensions.roof_shape,
+        )
+        assert crown is not None
+        assert crown.is_watertight
+        assert crown.volume > 0.0
+        assert crown.bounds[:, 2] == pytest.approx([5.0, 8.0])
+        assert np.count_nonzero(np.isclose(crown.vertices[:, 2], 8.0)) == 1
+        assert len(np.unique(np.round(crown.vertices[:, 2], 6))) > 2
+        crown_meshes.append(crown)
+
+    assert len(crown_meshes) == 3
 
 @pytest.mark.parametrize("shape", ["gabled", "hipped", "pyramidal", "skillion"])
 def test_supported_roofs_reach_tagged_height(shape: str) -> None:
