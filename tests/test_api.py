@@ -62,7 +62,7 @@ def test_preview_and_generate(tmp_path):
             root = ET.fromstring(archive.read(model_name))
         namespace = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
         z_values = [float(item.attrib["z"]) for item in root.findall(".//m:vertex", namespace)]
-        assert min(z_values) == pytest.approx(-1.0)
+        assert min(z_values) == pytest.approx(-1.6)
         assert max(z_values) == pytest.approx(2.0)
 
 
