@@ -61,3 +61,13 @@ def test_over_connected_edges_are_rejected() -> None:
     assert not report.printable
     assert any(issue.code == "non_manifold" for issue in report.issues)
     assert np.count_nonzero(np.bincount(combined.edges_unique_inverse) > 2) > 0
+
+
+def test_inconsistent_face_winding_is_rejected() -> None:
+    base = build_base_plate(40.0, 30.0, 1.6)
+    base.faces[0] = base.faces[0][::-1]
+
+    report = audit_printability({"base": base})
+
+    assert not report.printable
+    assert any(issue.code == "inconsistent_winding" for issue in report.issues)

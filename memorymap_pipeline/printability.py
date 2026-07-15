@@ -150,6 +150,22 @@ def audit_printability(
                     f"{overused_edges} over-connected edges)",
                 )
             )
+        if not mesh.is_winding_consistent:
+            issues.append(
+                PrintabilityIssue(
+                    "inconsistent_winding",
+                    layer,
+                    f"{layer} has inconsistent face winding",
+                )
+            )
+        if mesh.is_watertight and mesh.volume <= 0.0:
+            issues.append(
+                PrintabilityIssue(
+                    "non_positive_volume",
+                    layer,
+                    f"{layer} does not define a positive outward-facing volume",
+                )
+            )
         components, face_component = _mesh_components(layer, mesh)
         face_components[layer] = face_component
         component_lookup.update((component.key, component) for component in components)

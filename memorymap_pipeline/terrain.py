@@ -201,7 +201,9 @@ def build_terrain_mesh(surface: TerrainSurface, base_thickness_mm: float) -> Tri
                 (start, start + layer_size, end + layer_size),
             )
         )
-    return Trimesh(vertices=vertices, faces=np.asarray(faces, dtype=int), process=True)
+    mesh = Trimesh(vertices=vertices, faces=np.asarray(faces, dtype=int), process=True)
+    mesh.fix_normals(multibody=True)
+    return mesh
 
 
 def drape_mesh(mesh: Trimesh, surface: TerrainSurface | object) -> Trimesh:

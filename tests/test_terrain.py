@@ -80,6 +80,8 @@ def test_terrain_mesh_is_watertight_with_structural_bottom() -> None:
     )
     mesh = build_terrain_mesh(surface, base_thickness_mm=1.0)
     assert mesh.is_watertight
+    assert mesh.is_winding_consistent
+    assert mesh.volume > 0.0
     assert mesh.bounds[0, 2] == pytest.approx(-1.0)
     assert mesh.bounds[1, 2] == pytest.approx(surface.analysis.target_relief_mm)
 
@@ -305,6 +307,8 @@ def test_water_is_recessed_and_exported_as_gray_assembly_part(tmp_path: Path) ->
     output = tmp_path / "terrain-water.3mf"
     terrain = build_terrain_mesh_with_water(surface, 1.0, bodies)
     assert terrain.is_watertight
+    assert terrain.is_winding_consistent
+    assert terrain.volume > 0.0
     centers = terrain.triangles_center
     upward = terrain.face_normals[:, 2] > 0.9
     inside_water = np.asarray([

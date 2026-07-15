@@ -32,9 +32,9 @@ Notes:
 - Water is clipped to the same margin-inset printable bounds as route, road, and building layers.
 - USGS terrain requests are cached and retried, then fall back to the public global AWS Terrarium DEM; a clearly reported flat base is used only if both elevation services fail.
 - Raised features overlap the base by `feature_embed_depth` (0.2 mm by default) to keep short geometry printable without changing its visible height.
-- Export now stops when a component is non-manifold or has no geometric support path to
-  the base. Roofs may be supported through their building body; mutually touching floating
-  shells do not satisfy the check.
+- Export now stops when a component is non-manifold, has inconsistent face winding or
+  non-positive volume, or has no geometric support path to the base. Roofs may be supported
+  through their building body; mutually touching floating shells do not satisfy the check.
 - The production printability profile assumes a 0.4 mm nozzle, 0.16 mm layer height,
   0.8 mm minimum structural XY feature, and a 1.6 mm structural base.
 - Debug plots for roads can be enabled by setting `roads_debug` to `true` in the config.
