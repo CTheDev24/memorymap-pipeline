@@ -32,6 +32,11 @@ Notes:
 - Water is clipped to the same margin-inset printable bounds as route, road, and building layers.
 - USGS terrain requests are cached and retried, then fall back to the public global AWS Terrarium DEM; a clearly reported flat base is used only if both elevation services fail.
 - Raised features overlap the base by `feature_embed_depth` (0.2 mm by default) to keep short geometry printable without changing its visible height.
+- Export now stops when a component is non-manifold, has inconsistent face winding or
+  non-positive volume, or has no geometric support path to the base. Roofs may be supported
+  through their building body; mutually touching floating shells do not satisfy the check.
+- The production printability profile assumes a 0.4 mm nozzle, 0.16 mm layer height,
+  0.8 mm minimum structural XY feature, and a 1.6 mm structural base.
 - Debug plots for roads can be enabled by setting `roads_debug` to `true` in the config.
 
 ```bash
@@ -57,13 +62,13 @@ Create a JSON file such as `memorymap-pipeline/config.json`:
   },
   "route_height": 2.0,
   "route_width": 1.2,
-  "base_thickness": 1.0,
+  "base_thickness": 1.6,
   "feature_embed_depth": 0.2,
   "margin": 5.0
 }
 ```
 
-The base top is the model's Z=0 plane. With a 1.0 mm base, 0.2 mm embed depth,
+The base top is the model's Z=0 plane. With a 1.6 mm base, 0.2 mm embed depth,
 and 0.6 mm road height, the road mesh runs from Z=-0.2 mm to Z=0.6 mm. Thus
 0.2 mm is anchored inside the base and the full requested 0.6 mm remains visible.
 The embed depth is automatically clamped to the base thickness and becomes zero
@@ -205,11 +210,13 @@ levels. Supported `roof:shape` values are `flat`, `gabled`, `hipped`, `pyramidal
 conservative one-storey roof.
 
 All building bodies and roofs remain in the gray `Buildings_Verification` component of the
-colored multipart 3MF. Ground-level volumes retain the configured 0.2 mm local embed without
-reducing their visible height. Elevated parts honor `min_height` and overlap their supporting
-volume by up to the same embed depth. `roof:orientation=along|across` is honored for supported
-roof shapes. `roof:direction` and more specialized roof shapes are not yet modeled; supported
-roofs otherwise align to the footprint's minimum rotated rectangle.
+colored multipart 3MF. Bodies are anchored at the lowest sampled terrain elevation across
+their footprint instead of a single centroid. In the default support-free printability mode,
+otherwise unsupported `min_height` volumes extend to terrain; this can be disabled with
+`extend_elevated_building_parts_to_ground=false`. Roof bottoms overlap their body by the
+configured embed depth, without lowering the visible eave or peak. `roof:orientation=along|across`
+is honored for supported roof shapes. `roof:direction` and more specialized roof shapes are not
+yet modeled; supported roofs otherwise align to the footprint's minimum rotated rectangle.
 
 To build a distributable Windows executable, install the packaging extra and run:
 

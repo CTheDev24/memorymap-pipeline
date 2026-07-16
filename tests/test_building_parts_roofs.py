@@ -97,6 +97,20 @@ def test_supported_roofs_reach_tagged_height(shape: str) -> None:
     assert np.all(np.bincount(mesh.edges_unique_inverse) == 2)
 
 
+def test_roof_base_overlaps_supporting_body_without_changing_peak() -> None:
+    mesh = _roof_mesh(
+        box(0, 0, 20, 10),
+        eave_z=5.0,
+        roof_height_mm=3.0,
+        shape="gabled",
+        base_overlap_mm=0.2,
+    )
+
+    assert mesh is not None
+    assert mesh.is_watertight
+    assert mesh.bounds[:, 2] == pytest.approx([4.8, 8.0])
+
+
 def test_roof_solid_preserves_polygon_inner_ring() -> None:
     polygon = Polygon(
         [(0, 0), (10, 0), (10, 10), (0, 10)],

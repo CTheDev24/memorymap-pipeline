@@ -180,6 +180,9 @@ def main() -> None:
             building_levels_to_m=config.get("building_levels_to_m", 3.0),
             building_max_real_height_m=config.get("building_max_real_height_m", 400.0),
             building_clip_threshold=config.get("building_clip_threshold", 0.5),
+            extend_elevated_parts_to_ground=bool(
+                config.get("extend_elevated_building_parts_to_ground", True)
+            ),
             radius_m=config.get("road_query_radius_m", None),
             buildings_file=buildings_file_arg,
             overlay_roads=unioned,

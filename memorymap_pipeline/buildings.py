@@ -105,10 +105,13 @@ def _roof_mesh(
     roof_height_mm: float,
     shape: str,
     orientation: str = "along",
+    base_overlap_mm: float = 0.0,
 ) -> Trimesh | None:
     """Create a faceted roof over an arbitrary footprint using oriented bounds."""
     if shape == "flat" or roof_height_mm <= 0.0:
         return None
+    if base_overlap_mm < 0.0:
+        raise ValueError("Roof overlap cannot be negative")
     corners = np.asarray(polygon.minimum_rotated_rectangle.exterior.coords[:4], dtype=float)
     edges = np.roll(corners, -1, axis=0) - corners
     lengths = np.linalg.norm(edges, axis=1)
@@ -205,13 +208,14 @@ def _roof_mesh(
         return None
 
     vertices = [[x, y, z_at(x, y)] for x, y in xy_vertices]
+    bottom_z = eave_z - base_overlap_mm
     bottom_indices: list[int] = []
     for top_index, (x, y) in enumerate(xy_vertices):
-        if abs(vertices[top_index][2] - eave_z) <= 1e-9:
+        if base_overlap_mm <= 1e-9 and abs(vertices[top_index][2] - eave_z) <= 1e-9:
             bottom_indices.append(top_index)
         else:
             bottom_indices.append(len(vertices))
-            vertices.append([x, y, eave_z])
+            vertices.append([x, y, bottom_z])
     faces = list(top_faces)
     faces.extend(
         [[bottom_indices[c], bottom_indices[b], bottom_indices[a]] for a, b, c in top_faces]
@@ -501,6 +505,7 @@ def download_and_build_buildings(
     route_points: np.ndarray | None = None,
     terrain_height_at: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None,
     building_scale_mm_per_m: float | None = None,
+    extend_elevated_parts_to_ground: bool = True,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
@@ -764,11 +769,22 @@ def download_and_build_buildings(
             try:
                 terrain_z = 0.0
                 if terrain_height_at is not None:
-                    centroid = part.centroid
-                    terrain_z = float(
-                        np.asarray(terrain_height_at(centroid.x, centroid.y)).reshape(-1)[0]
+                    sample_coordinates = list(part.exterior.coords)
+                    for interior in part.interiors:
+                        sample_coordinates.extend(interior.coords)
+                    sample_coordinates.extend(
+                        (part.centroid.coords[0], part.representative_point().coords[0])
                     )
-                bottom_mm = map_height(dimensions.min_height_m) if dimensions.min_height_m > 0.0 else 0.0
+                    samples = np.asarray(sample_coordinates, dtype=float)
+                    terrain_z = float(
+                        np.min(terrain_height_at(samples[:, 0], samples[:, 1]))
+                    )
+                bottom_mm = (
+                    map_height(dimensions.min_height_m)
+                    if dimensions.min_height_m > 0.0
+                    and not extend_elevated_parts_to_ground
+                    else 0.0
+                )
                 eave_mm = max(
                     bottom_mm + min_building_height_mm, map_height(dimensions.eave_height_m)
                 )
@@ -788,6 +804,7 @@ def download_and_build_buildings(
                     roof_height_mm=max(0.0, map_height(dimensions.total_height_m) - eave_mm),
                     shape=dimensions.roof_shape,
                     orientation=dimensions.roof_orientation,
+                    base_overlap_mm=embed_depth_mm,
                 )
                 if roof is not None:
                     meshes.append(roof)

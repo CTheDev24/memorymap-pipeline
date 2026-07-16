@@ -319,4 +319,9 @@ def build_terrain_mesh_with_water(
                 )
     mesh = Trimesh(np.asarray(vertices), np.asarray(faces), process=True)
     mesh.remove_unreferenced_vertices()
+    # The terrain partition is assembled from independently triangulated land,
+    # water-support, bottom, and wall regions. Their local winding can disagree
+    # even when every edge is closed, which slicers interpret as internal voids
+    # and enormous bridge floors. Orient the completed watertight shell outward.
+    mesh.fix_normals(multibody=True)
     return mesh

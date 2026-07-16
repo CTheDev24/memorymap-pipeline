@@ -11,7 +11,7 @@ DEFAULT_CONFIG = {
     "landscape": {"map_width": 240.0, "map_height": 190.0},
     "route_height": 2.0,
     "route_width": 1.2,
-    "base_thickness": 1.0,
+    "base_thickness": 1.6,
     # overlap raised features into the base; feature heights remain visible heights
     "feature_embed_depth": 0.2,
     "margin": 5.0,
@@ -73,6 +73,8 @@ DEFAULT_CONFIG = {
     # adaptive hard cap for visible building height (user-adjustable up to 1.25 inches)
     "max_print_height_mm": 25.0,
     "building_vertical_exaggeration": 1.0,
+    # prevent unsupported min_height volumes in support-free map prints
+    "extend_elevated_building_parts_to_ground": True,
     # minimum extrusion so 1-storey buildings remain visible
     "min_building_height_mm": 0.4,
     # fallback real-world height when OSM height/levels tags are absent (metres, ~2 storeys)
