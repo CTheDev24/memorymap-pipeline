@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "registry_version": "2026.1",
+  "landmarks": [
+    {
+      "key": "daikin-park",
+      "display_name": "Daikin Park",
+      "aliases": ["Minute Maid Park", "Enron Field", "Astros Field"],
+      "identifiers": {"wikidata": ["Q1193671"], "osm": {}},
+      "tag_corrections": {
+        "building": "stadium",
+        "memorymap:class": "stadium"
+      },
+      "enhancement": {
+        "type": "procedural_recipe",
+        "recipe": "stadium_retractable_roof",
+        "parameters": {
+          "roof_layout": "asymmetric",
+          "detail_policy": "print_safe"
+        }
+      }
+    }
+  ]
+}

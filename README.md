@@ -218,6 +218,27 @@ configured embed depth, without lowering the visible eave or peak. `roof:orienta
 is honored for supported roof shapes. `roof:direction` and more specialized roof shapes are not
 yet modeled; supported roofs otherwise align to the footprint's minimum rotated rectangle.
 
+### Building classification and landmark enhancements
+
+When explicit `height`, `building:levels`, and roof tags are absent, buildings use a
+city-agnostic classification preset instead of one universal fallback. Residential,
+commercial/office, industrial/warehouse, retail, parking, civic/institutional,
+stadium/arena, religious, landmark, and unknown classes provide realistic fallback floor
+heights plus print-aware minimum and maximum visual heights. Explicit source dimensions
+remain authoritative.
+
+Recognizable landmarks can opt into versioned offline corrections and procedural geometry
+through `memorymap_pipeline/data/landmarks.v1.json`. Entries match stable Wikidata or OSM
+element identifiers; mutable names and city-specific coordinate checks are deliberately not
+used. The priority order is curated landmark data, explicit OSM dimensions and building
+parts, classification estimates, then the generic fallback.
+
+Daikin Park is the first bundled landmark recipe, matched by Wikidata `Q1193671`. It uses a
+generic print-safe stadium builder with a terraced bowl and supported retractable-roof massing.
+The stadium implementation is reusable for other cities and falls back to ordinary building
+massing if a footprint is too small or irregular for printable tiers. Landmark JSON is bundled
+in both Python distributions and the standalone Windows executable.
+
 To build a distributable Windows executable, install the packaging extra and run:
 
 ```powershell

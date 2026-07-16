@@ -10,9 +10,16 @@ import shapely.ops as ops
 from shapely.ops import triangulate
 from trimesh import Trimesh
 
+from .building_classification import BuildingClass, classify_building, preset_for
 from .geometry import repair_polygon
+from .landmarks import (
+    LandmarkDefinition,
+    LandmarkRegistryError,
+    load_default_landmark_registry,
+)
 from .mesh import route_mesh_from_polygon
 from .projection import apply_transform, project_lonlat_array
+from .stadiums import StadiumRecipe, build_stadium_mesh
 
 
 SUPPORTED_ROOF_SHAPES = {"flat", "gabled", "hipped", "pyramidal", "skillion"}
@@ -26,6 +33,7 @@ class BuildingDimensions:
     roof_height_m: float
     roof_shape: str
     roof_orientation: str
+    building_class: BuildingClass = BuildingClass.UNKNOWN
 
     @property
     def eave_height_m(self) -> float:
@@ -55,17 +63,31 @@ def _building_dimensions(
     tags: dict, default_height_m: float, levels_to_m: float, max_height_m: float
 ) -> BuildingDimensions:
     """Interpret supported OSM Simple 3D Buildings tags in metres."""
+    building_class = classify_building(tags)
+    preset = preset_for(building_class)
+    class_level_height_m = (
+        preset.floor_height_m
+        if building_class is not BuildingClass.UNKNOWN
+        else levels_to_m
+    )
+    class_default_height_m = (
+        preset.fallback_height_m
+        if building_class is not BuildingClass.UNKNOWN
+        else default_height_m
+    )
     min_height = _number_m(tags.get("min_height"), allow_zero=True)
     if min_height is None:
         min_levels = _number_m(tags.get("building:min_level"), allow_zero=True)
-        min_height = (min_levels or 0.0) * levels_to_m
+        min_height = (min_levels or 0.0) * class_level_height_m
     roof_height = _number_m(tags.get("roof:height"), allow_zero=True)
     if roof_height is None:
         roof_levels = _number_m(tags.get("roof:levels"), allow_zero=True)
-        roof_height = (roof_levels or 0.0) * levels_to_m
+        roof_height = (roof_levels or 0.0) * class_level_height_m
     explicit_height = _number_m(tags.get("height"))
     levels = _number_m(tags.get("building:levels"))
-    levels_height = levels * levels_to_m + roof_height if levels is not None else None
+    levels_height = (
+        levels * class_level_height_m + roof_height if levels is not None else None
+    )
     is_building_part = "building:part" in tags
     explicit_height_is_plausible = (
         explicit_height is not None
@@ -80,6 +102,8 @@ def _building_dimensions(
         total_height = explicit_height
     elif levels_height is not None and levels_height <= max_height_m:
         total_height = levels_height
+    elif building_class is not BuildingClass.UNKNOWN:
+        total_height = min(class_default_height_m + roof_height, max_height_m)
     else:
         total_height = _extract_real_height_m(
             tags, default_height_m, levels_to_m, max_height_m
@@ -92,11 +116,18 @@ def _building_dimensions(
     if shape == "flat":
         roof_height = 0.0
     if shape != "flat" and roof_height <= 0.0:
-        roof_height = min(levels_to_m, total_height - min_height)
+        roof_height = min(class_level_height_m, total_height - min_height)
     orientation = str(tags.get("roof:orientation", "along")).strip().lower()
     if orientation not in {"along", "across"}:
         orientation = "along"
-    return BuildingDimensions(min_height, total_height, roof_height, shape, orientation)
+    return BuildingDimensions(
+        min_height,
+        total_height,
+        roof_height,
+        shape,
+        orientation,
+        building_class,
+    )
 
 
 def _roof_mesh(
@@ -383,6 +414,16 @@ def _tags_from_gdf_row(row, columns: list[str]) -> dict:
         except (TypeError, ValueError):
             pass
         tags[col] = val
+
+    # OSMnx stores stable element identity in its GeoDataFrame index rather
+    # than ordinary tag columns. Preserve it so optional landmark recipes can
+    # match data without relying on names or city-specific coordinates.
+    row_name = getattr(row, "name", None)
+    if isinstance(row_name, tuple) and len(row_name) >= 2:
+        element_type = str(row_name[-2]).strip().lower()
+        if element_type in {"node", "way", "relation"}:
+            tags.setdefault("_osm_type", element_type)
+            tags.setdefault("_osm_id", row_name[-1])
     return tags
 
 
@@ -481,6 +522,31 @@ def _adaptive_height_mapper(
         return max(min_height_mm, min(max_height_mm, visible))
 
     return mapped
+
+
+def _stadium_recipe_for_landmark(
+    landmark: LandmarkDefinition | None,
+) -> StadiumRecipe | None:
+    """Translate a versioned landmark recipe into the generic stadium builder."""
+    if landmark is None or landmark.enhancement is None:
+        return None
+    enhancement = landmark.enhancement
+    if enhancement.kind != "procedural_recipe":
+        return None
+    if enhancement.reference != "stadium_retractable_roof":
+        logging.warning(
+            "Unsupported procedural landmark recipe %s for %s",
+            enhancement.reference,
+            landmark.display_name,
+        )
+        return None
+    metadata = enhancement.metadata
+    return StadiumRecipe(
+        roof_style="retractable",
+        roof_orientation_degrees=float(metadata.get("roof_orientation_degrees", 0.0)),
+        roof_side=str(metadata.get("roof_side", "west")),
+        roof_coverage=float(metadata.get("roof_coverage", 0.38)),
+    )
 
 def download_and_build_buildings(
     bbox: tuple[float, float, float, float] | None,
@@ -632,7 +698,11 @@ def download_and_build_buildings(
                     data = resp.json()
                     elements = data.get("elements", [])
                     for el in elements:
-                        el_tags = el.get("tags", {})
+                        el_tags = dict(el.get("tags", {}))
+                        if el.get("type") in {"node", "way", "relation"}:
+                            el_tags["_osm_type"] = el["type"]
+                        if el.get("id") is not None:
+                            el_tags["_osm_id"] = el["id"]
                         polygon = _overpass_geometry(el)
                         if polygon is not None:
                             geo_with_tags.append((polygon, el_tags))
@@ -651,11 +721,19 @@ def download_and_build_buildings(
         if not geo_with_tags:
             return None, None
 
+    try:
+        landmark_registry = load_default_landmark_registry()
+    except LandmarkRegistryError as exc:
+        logging.warning("Landmark enhancements unavailable: %s", exc)
+        landmark_registry = None
+
     # Margin-inset plate boundary used for clip/omit decisions
     plate_box = geom.box(margin_mm, margin_mm, map_width_mm - margin_mm, map_height_mm - margin_mm)
 
     # Transform each polygon to mm coords, extract its height, clip, and filter
-    elements: list[tuple[geom.base.BaseGeometry, BuildingDimensions, bool]] = []
+    elements: list[
+        tuple[geom.base.BaseGeometry, BuildingDimensions, bool, LandmarkDefinition | None]
+    ] = []
 
     for g, tags in geo_with_tags:
         if g is None:
@@ -667,8 +745,22 @@ def download_and_build_buildings(
         else:
             continue
 
+        landmark = None
+        effective_tags = dict(tags)
+        if landmark_registry is not None:
+            try:
+                landmark = landmark_registry.match_feature(
+                    effective_tags,
+                    osm_type=effective_tags.get("_osm_type"),
+                    osm_id=effective_tags.get("_osm_id"),
+                )
+            except LandmarkRegistryError as exc:
+                logging.warning("Skipping conflicting landmark identifiers: %s", exc)
+            if landmark is not None:
+                effective_tags.update(landmark.tag_corrections)
+
         dimensions = _building_dimensions(
-            tags,
+            effective_tags,
             default_height_m=building_default_height_m,
             levels_to_m=building_levels_to_m,
             max_height_m=building_max_real_height_m,
@@ -715,22 +807,28 @@ def download_and_build_buildings(
             if clipped.is_empty:
                 continue
 
-            elements.append((clipped, dimensions, "building:part" in tags))
+            elements.append(
+                (clipped, dimensions, "building:part" in effective_tags, landmark)
+            )
 
     if not elements:
         return None, None
 
-    part_union = ops.unary_union([poly for poly, _dims, is_part in elements if is_part])
+    part_union = ops.unary_union(
+        [poly for poly, _dims, is_part, _landmark in elements if is_part]
+    )
     if not part_union.is_empty:
-        resolved: list[tuple[geom.base.BaseGeometry, BuildingDimensions, bool]] = []
-        for poly, dims, is_part in elements:
+        resolved: list[
+            tuple[geom.base.BaseGeometry, BuildingDimensions, bool, LandmarkDefinition | None]
+        ] = []
+        for poly, dims, is_part, landmark in elements:
             remainder = poly if is_part else poly.difference(part_union)
             if not remainder.is_empty:
-                resolved.append((remainder, dims, is_part))
+                resolved.append((remainder, dims, is_part, landmark))
         elements = resolved
 
     # Preserve geographic scale for ordinary buildings and compress only tall outliers.
-    all_real_heights = [dims.total_height_m for _, dims, _ in elements]
+    all_real_heights = [dims.total_height_m for _, dims, _, _ in elements]
     if building_scale_mm_per_m is None:
         frame = transform.get("map_frame")
         if frame is not None:
@@ -747,6 +845,18 @@ def download_and_build_buildings(
         min_building_height_mm,
     )
 
+    def classified_height(dimensions: BuildingDimensions, real_height_m: float) -> float:
+        """Apply global map scale, then the class's printable visual envelope."""
+        preset = preset_for(dimensions.building_class)
+        visible = min(map_height(real_height_m), preset.max_visual_height_mm)
+        if real_height_m > 0.0:
+            visible = max(
+                visible,
+                min_building_height_mm,
+                preset.min_printable_height_mm,
+            )
+        return visible
+
     logging.info(
         "Buildings: %d footprints | real heights %.1f–%.1f m | "
         "map scale %.4f mm/m | extrusions %.2f–%.2f mm",
@@ -754,16 +864,23 @@ def download_and_build_buildings(
         min(all_real_heights),
         max(all_real_heights),
         building_scale_mm_per_m,
-        min(map_height(h) for h in all_real_heights),
-        max(map_height(h) for h in all_real_heights),
+        min(
+            classified_height(dims, dims.total_height_m)
+            for _, dims, _, _ in elements
+        ),
+        max(
+            classified_height(dims, dims.total_height_m)
+            for _, dims, _, _ in elements
+        ),
     )
 
     # Extrude each building individually then concatenate into one mesh
     meshes = []
     surface_z = z_offset + embed_depth_mm
-    for poly, dimensions, _is_part in elements:
+    for poly, dimensions, _is_part, landmark in elements:
         parts: list[geom.Polygon] = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
-        for part in parts:
+        parts.sort(key=lambda candidate: candidate.area, reverse=True)
+        for part_index, part in enumerate(parts):
             if part.is_empty:
                 continue
             try:
@@ -779,14 +896,44 @@ def download_and_build_buildings(
                     terrain_z = float(
                         np.min(terrain_height_at(samples[:, 0], samples[:, 1]))
                     )
+
+                landmark_recipe = _stadium_recipe_for_landmark(landmark)
+                if (
+                    part_index == 0
+                    and dimensions.building_class is BuildingClass.STADIUM_ARENA
+                ):
+                    try:
+                        stadium = build_stadium_mesh(
+                            part,
+                            recipe=landmark_recipe or StadiumRecipe(),
+                        )
+                        stadium.apply_translation(
+                            (0.0, 0.0, surface_z + terrain_z - embed_depth_mm)
+                        )
+                        meshes.append(stadium)
+                        logging.info(
+                            "Applied %s stadium geometry to %s",
+                            "landmark" if landmark_recipe is not None else "generic",
+                            landmark.display_name if landmark is not None else "OSM stadium",
+                        )
+                        continue
+                    except Exception as exc:
+                        logging.warning(
+                            "Stadium enhancement failed; using standard building mass: %s",
+                            exc,
+                        )
                 bottom_mm = (
-                    map_height(dimensions.min_height_m)
+                    min(
+                        map_height(dimensions.min_height_m),
+                        preset_for(dimensions.building_class).max_visual_height_mm,
+                    )
                     if dimensions.min_height_m > 0.0
                     and not extend_elevated_parts_to_ground
                     else 0.0
                 )
                 eave_mm = max(
-                    bottom_mm + min_building_height_mm, map_height(dimensions.eave_height_m)
+                    bottom_mm + min_building_height_mm,
+                    classified_height(dimensions, dimensions.eave_height_m),
                 )
                 effective_embed = (
                     embed_depth_mm if bottom_mm <= 1e-9 else min(embed_depth_mm, bottom_mm)
@@ -801,7 +948,10 @@ def download_and_build_buildings(
                 roof = _roof_mesh(
                     part,
                     eave_z=surface_z + terrain_z + eave_mm,
-                    roof_height_mm=max(0.0, map_height(dimensions.total_height_m) - eave_mm),
+                    roof_height_mm=max(
+                        0.0,
+                        classified_height(dimensions, dimensions.total_height_m) - eave_mm,
+                    ),
                     shape=dimensions.roof_shape,
                     orientation=dimensions.roof_orientation,
                     base_overlap_mm=embed_depth_mm,
@@ -821,14 +971,14 @@ def download_and_build_buildings(
             final_mesh = meshes[0]
 
     # Union of all clipped footprints (used for debug overlay and return value)
-    unioned = ops.unary_union([p for p, _dims, _is_part in elements])
+    unioned = ops.unary_union([p for p, _dims, _is_part, _landmark in elements])
 
     if debug:
         try:
             import matplotlib.pyplot as plt
 
             fig, ax = plt.subplots(figsize=(6, 8))
-            for poly, _dimensions, _is_part in elements:
+            for poly, _dimensions, _is_part, _landmark in elements:
                 try:
                     parts = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
                     for part in parts:

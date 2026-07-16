@@ -1,6 +1,6 @@
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
-datas = collect_data_files("memorymap_pipeline.desktop") + copy_metadata("osmnx", recursive=True)
+datas = collect_data_files("memorymap_pipeline") + copy_metadata("osmnx", recursive=True)
 a = Analysis(
     ["memorymap_pipeline/desktop/__main__.py"], pathex=[], binaries=[], datas=datas,
     hiddenimports=["PySide6.QtWebChannel", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets"],

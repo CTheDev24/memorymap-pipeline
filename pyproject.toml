@@ -38,6 +38,9 @@ memorymap-desktop = "memorymap_pipeline.desktop.launcher:main"
 [tool.setuptools.packages.find]
 include = ["memorymap_pipeline*"]
 
+[tool.setuptools.package-data]
+memorymap_pipeline = ["data/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
