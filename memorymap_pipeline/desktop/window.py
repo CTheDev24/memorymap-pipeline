@@ -16,6 +16,10 @@ from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
 from .worker import GenerationWorker
 
+
+ROUTE_FRAME_PADDING_MM = 6.0
+FRAME_ZOOM_FACTOR = 1.1
+
 try:
     from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
     from PySide6.QtWidgets import (
@@ -118,6 +122,16 @@ class MemoryMapWindow(QMainWindow):
         reset = QPushButton("Reset frame to route")
         reset.clicked.connect(self.reset_frame)
         form.addRow(reset)
+        zoom_row = QWidget()
+        zoom_layout = QHBoxLayout(zoom_row)
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_in = QPushButton("Zoom in")
+        zoom_out = QPushButton("Zoom out")
+        zoom_in.clicked.connect(self.zoom_frame_in)
+        zoom_out.clicked.connect(self.zoom_frame_out)
+        zoom_layout.addWidget(zoom_in)
+        zoom_layout.addWidget(zoom_out)
+        form.addRow("Route framing", zoom_row)
         outer.addWidget(print_box)
 
         layers = QGroupBox("Layers")
@@ -202,7 +216,11 @@ class MemoryMapWindow(QMainWindow):
             self.file_label.setText(self.gpx_path.name)
             self.generate.setEnabled(True)
             frame = MapFrame.fit_route(
-                self.route.points, self.print_width.value(), self.print_height.value(), self.margin.value()
+                self.route.points,
+                self.print_width.value(),
+                self.print_height.value(),
+                self.margin.value(),
+                route_padding_mm=ROUTE_FRAME_PADDING_MM,
             )
             self.default_frame = {
                 "center_lat": frame.center_lat, "center_lon": frame.center_lon,
@@ -233,6 +251,7 @@ class MemoryMapWindow(QMainWindow):
                 width,
                 height,
                 self.margin.value(),
+                route_padding_mm=ROUTE_FRAME_PADDING_MM,
             )
             fitted = {
                 "center_lat": frame.center_lat,
@@ -274,6 +293,24 @@ class MemoryMapWindow(QMainWindow):
         if self.default_frame:
             self.current_frame = self.default_frame.copy()
             self.map_view.page().runJavaScript("resetFrame()")
+
+    def _zoom_frame(self, factor: float) -> None:
+        if self.current_frame is None:
+            return
+        self.current_frame = self.current_frame.copy()
+        self.current_frame["coverage_width_m"] *= factor
+        self.current_frame["coverage_height_m"] *= factor
+        self.map_view.page().runJavaScript(
+            f"setFrame({json.dumps(self.current_frame)});"
+        )
+
+    @Slot()
+    def zoom_frame_in(self) -> None:
+        self._zoom_frame(1.0 / FRAME_ZOOM_FACTOR)
+
+    @Slot()
+    def zoom_frame_out(self) -> None:
+        self._zoom_frame(FRAME_ZOOM_FACTOR)
 
     @Slot(bool)
     def _terrain_toggled(self, enabled: bool) -> None:

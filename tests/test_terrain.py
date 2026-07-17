@@ -8,6 +8,7 @@ import pytest
 import requests
 from PIL import Image
 from shapely.geometry import LineString, Point, box
+from trimesh import Trimesh
 
 from memorymap_pipeline.mesh import export_3mf, route_mesh_from_polygon
 from memorymap_pipeline import generation
@@ -97,6 +98,48 @@ def test_drape_preserves_visible_feature_height_over_local_surface() -> None:
     draped = drape_mesh(feature, surface)
     expected_offsets = surface.sample(feature.vertices[:, 0], feature.vertices[:, 1])
     assert draped.vertices[:, 2] == pytest.approx(feature.vertices[:, 2] + expected_offsets)
+
+
+def test_major_road_smoothing_changes_only_supported_top_vertices() -> None:
+    surface = terrain_surface_from_grid(
+        _grid(
+            [
+                [0, 0, 0],
+                [0, 100, 0],
+                [0, 0, 0],
+            ]
+        ),
+        width_mm=100.0,
+        height_mm=100.0,
+        horizontal_span_m=1_000.0,
+    )
+    feature = Trimesh(
+        vertices=np.array(
+            [
+                [50.0, 50.0, -0.2],
+                [50.0, 50.0, 0.8],
+                [10.0, 10.0, 0.8],
+            ]
+        ),
+        faces=np.empty((0, 3), dtype=int),
+        process=False,
+    )
+    raw = drape_mesh(feature, surface)
+    smoothed = drape_mesh(
+        feature,
+        surface,
+        smooth_top_region=box(40.0, 40.0, 60.0, 60.0),
+        smoothing_radius_mm=50.0,
+        minimum_visible_height_mm=0.4,
+    )
+
+    # The underside remains on the raw terrain so the road cannot float.
+    assert smoothed.vertices[0, 2] == pytest.approx(raw.vertices[0, 2])
+    # The peak is softened while retaining at least 0.4 mm above local terrain.
+    assert smoothed.vertices[1, 2] < raw.vertices[1, 2]
+    assert smoothed.vertices[1, 2] >= surface.sample(50.0, 50.0) + 0.4
+    # Vertices outside the selected major-road footprint are unchanged.
+    assert smoothed.vertices[2, 2] == pytest.approx(raw.vertices[2, 2])
 
 
 class FixtureProvider:

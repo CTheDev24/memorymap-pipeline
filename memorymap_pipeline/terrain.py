@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
+from shapely import contains_xy
+from shapely.geometry.base import BaseGeometry
 from trimesh import Trimesh
 
 
@@ -206,9 +208,67 @@ def build_terrain_mesh(surface: TerrainSurface, base_thickness_mm: float) -> Tri
     return mesh
 
 
-def drape_mesh(mesh: Trimesh, surface: TerrainSurface | object) -> Trimesh:
-    """Return a copy translated vertex-by-vertex onto the local terrain surface."""
+def _smoothed_samples(
+    sampler: object,
+    x_mm: np.ndarray,
+    y_mm: np.ndarray,
+    radius_mm: float,
+) -> np.ndarray:
+    """Return a compact Gaussian-like average around each print-space point."""
+    sample = getattr(sampler, "sample", sampler)
+    offsets = (-radius_mm, 0.0, radius_mm)
+    weights = (1.0, 2.0, 1.0)
+    total = np.zeros_like(x_mm, dtype=float)
+    total_weight = 0.0
+    for x_offset, x_weight in zip(offsets, weights):
+        for y_offset, y_weight in zip(offsets, weights):
+            weight = x_weight * y_weight
+            total += weight * sample(x_mm + x_offset, y_mm + y_offset)
+            total_weight += weight
+    return total / total_weight
+
+
+def drape_mesh(
+    mesh: Trimesh,
+    surface: TerrainSurface | object,
+    *,
+    smooth_top_region: BaseGeometry | None = None,
+    smoothing_radius_mm: float = 0.0,
+    minimum_visible_height_mm: float = 0.0,
+) -> Trimesh:
+    """Return a copy translated vertex-by-vertex onto the local terrain surface.
+
+    When ``smooth_top_region`` is supplied, only top vertices inside that region use a
+    low-pass terrain sample. Bottom vertices continue to follow the unsmoothed surface,
+    keeping the feature embedded and printable instead of turning it into a floating deck.
+    """
     result = mesh.copy()
     sampler = getattr(surface, "sample", surface)
-    result.vertices[:, 2] += sampler(result.vertices[:, 0], result.vertices[:, 1])
+    x = result.vertices[:, 0]
+    y = result.vertices[:, 1]
+    original_z = result.vertices[:, 2].copy()
+    terrain_offsets = np.asarray(sampler(x, y), dtype=float)
+
+    if smooth_top_region is not None and smoothing_radius_mm > 0.0:
+        region = smooth_top_region.buffer(1e-7)
+        top_z = float(np.max(original_z))
+        top_vertices = np.isclose(original_z, top_z, atol=1e-7)
+        in_region = contains_xy(region, x, y)
+        smooth_vertices = top_vertices & in_region
+        if np.any(smooth_vertices):
+            smoothed = _smoothed_samples(
+                sampler,
+                x[smooth_vertices],
+                y[smooth_vertices],
+                smoothing_radius_mm,
+            )
+            # Never let smoothing bury the top completely beneath a local terrain peak.
+            minimum_offset = (
+                terrain_offsets[smooth_vertices]
+                + minimum_visible_height_mm
+                - original_z[smooth_vertices]
+            )
+            terrain_offsets[smooth_vertices] = np.maximum(smoothed, minimum_offset)
+
+    result.vertices[:, 2] = original_z + terrain_offsets
     return result

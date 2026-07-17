@@ -39,6 +39,15 @@ DEFAULT_CONFIG = {
     "water_shoreline_tolerance_mm": 0.1,
     # Road generation defaults
     "road_height": 0.8,
+    # Low-pass only the top of major roads while their underside remains terrain-supported.
+    "road_terrain_smoothing_types": [
+        "motorway",
+        "motorway_link",
+        "trunk",
+        "trunk_link",
+    ],
+    "road_terrain_smoothing_radius_mm": 2.0,
+    "road_terrain_min_visible_height_mm": 0.4,
     # widths in mm by highway type
     "road_widths": {
         "motorway": 2.4,

@@ -25,7 +25,7 @@ Notes:
   component parts: `Base_White` (white), `Route_Accent` (orange), `Roads_Black`
   (black), and `Buildings_Verification` (gray). Compatible slicers import the model as
   one multipart object and read the assignments from standard 3MF base materials.
-- Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`.
+- Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`. When terrain is enabled, motorway and trunk tops use a print-safe low-pass terrain profile while their undersides remain embedded in the original relief.
 - Route, road, and building heights are visible heights measured above the base plate.
 - Building heights follow the physical map scale by default; only unusually tall outliers are adaptively compressed to the GUI maximum (25 mm by default, 31.75 mm hard limit).
 - Water solids are 0.6 mm thick: 0.4 mm is embedded into white support and 0.2 mm remains exclusively visible. A minimum 0.4 mm white bottom skin prevents water from appearing on the underside.
@@ -193,7 +193,10 @@ python -m memorymap_pipeline.desktop
 The desktop application uses PySide6 and Qt WebEngine. GPX parsing and 3MF generation
 run directly inside the application; no localhost server or external browser is required.
 The map itself uses online MapLibre/OpenStreetMap tiles, so map imagery and OSM layer
-downloads still require an internet connection.
+downloads still require an internet connection. A newly loaded route and orientation change
+reserve 6 mm between the route extents and the displayed print frame. **Zoom in** and
+**Zoom out** adjust geographic coverage around the current frame center; **Reset frame to
+route** restores the centered 6 mm fit.
 
 ### Building parts and roofs
 
