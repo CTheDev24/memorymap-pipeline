@@ -46,13 +46,35 @@ def test_default_registry_matches_daikin_park_by_stable_wikidata_id() -> None:
     assert "Minute Maid Park" in landmark.aliases
     assert landmark.enhancement is not None
     assert landmark.enhancement.kind == "procedural_recipe"
-    assert landmark.enhancement.reference == "stadium_retractable_roof"
+    assert landmark.enhancement.reference == "stadium_closed_roof"
 
     corrected_tags = {"wikidata": "Q1193671", **landmark.tag_corrections}
     assert classify_building(corrected_tags) is BuildingClass.STADIUM_ARENA
     recipe = _stadium_recipe_for_landmark(landmark)
     assert recipe is not None
+    assert recipe.roof_style == "closed"
+    assert recipe.closed_roof_band_count == 3
+    assert recipe.closed_roof_band_width_mm == pytest.approx(1.2)
+    assert recipe.closed_roof_band_height_mm == pytest.approx(0.32)
+
+
+def test_legacy_retractable_stadium_recipe_remains_supported() -> None:
+    document = _document()
+    document["landmarks"][0]["enhancement"] = {
+        "type": "procedural_recipe",
+        "recipe": "stadium_retractable_roof",
+        "parameters": {
+            "roof_coverage": 0.44,
+            "roof_orientation_degrees": 18.0,
+        },
+    }
+    landmark = LandmarkRegistry.from_dict(document).get("example-tower")
+
+    recipe = _stadium_recipe_for_landmark(landmark)
+    assert recipe is not None
     assert recipe.roof_style == "retractable"
+    assert recipe.roof_coverage == pytest.approx(0.44)
+    assert recipe.roof_orientation_degrees == pytest.approx(18.0)
 
 
 def test_registry_matches_each_supported_stable_identifier() -> None:

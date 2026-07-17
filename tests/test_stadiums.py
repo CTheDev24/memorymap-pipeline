@@ -57,6 +57,37 @@ def test_default_opening_can_be_derived_from_outer_footprint() -> None:
     assert stadium.bounds[1, 2] == pytest.approx(4.0)
 
 
+@pytest.mark.parametrize("band_count", [2, 3])
+def test_closed_roof_follows_outer_footprint_and_is_ground_supported(band_count: int) -> None:
+    outer, inner = _irregular_stadium()
+    recipe = StadiumRecipe(
+        roof_style="closed",
+        roof_height_mm=6.5,
+        roof_orientation_degrees=17,
+        closed_roof_band_count=band_count,
+    )
+    stadium = build_stadium_mesh(outer, inner_opening=inner, recipe=recipe)
+    base = build_base_plate(65, 55, 1.6)
+
+    _assert_watertight_positive_bodies(stadium)
+    report = audit_printability({"base": base, "buildings": stadium})
+
+    assert report.printable, report.issues
+    assert stadium.bounds[0, 2] == pytest.approx(0.0)
+    assert stadium.bounds[1, 2] == pytest.approx(6.98)
+    assert stadium.bounds[0, 0] == pytest.approx(outer.bounds[0])
+    assert stadium.bounds[1, 0] == pytest.approx(outer.bounds[2])
+    assert stadium.bounds[0, 1] == pytest.approx(outer.bounds[1])
+    assert stadium.bounds[1, 1] == pytest.approx(outer.bounds[3])
+
+
+def test_closed_roof_rejects_narrow_or_excessive_bands() -> None:
+    with pytest.raises(ValueError, match="band width"):
+        StadiumRecipe(roof_style="closed", closed_roof_band_width_mm=0.6).validate()
+    with pytest.raises(ValueError, match="two or three"):
+        StadiumRecipe(roof_style="closed", closed_roof_band_count=4).validate()
+
+
 def test_tiers_reject_unprintably_narrow_bowl() -> None:
     outer = box(0, 0, 30, 20)
     inner = box(1, 1, 29, 19)

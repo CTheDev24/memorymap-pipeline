@@ -233,11 +233,14 @@ element identifiers; mutable names and city-specific coordinate checks are delib
 used. The priority order is curated landmark data, explicit OSM dimensions and building
 parts, classification estimates, then the generic fallback.
 
-Daikin Park is the first bundled landmark recipe, matched by Wikidata `Q1193671`. It uses a
-generic print-safe stadium builder with a terraced bowl and supported retractable-roof massing.
-The stadium implementation is reusable for other cities and falls back to ordinary building
-massing if a footprint is too small or irregular for printable tiers. Landmark JSON is bundled
-in both Python distributions and the standalone Windows executable.
+Daikin Park is the first bundled landmark recipe, matched by Wikidata `Q1193671`. Its default
+print representation is a fully supported closed-roof mass following the mapped stadium
+footprint, with broad shallow roof bands that remain printable with a 0.4 mm nozzle. The generic
+stadium builder also retains open-bowl and supported retractable-roof options for future detail
+modes and other venues. Recipe dimensions in the landmark registry are applied directly rather
+than serving as descriptive metadata. If a footprint cannot satisfy the selected recipe's
+minimum feature sizes, generation falls back to ordinary building massing. Landmark JSON is
+bundled in both Python distributions and the standalone Windows executable.
 
 To build a distributable Windows executable, install the packaging extra and run:
 

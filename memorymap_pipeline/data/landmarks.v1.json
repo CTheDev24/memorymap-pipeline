@@ -13,10 +13,14 @@
       },
       "enhancement": {
         "type": "procedural_recipe",
-        "recipe": "stadium_retractable_roof",
+        "recipe": "stadium_closed_roof",
         "parameters": {
-          "roof_layout": "asymmetric",
-          "detail_policy": "print_safe"
+          "roof_height_mm": 6.0,
+          "roof_thickness_mm": 0.8,
+          "roof_orientation_degrees": 0.0,
+          "closed_roof_band_count": 3,
+          "closed_roof_band_width_mm": 1.2,
+          "closed_roof_band_height_mm": 0.32
         }
       }
     }

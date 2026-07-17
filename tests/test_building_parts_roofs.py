@@ -243,7 +243,9 @@ def test_daikin_registry_recipe_is_used_in_full_generation(tmp_path: Path) -> No
 
     assert result.buildings_mesh is not None
     assert result.buildings_mesh.bounds[0, 2] == pytest.approx(-0.2)
-    assert result.buildings_mesh.bounds[1, 2] == pytest.approx(5.8)
+    # The 6.0 mm closed roof plus its 0.32 mm bands is embedded 0.2 mm
+    # into the base, leaving a 6.12 mm maximum model elevation.
+    assert result.buildings_mesh.bounds[1, 2] == pytest.approx(6.12)
     assert result.buildings_mesh.is_watertight
     assert result.output_path.exists()
 

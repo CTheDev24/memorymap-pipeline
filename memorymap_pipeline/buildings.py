@@ -533,7 +533,12 @@ def _stadium_recipe_for_landmark(
     enhancement = landmark.enhancement
     if enhancement.kind != "procedural_recipe":
         return None
-    if enhancement.reference != "stadium_retractable_roof":
+    roof_styles = {
+        "stadium_closed_roof": "closed",
+        "stadium_retractable_roof": "retractable",
+    }
+    roof_style = roof_styles.get(enhancement.reference)
+    if roof_style is None:
         logging.warning(
             "Unsupported procedural landmark recipe %s for %s",
             enhancement.reference,
@@ -542,10 +547,24 @@ def _stadium_recipe_for_landmark(
         return None
     metadata = enhancement.metadata
     return StadiumRecipe(
-        roof_style="retractable",
+        roof_style=roof_style,
+        bowl_height_mm=float(metadata.get("bowl_height_mm", 4.0)),
+        tier_count=int(metadata.get("tier_count", 3)),
+        minimum_feature_mm=float(metadata.get("minimum_feature_mm", 0.8)),
+        roof_height_mm=float(metadata.get("roof_height_mm", 6.0)),
+        roof_thickness_mm=float(metadata.get("roof_thickness_mm", 0.8)),
         roof_orientation_degrees=float(metadata.get("roof_orientation_degrees", 0.0)),
         roof_side=str(metadata.get("roof_side", "west")),
         roof_coverage=float(metadata.get("roof_coverage", 0.38)),
+        roof_support_width_mm=float(metadata.get("roof_support_width_mm", 1.2)),
+        support_overlap_mm=float(metadata.get("support_overlap_mm", 0.15)),
+        closed_roof_band_count=int(metadata.get("closed_roof_band_count", 3)),
+        closed_roof_band_width_mm=float(
+            metadata.get("closed_roof_band_width_mm", 1.2)
+        ),
+        closed_roof_band_height_mm=float(
+            metadata.get("closed_roof_band_height_mm", 0.48)
+        ),
     )
 
 def download_and_build_buildings(

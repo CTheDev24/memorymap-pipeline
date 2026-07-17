@@ -18,7 +18,7 @@ from trimesh.creation import extrude_polygon
 from trimesh.util import concatenate
 
 
-RoofStyle = Literal["none", "asymmetric", "retractable"]
+RoofStyle = Literal["none", "asymmetric", "retractable", "closed"]
 RoofSide = Literal["west", "east"]
 
 
@@ -42,6 +42,9 @@ class StadiumRecipe:
     roof_side: RoofSide = "west"
     roof_support_width_mm: float = 1.2
     support_overlap_mm: float = 0.15
+    closed_roof_band_count: int = 3
+    closed_roof_band_width_mm: float = 1.2
+    closed_roof_band_height_mm: float = 0.48
 
     def validate(self) -> None:
         if self.minimum_feature_mm < 0.8:
@@ -50,7 +53,7 @@ class StadiumRecipe:
             raise ValueError("Stadium bowl height must be positive")
         if self.tier_count < 1:
             raise ValueError("Stadium tier_count must be at least one")
-        if self.roof_style not in ("none", "asymmetric", "retractable"):
+        if self.roof_style not in ("none", "asymmetric", "retractable", "closed"):
             raise ValueError(f"Unsupported stadium roof style: {self.roof_style}")
         if self.roof_style != "none":
             if self.roof_thickness_mm < self.minimum_feature_mm:
@@ -59,10 +62,19 @@ class StadiumRecipe:
                 raise ValueError("Stadium roof support is below the minimum feature size")
             if self.roof_height_mm <= self.bowl_height_mm:
                 raise ValueError("Stadium roof must be higher than the bowl")
-            if not 0.05 <= self.roof_coverage <= 0.9:
+            if self.roof_style != "closed" and not 0.05 <= self.roof_coverage <= 0.9:
                 raise ValueError("Stadium roof coverage must be between 0.05 and 0.9")
             if not 0.0 < self.support_overlap_mm < self.roof_thickness_mm:
                 raise ValueError("Stadium roof support overlap must be positive and thin")
+            if self.roof_style == "closed":
+                if self.closed_roof_band_count not in (2, 3):
+                    raise ValueError("Closed stadium roofs require two or three broad bands")
+                if self.closed_roof_band_width_mm < self.minimum_feature_mm:
+                    raise ValueError(
+                        "Closed stadium roof band width is below the minimum feature size"
+                    )
+                if self.closed_roof_band_height_mm <= 0.0:
+                    raise ValueError("Closed stadium roof band height must be positive")
 
 
 def _polygons(geometry: BaseGeometry) -> list[Polygon]:
@@ -179,6 +191,24 @@ def _oriented_roof_parts(
     return panels, supports
 
 
+def _closed_roof_bands(outer: Polygon, recipe: StadiumRecipe) -> list[BaseGeometry]:
+    """Create broad, shallow ribs clipped to the closed-roof silhouette."""
+    origin = outer.centroid.coords[0]
+    angle = -recipe.roof_orientation_degrees
+    rotated_outer = affinity.rotate(outer, angle, origin=origin)
+    min_x, min_y, max_x, max_y = rotated_outer.bounds
+    width = recipe.closed_roof_band_width_mm
+    pad = recipe.minimum_feature_mm
+
+    bands: list[BaseGeometry] = []
+    for index in range(1, recipe.closed_roof_band_count + 1):
+        center_x = min_x + (max_x - min_x) * index / (recipe.closed_roof_band_count + 1)
+        strip = box(center_x - width / 2.0, min_y - pad, center_x + width / 2.0, max_y + pad)
+        clipped = strip.intersection(rotated_outer).buffer(0)
+        bands.append(affinity.rotate(clipped, -angle, origin=origin))
+    return bands
+
+
 def build_stadium_mesh(
     outer_footprint: Polygon,
     *,
@@ -198,11 +228,20 @@ def build_stadium_mesh(
     )
 
     meshes: list[Trimesh] = []
-    for index, region in enumerate(_tier_regions(outer, inner, recipe), start=1):
-        height = recipe.bowl_height_mm * index / recipe.tier_count
-        meshes.extend(_extrude_geometry(region, height))
+    if recipe.roof_style == "closed":
+        # A solid mass is intentional at print scale: it follows the stadium outline
+        # while avoiding a field-width bridge beneath the closed roof.
+        meshes.extend(_extrude_geometry(outer, recipe.roof_height_mm))
+        rib_bottom = recipe.roof_height_mm - recipe.support_overlap_mm
+        rib_height = recipe.closed_roof_band_height_mm + recipe.support_overlap_mm
+        for band in _closed_roof_bands(outer, recipe):
+            meshes.extend(_extrude_geometry(band, rib_height, rib_bottom))
+    else:
+        for index, region in enumerate(_tier_regions(outer, inner, recipe), start=1):
+            height = recipe.bowl_height_mm * index / recipe.tier_count
+            meshes.extend(_extrude_geometry(region, height))
 
-    if recipe.roof_style != "none":
+    if recipe.roof_style in ("asymmetric", "retractable"):
         panels, supports = _oriented_roof_parts(outer, inner, recipe)
         roof_bottom = recipe.roof_height_mm - recipe.roof_thickness_mm
         support_height = roof_bottom + recipe.support_overlap_mm
