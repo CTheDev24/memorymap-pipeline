@@ -7,8 +7,8 @@ import shapely.geometry as geom
 import shapely.ops as ops
 import numpy as np
 
-from .projection import project_lonlat_array, compute_normalize_center_transform, apply_transform
-from .geometry import validate_polygon, repair_polygon
+from .projection import apply_transform, project_lonlat_array
+from .geometry import repair_polygon
 from .mesh import route_mesh_from_polygon
 
 
@@ -45,6 +45,7 @@ def download_and_build_roads(
     embed_depth_mm: float = 0.0,
     radius_m: float | None = None,
     roads_file: str | None = None,
+    terrain_smoothing_types: Iterable[str] = (),
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download OSM drivable roads within bbox (lat_min, lat_max, lon_min, lon_max), buffer them
     using widths from road_widths (mm). ``road_height_mm`` is the visible height above
@@ -94,6 +95,8 @@ def download_and_build_roads(
             return None, None
 
     buffered_polys = []
+    smoothing_polys = []
+    smoothing_types = set(terrain_smoothing_types)
 
     # Create clipping boundary to keep roads within map bounds
     clip_box = geom.box(
@@ -110,9 +113,6 @@ def download_and_build_roads(
 
         geom_obj = row.get("geometry")
         if geom_obj is None:
-            # try to build from u/v
-            u = row.get("u")
-            v = row.get("v")
             continue
 
         # extract lat/lon arrays (shapely gives coords as (lon, lat))
@@ -137,9 +137,13 @@ def download_and_build_roads(
                 clipped = poly.intersection(clip_box)
                 if not clipped.is_empty:
                     buffered_polys.append(clipped)
+                    if hw_norm in smoothing_types:
+                        smoothing_polys.append(clipped)
             except Exception:
                 # If clipping fails, keep unclipped
                 buffered_polys.append(poly)
+                if hw_norm in smoothing_types:
+                    smoothing_polys.append(poly)
 
     if not buffered_polys:
         return None, None
@@ -179,6 +183,10 @@ def download_and_build_roads(
             final_mesh = concatenate(meshes)
         except Exception:
             final_mesh = meshes[0]
+        if smoothing_polys:
+            final_mesh.metadata["terrain_smoothing_region"] = ops.unary_union(
+                smoothing_polys
+            ).intersection(clip_box)
 
     if debug:
         try:

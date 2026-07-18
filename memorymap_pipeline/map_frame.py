@@ -67,8 +67,9 @@ class MapFrame:
         print_height_mm: float,
         margin_mm: float = 0.0,
         rotation_degrees: float = 0.0,
+        route_padding_mm: float = 0.0,
     ) -> "MapFrame":
-        """Return a route-centred frame with the current fit-and-centre behavior."""
+        """Return a route-centred frame with optional padding inside the map frame."""
         if not points:
             raise ValueError("Cannot fit a map frame to an empty route")
         latitudes = np.asarray([point.latitude for point in points], dtype=float)
@@ -83,13 +84,19 @@ class MapFrame:
         printable_height = print_height_mm - 2.0 * margin_mm
         if printable_width <= 0 or printable_height <= 0:
             raise ValueError("Margin is too large for the print dimensions")
+        if route_padding_mm < 0:
+            raise ValueError("Route padding cannot be negative")
+        fitted_width = printable_width - 2.0 * route_padding_mm
+        fitted_height = printable_height - 2.0 * route_padding_mm
+        if fitted_width <= 0 or fitted_height <= 0:
+            raise ValueError("Route padding is too large for the print dimensions")
 
         # Expand the geographic bounds to the printable area's aspect ratio.
         span_x, span_y = float(spans[0]), float(spans[1])
         minimum_coverage = 1e-6
         scale = max(
-            span_x / printable_width if span_x else 0.0,
-            span_y / printable_height if span_y else 0.0,
+            span_x / fitted_width if span_x else 0.0,
+            span_y / fitted_height if span_y else 0.0,
             minimum_coverage,
         )
         return cls(

@@ -25,8 +25,13 @@ Notes:
   component parts: `Base_White` (white), `Route_Accent` (orange), `Roads_Black`
   (black), and `Buildings_Verification` (gray). Compatible slicers import the model as
   one multipart object and read the assignments from standard 3MF base materials.
-- Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`.
+- Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`. When terrain is enabled, motorway and trunk tops use a print-safe low-pass terrain profile while their undersides remain embedded in the original relief.
 - Route, road, and building heights are visible heights measured above the base plate.
+- On relief maps, route tops use one centerline-derived elevation across the full configured
+  width and smooth only along the direction of travel. The underside remains terrain-draped,
+  keeping the orange route continuous, supported, and 1.2 mm wide by default.
+- Route faces are locally refined to a 2.4 mm maximum edge before terrain draping, preventing
+  long triangulation diagonals from becoming thin fins near bends or converging segments.
 - Building heights follow the physical map scale by default; only unusually tall outliers are adaptively compressed to the GUI maximum (25 mm by default, 31.75 mm hard limit).
 - Water solids are 0.6 mm thick: 0.4 mm is embedded into white support and 0.2 mm remains exclusively visible. A minimum 0.4 mm white bottom skin prevents water from appearing on the underside.
 - Water is clipped to the same margin-inset printable bounds as route, road, and building layers.
@@ -193,7 +198,10 @@ python -m memorymap_pipeline.desktop
 The desktop application uses PySide6 and Qt WebEngine. GPX parsing and 3MF generation
 run directly inside the application; no localhost server or external browser is required.
 The map itself uses online MapLibre/OpenStreetMap tiles, so map imagery and OSM layer
-downloads still require an internet connection.
+downloads still require an internet connection. A newly loaded route and orientation change
+reserve 6 mm between the route extents and the displayed print frame. **Zoom in** and
+**Zoom out** adjust geographic coverage around the current frame center; **Reset frame to
+route** restores the centered 6 mm fit.
 
 ### Building parts and roofs
 
@@ -217,6 +225,30 @@ otherwise unsupported `min_height` volumes extend to terrain; this can be disabl
 configured embed depth, without lowering the visible eave or peak. `roof:orientation=along|across`
 is honored for supported roof shapes. `roof:direction` and more specialized roof shapes are not
 yet modeled; supported roofs otherwise align to the footprint's minimum rotated rectangle.
+
+### Building classification and landmark enhancements
+
+When explicit `height`, `building:levels`, and roof tags are absent, buildings use a
+city-agnostic classification preset instead of one universal fallback. Residential,
+commercial/office, industrial/warehouse, retail, parking, civic/institutional,
+stadium/arena, religious, landmark, and unknown classes provide realistic fallback floor
+heights plus print-aware minimum and maximum visual heights. Explicit source dimensions
+remain authoritative.
+
+Recognizable landmarks can opt into versioned offline corrections and procedural geometry
+through `memorymap_pipeline/data/landmarks.v1.json`. Entries match stable Wikidata or OSM
+element identifiers; mutable names and city-specific coordinate checks are deliberately not
+used. The priority order is curated landmark data, explicit OSM dimensions and building
+parts, classification estimates, then the generic fallback.
+
+Daikin Park is the first bundled landmark recipe, matched by Wikidata `Q1193671`. Its default
+print representation is a fully supported closed-roof mass following the mapped stadium
+footprint, with broad shallow roof bands that remain printable with a 0.4 mm nozzle. The generic
+stadium builder also retains open-bowl and supported retractable-roof options for future detail
+modes and other venues. Recipe dimensions in the landmark registry are applied directly rather
+than serving as descriptive metadata. If a footprint cannot satisfy the selected recipe's
+minimum feature sizes, generation falls back to ordinary building massing. Landmark JSON is
+bundled in both Python distributions and the standalone Windows executable.
 
 To build a distributable Windows executable, install the packaging extra and run:
 

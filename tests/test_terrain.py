@@ -8,8 +8,9 @@ import pytest
 import requests
 from PIL import Image
 from shapely.geometry import LineString, Point, box
+from trimesh import Trimesh
 
-from memorymap_pipeline.mesh import export_3mf, route_mesh_from_polygon
+from memorymap_pipeline.mesh import export_3mf, refine_mesh_edges, route_mesh_from_polygon
 from memorymap_pipeline import generation
 from memorymap_pipeline.config import load_config
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
@@ -19,6 +20,7 @@ from memorymap_pipeline.terrain import (
     analyze_terrain,
     build_terrain_mesh,
     drape_mesh,
+    drape_route_mesh,
     terrain_surface_from_grid,
 )
 from memorymap_pipeline.terrain_providers import (
@@ -97,6 +99,111 @@ def test_drape_preserves_visible_feature_height_over_local_surface() -> None:
     draped = drape_mesh(feature, surface)
     expected_offsets = surface.sample(feature.vertices[:, 0], feature.vertices[:, 1])
     assert draped.vertices[:, 2] == pytest.approx(feature.vertices[:, 2] + expected_offsets)
+
+
+def test_major_road_smoothing_changes_only_supported_top_vertices() -> None:
+    surface = terrain_surface_from_grid(
+        _grid(
+            [
+                [0, 0, 0],
+                [0, 100, 0],
+                [0, 0, 0],
+            ]
+        ),
+        width_mm=100.0,
+        height_mm=100.0,
+        horizontal_span_m=1_000.0,
+    )
+    feature = Trimesh(
+        vertices=np.array(
+            [
+                [50.0, 50.0, -0.2],
+                [50.0, 50.0, 0.8],
+                [10.0, 10.0, 0.8],
+            ]
+        ),
+        faces=np.empty((0, 3), dtype=int),
+        process=False,
+    )
+    raw = drape_mesh(feature, surface)
+    smoothed = drape_mesh(
+        feature,
+        surface,
+        smooth_top_region=box(40.0, 40.0, 60.0, 60.0),
+        smoothing_radius_mm=50.0,
+        minimum_visible_height_mm=0.4,
+    )
+
+    # The underside remains on the raw terrain so the road cannot float.
+    assert smoothed.vertices[0, 2] == pytest.approx(raw.vertices[0, 2])
+    # The peak is softened while retaining at least 0.4 mm above local terrain.
+    assert smoothed.vertices[1, 2] < raw.vertices[1, 2]
+    assert smoothed.vertices[1, 2] >= surface.sample(50.0, 50.0) + 0.4
+    # Vertices outside the selected major-road footprint are unchanged.
+    assert smoothed.vertices[2, 2] == pytest.approx(raw.vertices[2, 2])
+
+
+def test_route_top_uses_one_elevation_across_its_exact_width() -> None:
+    surface = terrain_surface_from_grid(
+        _grid([[100.0, 100.0], [0.0, 0.0]]),
+        width_mm=100.0,
+        height_mm=100.0,
+        horizontal_span_m=1_000.0,
+    )
+    centerline = LineString([(10.0, 50.0), (90.0, 50.0)])
+    route_width = 1.2
+    polygon = centerline.buffer(route_width / 2.0, cap_style=2, join_style=1)
+    feature = route_mesh_from_polygon(polygon, 2.2, -0.2)
+    draped = drape_route_mesh(
+        feature,
+        centerline,
+        surface,
+        route_width_mm=route_width,
+        visible_height_mm=2.0,
+        smoothing_distance_mm=1.5,
+    )
+
+    assert polygon.bounds[3] - polygon.bounds[1] == pytest.approx(route_width)
+    original_top = np.isclose(feature.vertices[:, 2], 2.0)
+    original_bottom = np.isclose(feature.vertices[:, 2], -0.2)
+    for endpoint_x in (10.0, 90.0):
+        endpoint_top = original_top & np.isclose(feature.vertices[:, 0], endpoint_x)
+        endpoint_bottom = original_bottom & np.isclose(feature.vertices[:, 0], endpoint_x)
+        assert np.count_nonzero(endpoint_top) == 2
+        assert np.ptp(draped.vertices[endpoint_top, 2]) == pytest.approx(0.0, abs=1e-7)
+        expected_support = np.max(
+            surface.sample(
+                np.full(5, endpoint_x),
+                np.linspace(50.0 - route_width / 2.0, 50.0 + route_width / 2.0, 5),
+            )
+        )
+        assert draped.vertices[endpoint_top, 2] == pytest.approx(
+            expected_support + 2.0
+        )
+        # The underside still follows the cross-slope and remains embedded in terrain.
+        assert np.ptp(draped.vertices[endpoint_bottom, 2]) > 0.0
+    assert draped.is_watertight
+    assert draped.is_winding_consistent
+    assert len(draped.split(only_watertight=False)) == 1
+
+
+def test_route_refinement_removes_long_flare_faces_without_opening_mesh() -> None:
+    centerline = LineString(
+        [(5.0, 5.0), (80.0, 5.0), (80.0, 25.0), (10.0, 25.0)]
+    )
+    route_width = 1.2
+    polygon = centerline.buffer(route_width / 2.0, cap_style=2, join_style=1)
+    feature = route_mesh_from_polygon(polygon, 2.2, -0.2)
+    maximum_edge = 2.4
+
+    assert np.max(feature.edges_unique_length) > 20.0
+    refined = refine_mesh_edges(feature, maximum_edge)
+
+    assert np.max(refined.edges_unique_length) <= maximum_edge + 1e-8
+    assert refined.bounds[:, :2] == pytest.approx(feature.bounds[:, :2])
+    assert refined.is_watertight
+    assert refined.is_winding_consistent
+    assert len(refined.split(only_watertight=False)) == 1
 
 
 class FixtureProvider:

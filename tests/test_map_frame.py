@@ -23,6 +23,27 @@ def test_fit_route_centers_route_inside_printable_area():
     assert np.mean(transformed, axis=0) == pytest.approx([120.0, 95.0], abs=0.1)
 
 
+def test_fit_route_reserves_padding_inside_the_frame():
+    frame = MapFrame.fit_route(
+        _route(),
+        240.0,
+        190.0,
+        margin_mm=5.0,
+        route_padding_mm=6.0,
+    )
+    transformed = frame.transform_points(_route())
+
+    assert transformed[:, 0].min() >= 11.0 - 0.01
+    assert transformed[:, 0].max() <= 229.0 + 0.01
+    assert transformed[:, 1].min() >= 11.0 - 0.01
+    assert transformed[:, 1].max() <= 179.0 + 0.01
+
+
+def test_fit_route_rejects_excessive_route_padding():
+    with pytest.raises(ValueError, match="Route padding"):
+        MapFrame.fit_route(_route(), 100.0, 80.0, route_padding_mm=40.0)
+
+
 def test_frame_rotation_changes_axis_direction():
     frame = MapFrame(40.0, -74.0, 100.0, 100.0, 100.0, 100.0, rotation_degrees=90.0)
     transformed = frame.transform_projected(np.array([[10.0, 0.0]]))

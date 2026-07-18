@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "registry_version": "2026.1",
+  "landmarks": [
+    {
+      "key": "daikin-park",
+      "display_name": "Daikin Park",
+      "aliases": ["Minute Maid Park", "Enron Field", "Astros Field"],
+      "identifiers": {"wikidata": ["Q1193671"], "osm": {}},
+      "tag_corrections": {
+        "building": "stadium",
+        "memorymap:class": "stadium"
+      },
+      "enhancement": {
+        "type": "procedural_recipe",
+        "recipe": "stadium_closed_roof",
+        "parameters": {
+          "roof_height_mm": 6.0,
+          "roof_thickness_mm": 0.8,
+          "roof_orientation_degrees": 0.0,
+          "closed_roof_band_count": 3,
+          "closed_roof_band_width_mm": 1.2,
+          "closed_roof_band_height_mm": 0.32
+        }
+      }
+    }
+  ]
+}

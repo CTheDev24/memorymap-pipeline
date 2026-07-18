@@ -213,6 +213,42 @@ def test_offline_parts_fixture_generates_embedded_colored_layer(tmp_path: Path) 
         for component in assembly.findall("m:components/m:component", ns)
     }
 
+
+def test_daikin_registry_recipe_is_used_in_full_generation(tmp_path: Path) -> None:
+    fixtures = Path(__file__).parent / "fixtures"
+    route = load_route_from_gpx(fixtures / "frame_route.gpx")
+    frame = MapFrame(
+        center_lat=29.76025,
+        center_lon=-95.37,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=190,
+        print_height_mm=240,
+        margin_mm=8,
+    )
+
+    result = generate_memory_map(
+        GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=tmp_path / "daikin.3mf",
+            include_base=True,
+            include_route=False,
+            include_roads=False,
+            include_buildings=True,
+            buildings_file=fixtures / "daikin_park_landmark.geojson",
+            config={"terrain_enabled": False},
+        )
+    )
+
+    assert result.buildings_mesh is not None
+    assert result.buildings_mesh.bounds[0, 2] == pytest.approx(-0.2)
+    # The 6.0 mm closed roof plus its 0.32 mm bands is embedded 0.2 mm
+    # into the base, leaving a 6.12 mm maximum model elevation.
+    assert result.buildings_mesh.bounds[1, 2] == pytest.approx(6.12)
+    assert result.buildings_mesh.is_watertight
+    assert result.output_path.exists()
+
 def test_overpass_configuration_supports_osmnx_2_settings() -> None:
     settings = type(
         "Settings",

@@ -112,3 +112,31 @@ def test_orientation_toggle_swaps_dimensions_and_live_frame():
     assert transformed[:, 1].max() <= 235.0 + 0.01
     assert window.current_frame["margin_mm"] == 5.0
     assert scripts and "setFrame" in scripts[-1]
+
+
+def test_frame_zoom_preserves_center_and_scales_coverage():
+    pytest.importorskip("PySide6")
+    from memorymap_pipeline.desktop.window import MemoryMapWindow
+
+    scripts = []
+
+    class Page:
+        def runJavaScript(self, script):
+            scripts.append(script)
+
+    window = type("WindowState", (), {})()
+    window.current_frame = {
+        "center_lat": 29.76,
+        "center_lon": -95.37,
+        "coverage_width_m": 1_000.0,
+        "coverage_height_m": 800.0,
+    }
+    window.map_view = type("View", (), {"page": lambda self: Page()})()
+
+    MemoryMapWindow._zoom_frame(window, 1.1)
+
+    assert window.current_frame["center_lat"] == pytest.approx(29.76)
+    assert window.current_frame["center_lon"] == pytest.approx(-95.37)
+    assert window.current_frame["coverage_width_m"] == pytest.approx(1_100.0)
+    assert window.current_frame["coverage_height_m"] == pytest.approx(880.0)
+    assert scripts and "setFrame" in scripts[-1]

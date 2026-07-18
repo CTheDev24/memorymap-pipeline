@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 import numpy as np
 from shapely import contains_xy
-from shapely.geometry import box
+from shapely.geometry import LineString, box
 from trimesh.util import concatenate
 
 from .buildings import download_and_build_buildings
@@ -22,10 +22,17 @@ from .mesh import (
     build_base_plate,
     embedded_feature_dimensions,
     export_3mf,
+    refine_mesh_edges,
     route_mesh_from_polygon,
 )
 from .roads import download_and_build_roads
-from .terrain import ElevationGrid, build_terrain_mesh, drape_mesh, terrain_surface_from_grid
+from .terrain import (
+    ElevationGrid,
+    build_terrain_mesh,
+    drape_mesh,
+    drape_route_mesh,
+    terrain_surface_from_grid,
+)
 from .terrain_providers import TerrariumProvider, Usgs3depProvider
 from .water import (
     build_terrain_mesh_with_water,
@@ -339,7 +346,20 @@ def generate_memory_map(
                 warnings.append(f"Route polygon repair failed: {explanation}")
         route_mesh = _route_mesh(route_polygon, route_extrusion_mm, z_offset)
         if route_mesh is not None and feature_support_at is not None:
-            route_mesh = drape_mesh(route_mesh, feature_support_at)
+            route_mesh = refine_mesh_edges(
+                route_mesh,
+                float(config.get("route_mesh_max_edge_mm", 2.4)),
+            )
+            route_mesh = drape_route_mesh(
+                route_mesh,
+                LineString(scaled),
+                feature_support_at,
+                route_width_mm=request.route_width_mm,
+                visible_height_mm=request.route_height_mm,
+                smoothing_distance_mm=float(
+                    config.get("route_terrain_smoothing_distance_mm", 1.5)
+                ),
+            )
         if route_mesh is None:
             warnings.append("The route does not intersect the printable frame.")
     progress(25, "Route mesh complete")
@@ -367,6 +387,7 @@ def generate_memory_map(
             embed_depth_mm=feature_embed_mm,
             radius_m=radius,
             roads_file=str(request.roads_file) if request.roads_file else None,
+            terrain_smoothing_types=config.get("road_terrain_smoothing_types", ()),
             )
         finally:
             logging.getLogger().removeHandler(collector)
@@ -374,7 +395,20 @@ def generate_memory_map(
             warnings.append("No road geometry was available inside the selected frame.")
             warnings.extend(f"Road detail: {message}" for message in collector.messages[-4:])
         elif feature_support_at is not None:
-            roads_mesh = drape_mesh(roads_mesh, feature_support_at)
+            smoothing_region = roads_mesh.metadata.pop(
+                "terrain_smoothing_region", None
+            )
+            roads_mesh = drape_mesh(
+                roads_mesh,
+                feature_support_at,
+                smooth_top_region=smoothing_region,
+                smoothing_radius_mm=float(
+                    config.get("road_terrain_smoothing_radius_mm", 2.0)
+                ),
+                minimum_visible_height_mm=float(
+                    config.get("road_terrain_min_visible_height_mm", 0.4)
+                ),
+            )
     progress(55, "Road mesh complete")
 
     unioned_buildings = None

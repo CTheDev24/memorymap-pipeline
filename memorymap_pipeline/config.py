@@ -11,6 +11,9 @@ DEFAULT_CONFIG = {
     "landscape": {"map_width": 240.0, "map_height": 190.0},
     "route_height": 2.0,
     "route_width": 1.2,
+    # Route tops share one elevation across their width and smooth only along travel.
+    "route_terrain_smoothing_distance_mm": 1.5,
+    "route_mesh_max_edge_mm": 2.4,
     "base_thickness": 1.6,
     # overlap raised features into the base; feature heights remain visible heights
     "feature_embed_depth": 0.2,
@@ -39,6 +42,15 @@ DEFAULT_CONFIG = {
     "water_shoreline_tolerance_mm": 0.1,
     # Road generation defaults
     "road_height": 0.8,
+    # Low-pass only the top of major roads while their underside remains terrain-supported.
+    "road_terrain_smoothing_types": [
+        "motorway",
+        "motorway_link",
+        "trunk",
+        "trunk_link",
+    ],
+    "road_terrain_smoothing_radius_mm": 2.0,
+    "road_terrain_min_visible_height_mm": 0.4,
     # widths in mm by highway type
     "road_widths": {
         "motorway": 2.4,

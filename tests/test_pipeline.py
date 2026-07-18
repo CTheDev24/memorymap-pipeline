@@ -5,7 +5,11 @@ import sys
 import pytest
 from shapely.geometry import box
 
-from memorymap_pipeline.buildings import _adaptive_height_mapper, _extract_real_height_m
+from memorymap_pipeline.buildings import (
+    _adaptive_height_mapper,
+    _extract_real_height_m,
+    _tags_from_gdf_row,
+)
 from memorymap_pipeline.cli import main
 from memorymap_pipeline.config import DEFAULT_CONFIG, load_config
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
@@ -48,6 +52,20 @@ def test_load_config_does_not_mutate_defaults(tmp_path: Path) -> None:
     assert DEFAULT_CONFIG["portrait"]["map_width"] == 190.0
     assert DEFAULT_CONFIG["margin"] == 5.0
     assert load_config()["portrait"]["map_width"] == 190.0
+
+
+def test_osmnx_index_identity_is_preserved_for_landmark_matching() -> None:
+    class Row:
+        name = ("way", 123456)
+
+        def __getitem__(self, key: str) -> object:
+            return {"building": "stadium", "wikidata": "Q1193671"}[key]
+
+    tags = _tags_from_gdf_row(Row(), ["building", "wikidata"])
+
+    assert tags["_osm_type"] == "way"
+    assert tags["_osm_id"] == 123456
+    assert tags["wikidata"] == "Q1193671"
 
 
 def test_buildings_run_when_roads_are_disabled(tmp_path: Path, monkeypatch) -> None:
