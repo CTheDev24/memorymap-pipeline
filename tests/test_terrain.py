@@ -10,7 +10,7 @@ from PIL import Image
 from shapely.geometry import LineString, Point, box
 from trimesh import Trimesh
 
-from memorymap_pipeline.mesh import export_3mf, route_mesh_from_polygon
+from memorymap_pipeline.mesh import export_3mf, refine_mesh_edges, route_mesh_from_polygon
 from memorymap_pipeline import generation
 from memorymap_pipeline.config import load_config
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
@@ -185,6 +185,25 @@ def test_route_top_uses_one_elevation_across_its_exact_width() -> None:
     assert draped.is_watertight
     assert draped.is_winding_consistent
     assert len(draped.split(only_watertight=False)) == 1
+
+
+def test_route_refinement_removes_long_flare_faces_without_opening_mesh() -> None:
+    centerline = LineString(
+        [(5.0, 5.0), (80.0, 5.0), (80.0, 25.0), (10.0, 25.0)]
+    )
+    route_width = 1.2
+    polygon = centerline.buffer(route_width / 2.0, cap_style=2, join_style=1)
+    feature = route_mesh_from_polygon(polygon, 2.2, -0.2)
+    maximum_edge = 2.4
+
+    assert np.max(feature.edges_unique_length) > 20.0
+    refined = refine_mesh_edges(feature, maximum_edge)
+
+    assert np.max(refined.edges_unique_length) <= maximum_edge + 1e-8
+    assert refined.bounds[:, :2] == pytest.approx(feature.bounds[:, :2])
+    assert refined.is_watertight
+    assert refined.is_winding_consistent
+    assert len(refined.split(only_watertight=False)) == 1
 
 
 class FixtureProvider:

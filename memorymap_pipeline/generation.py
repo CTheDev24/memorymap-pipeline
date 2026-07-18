@@ -22,6 +22,7 @@ from .mesh import (
     build_base_plate,
     embedded_feature_dimensions,
     export_3mf,
+    refine_mesh_edges,
     route_mesh_from_polygon,
 )
 from .roads import download_and_build_roads
@@ -345,6 +346,10 @@ def generate_memory_map(
                 warnings.append(f"Route polygon repair failed: {explanation}")
         route_mesh = _route_mesh(route_polygon, route_extrusion_mm, z_offset)
         if route_mesh is not None and feature_support_at is not None:
+            route_mesh = refine_mesh_edges(
+                route_mesh,
+                float(config.get("route_mesh_max_edge_mm", 2.4)),
+            )
             route_mesh = drape_route_mesh(
                 route_mesh,
                 LineString(scaled),

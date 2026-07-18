@@ -13,6 +13,7 @@ DEFAULT_CONFIG = {
     "route_width": 1.2,
     # Route tops share one elevation across their width and smooth only along travel.
     "route_terrain_smoothing_distance_mm": 1.5,
+    "route_mesh_max_edge_mm": 2.4,
     "base_thickness": 1.6,
     # overlap raised features into the base; feature heights remain visible heights
     "feature_embed_depth": 0.2,

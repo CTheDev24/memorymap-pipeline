@@ -143,6 +143,73 @@ def route_mesh_from_polygon(polygon, height_mm: float, z_offset: float = 0.0) ->
     return mesh
 
 
+def refine_mesh_edges(mesh: Trimesh, maximum_edge_mm: float) -> Trimesh:
+    """Conformingly subdivide a mesh until every edge meets a length limit.
+
+    Each selected shared edge is split in every incident face during the same pass.
+    This preserves watertight topology and avoids the T-junctions produced by
+    independently refining individual triangles. Midpoints retain the XY footprint.
+    """
+    if maximum_edge_mm <= 0.0:
+        raise ValueError("Maximum edge length must be positive")
+
+    vertices = np.asarray(mesh.vertices, dtype=float).copy()
+    faces = np.asarray(mesh.faces, dtype=np.int64).copy()
+    for _iteration in range(16):
+        edge_pairs = np.stack(
+            (faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]), axis=1
+        )
+        canonical = np.sort(edge_pairs, axis=2)
+        unique_edges, inverse = np.unique(
+            canonical.reshape(-1, 2), axis=0, return_inverse=True
+        )
+        edge_lengths = np.linalg.norm(
+            vertices[unique_edges[:, 1]] - vertices[unique_edges[:, 0]], axis=1
+        )
+        split_unique = edge_lengths > maximum_edge_mm + 1e-9
+        if not np.any(split_unique):
+            result = Trimesh(vertices=vertices, faces=faces, process=False)
+            result.remove_unreferenced_vertices()
+            result.metadata.update(mesh.metadata or {})
+            return result
+
+        midpoint_indices = np.full(len(unique_edges), -1, dtype=np.int64)
+        selected_edges = unique_edges[split_unique]
+        midpoint_indices[split_unique] = np.arange(
+            len(vertices), len(vertices) + len(selected_edges), dtype=np.int64
+        )
+        vertices = np.vstack((vertices, vertices[selected_edges].mean(axis=1)))
+        face_edge_indices = inverse.reshape(-1, 3)
+        split = split_unique[face_edge_indices]
+        midpoints = midpoint_indices[face_edge_indices]
+        refined_faces: list[list[int]] = []
+        for (a, b, c), flags, (ab, bc, ca) in zip(
+            faces, split, midpoints, strict=True
+        ):
+            mask = int(flags[0]) | (int(flags[1]) << 1) | (int(flags[2]) << 2)
+            if mask == 0:
+                refined_faces.append([a, b, c])
+            elif mask == 1:
+                refined_faces.extend(([a, ab, c], [ab, b, c]))
+            elif mask == 2:
+                refined_faces.extend(([b, bc, a], [bc, c, a]))
+            elif mask == 4:
+                refined_faces.extend(([c, ca, b], [ca, a, b]))
+            elif mask == 3:
+                refined_faces.extend(([b, bc, ab], [a, ab, c], [ab, bc, c]))
+            elif mask == 6:
+                refined_faces.extend(([c, ca, bc], [b, bc, a], [bc, ca, a]))
+            elif mask == 5:
+                refined_faces.extend(([a, ab, ca], [c, ca, b], [ca, ab, b]))
+            else:
+                refined_faces.extend(
+                    ([a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca])
+                )
+        faces = np.asarray(refined_faces, dtype=np.int64)
+
+    raise ValueError("Route mesh refinement exceeded the iteration limit")
+
+
 def center_meshes_to_base(meshes: list[Trimesh], width_mm: float, height_mm: float) -> None:
     """Center a list of meshes together within the base dimensions in XY."""
     if not meshes:

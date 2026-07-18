@@ -30,6 +30,8 @@ Notes:
 - On relief maps, route tops use one centerline-derived elevation across the full configured
   width and smooth only along the direction of travel. The underside remains terrain-draped,
   keeping the orange route continuous, supported, and 1.2 mm wide by default.
+- Route faces are locally refined to a 2.4 mm maximum edge before terrain draping, preventing
+  long triangulation diagonals from becoming thin fins near bends or converging segments.
 - Building heights follow the physical map scale by default; only unusually tall outliers are adaptively compressed to the GUI maximum (25 mm by default, 31.75 mm hard limit).
 - Water solids are 0.6 mm thick: 0.4 mm is embedded into white support and 0.2 mm remains exclusively visible. A minimum 0.4 mm white bottom skin prevents water from appearing on the underside.
 - Water is clipped to the same margin-inset printable bounds as route, road, and building layers.
