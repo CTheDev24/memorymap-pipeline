@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 import numpy as np
 from shapely import contains_xy
-from shapely.geometry import box
+from shapely.geometry import LineString, box
 from trimesh.util import concatenate
 
 from .buildings import download_and_build_buildings
@@ -25,7 +25,13 @@ from .mesh import (
     route_mesh_from_polygon,
 )
 from .roads import download_and_build_roads
-from .terrain import ElevationGrid, build_terrain_mesh, drape_mesh, terrain_surface_from_grid
+from .terrain import (
+    ElevationGrid,
+    build_terrain_mesh,
+    drape_mesh,
+    drape_route_mesh,
+    terrain_surface_from_grid,
+)
 from .terrain_providers import TerrariumProvider, Usgs3depProvider
 from .water import (
     build_terrain_mesh_with_water,
@@ -339,7 +345,16 @@ def generate_memory_map(
                 warnings.append(f"Route polygon repair failed: {explanation}")
         route_mesh = _route_mesh(route_polygon, route_extrusion_mm, z_offset)
         if route_mesh is not None and feature_support_at is not None:
-            route_mesh = drape_mesh(route_mesh, feature_support_at)
+            route_mesh = drape_route_mesh(
+                route_mesh,
+                LineString(scaled),
+                feature_support_at,
+                route_width_mm=request.route_width_mm,
+                visible_height_mm=request.route_height_mm,
+                smoothing_distance_mm=float(
+                    config.get("route_terrain_smoothing_distance_mm", 1.5)
+                ),
+            )
         if route_mesh is None:
             warnings.append("The route does not intersect the printable frame.")
     progress(25, "Route mesh complete")

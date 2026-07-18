@@ -6,6 +6,7 @@ from typing import Protocol
 
 import numpy as np
 from shapely import contains_xy
+from shapely.geometry import LineString, Point
 from shapely.geometry.base import BaseGeometry
 from trimesh import Trimesh
 
@@ -271,4 +272,103 @@ def drape_mesh(
             terrain_offsets[smooth_vertices] = np.maximum(smoothed, minimum_offset)
 
     result.vertices[:, 2] = original_z + terrain_offsets
+    return result
+
+
+def _route_cross_section_support(
+    centerline: LineString,
+    stations: np.ndarray,
+    sampler: object,
+    route_width_mm: float,
+) -> np.ndarray:
+    """Sample the highest terrain point across each route-normal cross-section."""
+    length = float(centerline.length)
+    tangent_delta = min(1.0, max(0.05, length / 500.0))
+    centers = np.empty((len(stations), 2), dtype=float)
+    normals = np.empty((len(stations), 2), dtype=float)
+    for index, station in enumerate(stations):
+        distance = float(np.clip(station, 0.0, length))
+        center = centerline.interpolate(distance)
+        before = centerline.interpolate(max(0.0, distance - tangent_delta))
+        after = centerline.interpolate(min(length, distance + tangent_delta))
+        tangent = np.array([after.x - before.x, after.y - before.y], dtype=float)
+        magnitude = float(np.linalg.norm(tangent))
+        if magnitude <= 1e-9:
+            tangent = np.array([1.0, 0.0])
+        else:
+            tangent /= magnitude
+        centers[index] = (center.x, center.y)
+        normals[index] = (-tangent[1], tangent[0])
+
+    offsets = np.linspace(-route_width_mm / 2.0, route_width_mm / 2.0, 5)
+    xs = centers[:, 0, None] + normals[:, 0, None] * offsets
+    ys = centers[:, 1, None] + normals[:, 1, None] * offsets
+    sample = getattr(sampler, "sample", sampler)
+    return np.max(np.asarray(sample(xs, ys), dtype=float), axis=1)
+
+
+def drape_route_mesh(
+    mesh: Trimesh,
+    centerline: LineString,
+    surface: TerrainSurface | object,
+    *,
+    route_width_mm: float,
+    visible_height_mm: float,
+    smoothing_distance_mm: float = 1.5,
+) -> Trimesh:
+    """Drape a constant-width route with one terrain height per cross-section.
+
+    The underside follows terrain vertex-by-vertex for continuous support. Top vertices
+    project to the route centerline, sample the full route width, and smooth only along
+    the direction of travel. This prevents terrain triangles from twisting the orange
+    surface from one edge of the route to the other.
+    """
+    if centerline.is_empty or centerline.length <= 0.0:
+        raise ValueError("Route centerline must have positive length")
+    if route_width_mm <= 0.0 or visible_height_mm <= 0.0:
+        raise ValueError("Route width and visible height must be positive")
+    if smoothing_distance_mm < 0.0:
+        raise ValueError("Route smoothing distance cannot be negative")
+
+    result = mesh.copy()
+    sample = getattr(surface, "sample", surface)
+    x = result.vertices[:, 0]
+    y = result.vertices[:, 1]
+    original_z = result.vertices[:, 2].copy()
+    raw_support = np.asarray(sample(x, y), dtype=float)
+    result.vertices[:, 2] = original_z + raw_support
+
+    top_z = float(np.max(original_z))
+    top_indices = np.flatnonzero(np.isclose(original_z, top_z, atol=1e-7))
+    if not len(top_indices):
+        return result
+    stations = np.array(
+        [centerline.project(Point(x[index], y[index])) for index in top_indices],
+        dtype=float,
+    )
+    local_support = _route_cross_section_support(
+        centerline, stations, sample, route_width_mm
+    )
+    if smoothing_distance_mm > 0.0:
+        neighboring_support = [
+            _route_cross_section_support(
+                centerline,
+                np.clip(stations + offset, 0.0, centerline.length),
+                sample,
+                route_width_mm,
+            )
+            for offset in (-smoothing_distance_mm, 0.0, smoothing_distance_mm)
+        ]
+        profile_support = (
+            neighboring_support[0]
+            + 2.0 * neighboring_support[1]
+            + neighboring_support[2]
+        ) / 4.0
+    else:
+        profile_support = local_support
+
+    # Smoothing may raise neighboring valleys but never reduces the requested visible
+    # height over the highest terrain sample in the current cross-section.
+    top_heights = np.maximum(profile_support, local_support) + visible_height_mm
+    result.vertices[top_indices, 2] = top_heights
     return result

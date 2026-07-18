@@ -27,6 +27,9 @@ Notes:
   one multipart object and read the assignments from standard 3MF base materials.
 - Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`. When terrain is enabled, motorway and trunk tops use a print-safe low-pass terrain profile while their undersides remain embedded in the original relief.
 - Route, road, and building heights are visible heights measured above the base plate.
+- On relief maps, route tops use one centerline-derived elevation across the full configured
+  width and smooth only along the direction of travel. The underside remains terrain-draped,
+  keeping the orange route continuous, supported, and 1.2 mm wide by default.
 - Building heights follow the physical map scale by default; only unusually tall outliers are adaptively compressed to the GUI maximum (25 mm by default, 31.75 mm hard limit).
 - Water solids are 0.6 mm thick: 0.4 mm is embedded into white support and 0.2 mm remains exclusively visible. A minimum 0.4 mm white bottom skin prevents water from appearing on the underside.
 - Water is clipped to the same margin-inset printable bounds as route, road, and building layers.

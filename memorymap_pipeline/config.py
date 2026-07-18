@@ -11,6 +11,8 @@ DEFAULT_CONFIG = {
     "landscape": {"map_width": 240.0, "map_height": 190.0},
     "route_height": 2.0,
     "route_width": 1.2,
+    # Route tops share one elevation across their width and smooth only along travel.
+    "route_terrain_smoothing_distance_mm": 1.5,
     "base_thickness": 1.6,
     # overlap raised features into the base; feature heights remain visible heights
     "feature_embed_depth": 0.2,

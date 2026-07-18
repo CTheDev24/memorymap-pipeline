@@ -20,6 +20,7 @@ from memorymap_pipeline.terrain import (
     analyze_terrain,
     build_terrain_mesh,
     drape_mesh,
+    drape_route_mesh,
     terrain_surface_from_grid,
 )
 from memorymap_pipeline.terrain_providers import (
@@ -140,6 +141,50 @@ def test_major_road_smoothing_changes_only_supported_top_vertices() -> None:
     assert smoothed.vertices[1, 2] >= surface.sample(50.0, 50.0) + 0.4
     # Vertices outside the selected major-road footprint are unchanged.
     assert smoothed.vertices[2, 2] == pytest.approx(raw.vertices[2, 2])
+
+
+def test_route_top_uses_one_elevation_across_its_exact_width() -> None:
+    surface = terrain_surface_from_grid(
+        _grid([[100.0, 100.0], [0.0, 0.0]]),
+        width_mm=100.0,
+        height_mm=100.0,
+        horizontal_span_m=1_000.0,
+    )
+    centerline = LineString([(10.0, 50.0), (90.0, 50.0)])
+    route_width = 1.2
+    polygon = centerline.buffer(route_width / 2.0, cap_style=2, join_style=1)
+    feature = route_mesh_from_polygon(polygon, 2.2, -0.2)
+    draped = drape_route_mesh(
+        feature,
+        centerline,
+        surface,
+        route_width_mm=route_width,
+        visible_height_mm=2.0,
+        smoothing_distance_mm=1.5,
+    )
+
+    assert polygon.bounds[3] - polygon.bounds[1] == pytest.approx(route_width)
+    original_top = np.isclose(feature.vertices[:, 2], 2.0)
+    original_bottom = np.isclose(feature.vertices[:, 2], -0.2)
+    for endpoint_x in (10.0, 90.0):
+        endpoint_top = original_top & np.isclose(feature.vertices[:, 0], endpoint_x)
+        endpoint_bottom = original_bottom & np.isclose(feature.vertices[:, 0], endpoint_x)
+        assert np.count_nonzero(endpoint_top) == 2
+        assert np.ptp(draped.vertices[endpoint_top, 2]) == pytest.approx(0.0, abs=1e-7)
+        expected_support = np.max(
+            surface.sample(
+                np.full(5, endpoint_x),
+                np.linspace(50.0 - route_width / 2.0, 50.0 + route_width / 2.0, 5),
+            )
+        )
+        assert draped.vertices[endpoint_top, 2] == pytest.approx(
+            expected_support + 2.0
+        )
+        # The underside still follows the cross-slope and remains embedded in terrain.
+        assert np.ptp(draped.vertices[endpoint_bottom, 2]) > 0.0
+    assert draped.is_watertight
+    assert draped.is_winding_consistent
+    assert len(draped.split(only_watertight=False)) == 1
 
 
 class FixtureProvider:
