@@ -58,6 +58,16 @@ def test_default_registry_matches_daikin_park_by_stable_wikidata_id() -> None:
     assert recipe.closed_roof_band_height_mm == pytest.approx(0.32)
 
 
+def test_default_registry_aligns_tc_energy_upper_crown_by_stable_osm_id() -> None:
+    registry = load_default_landmark_registry()
+    landmark = registry.match(osm_type="way", osm_id=469467449)
+
+    assert landmark is not None
+    assert landmark.key == "tc-energy-upper-crown"
+    assert landmark.tag_corrections == {"roof:orientation": "along"}
+    assert landmark.enhancement is None
+
+
 def test_legacy_retractable_stadium_recipe_remains_supported() -> None:
     document = _document()
     document["landmarks"][0]["enhancement"] = {

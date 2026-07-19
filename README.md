@@ -252,6 +252,12 @@ than serving as descriptive metadata. If a footprint cannot satisfy the selected
 minimum feature sizes, generation falls back to ordinary building massing. Landmark JSON is
 bundled in both Python distributions and the standalone Windows executable.
 
+The registry also carries narrowly scoped source-data corrections for landmark components.
+For example, TC Energy Center's upper crown is matched by stable OSM way ID `469467449` and
+has its gabled ridge aligned with the two lower crown stages. This prevents the upper stage
+from presenting as a flat trapezoidal cap while leaving the generic interpretation of
+`roof:orientation` unchanged for other buildings and cities.
+
 To build a distributable Windows executable, install the packaging extra and run:
 
 ```powershell

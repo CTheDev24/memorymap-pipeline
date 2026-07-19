@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "registry_version": "2026.1",
+  "registry_version": "2026.2",
   "landmarks": [
     {
       "key": "daikin-park",
@@ -22,6 +22,18 @@
           "closed_roof_band_width_mm": 1.2,
           "closed_roof_band_height_mm": 0.32
         }
+      }
+    },
+    {
+      "key": "tc-energy-upper-crown",
+      "display_name": "TC Energy Center upper crown",
+      "aliases": ["Bank of America Center upper crown"],
+      "identifiers": {
+        "wikidata": [],
+        "osm": {"way": [469467449]}
+      },
+      "tag_corrections": {
+        "roof:orientation": "along"
       }
     }
   ]
