@@ -60,3 +60,11 @@ def test_major_highways_mark_their_mesh_for_terrain_smoothing(tmp_path) -> None:
     region = mesh.metadata.get("terrain_smoothing_region")
     assert region is not None
     assert region.covers(Point(frame.print_width_mm / 2.0, frame.print_height_mm / 2.0))
+    corridors = mesh.metadata.get("terrain_profile_corridors")
+    assert corridors is not None
+    assert len(corridors) == 1
+    assert corridors[0].classification == "motorway"
+    assert corridors[0].width_mm == 2.4
+    assert corridors[0].region.covers(
+        Point(frame.print_width_mm / 2.0, frame.print_height_mm / 2.0)
+    )

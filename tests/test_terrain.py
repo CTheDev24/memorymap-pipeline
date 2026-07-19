@@ -1,5 +1,6 @@
 from pathlib import Path
 from io import BytesIO
+from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -20,6 +21,7 @@ from memorymap_pipeline.terrain import (
     analyze_terrain,
     build_terrain_mesh,
     drape_mesh,
+    drape_road_mesh,
     drape_route_mesh,
     terrain_surface_from_grid,
 )
@@ -185,6 +187,57 @@ def test_route_top_uses_one_elevation_across_its_exact_width() -> None:
     assert draped.is_watertight
     assert draped.is_winding_consistent
     assert len(draped.split(only_watertight=False)) == 1
+
+
+def test_major_road_has_flat_cross_sections_and_directional_smoothing() -> None:
+    class RidgeSurface:
+        @staticmethod
+        def sample(x_mm, y_mm):
+            x = np.asarray(x_mm, dtype=float)
+            y = np.asarray(y_mm, dtype=float)
+            cross_slope = y * 0.01
+            sharp_ridge = 1.5 * np.exp(-((x - 50.0) / 1.5) ** 2)
+            return cross_slope + sharp_ridge
+
+    centerline = LineString([(10.0, 50.0), (90.0, 50.0)])
+    width = 2.4
+    region = centerline.buffer(width / 2.0, cap_style=2, join_style=1)
+    feature = route_mesh_from_polygon(region, 1.0, -0.2)
+    feature = refine_mesh_edges(feature, 2.0, region=region)
+    corridor = SimpleNamespace(
+        centerline=centerline,
+        region=region,
+        width_mm=width,
+        classification="motorway",
+    )
+
+    draped = drape_road_mesh(
+        feature,
+        RidgeSurface(),
+        (corridor,),
+        visible_height_mm=0.8,
+        minimum_visible_height_mm=0.4,
+        smoothing_distances_mm={"motorway": 6.0},
+    )
+
+    original_top = np.isclose(feature.vertices[:, 2], 0.8)
+    original_bottom = np.isclose(feature.vertices[:, 2], -0.2)
+    ridge_top = original_top & np.isclose(feature.vertices[:, 0], 50.0)
+    ridge_bottom = original_bottom & np.isclose(feature.vertices[:, 0], 50.0)
+    assert np.count_nonzero(ridge_top) >= 2
+    assert np.ptp(draped.vertices[ridge_top, 2]) == pytest.approx(0.0, abs=1e-7)
+    assert np.ptp(draped.vertices[ridge_bottom, 2]) > 0.0
+    local_support = np.max(
+        RidgeSurface.sample(
+            np.full(5, 50.0),
+            np.linspace(50.0 - width / 2.0, 50.0 + width / 2.0, 5),
+        )
+    )
+    raw_top = local_support + 0.8
+    assert np.all(draped.vertices[ridge_top, 2] < raw_top)
+    assert np.all(draped.vertices[ridge_top, 2] >= local_support + 0.4)
+    assert draped.is_watertight
+    assert draped.is_winding_consistent
 
 
 def test_route_refinement_removes_long_flare_faces_without_opening_mesh() -> None:

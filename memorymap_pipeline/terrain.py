@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Mapping, Protocol
 
 import numpy as np
 from shapely import contains_xy
@@ -92,6 +92,13 @@ class ElevationProvider(Protocol):
         grid_size: tuple[int, int],
         cache_dir: Path,
     ) -> ElevationGrid: ...
+
+
+class RoadProfileCorridor(Protocol):
+    centerline: LineString
+    region: BaseGeometry
+    width_mm: float
+    classification: str
 
 
 def analyze_terrain(
@@ -371,4 +378,91 @@ def drape_route_mesh(
     # height over the highest terrain sample in the current cross-section.
     top_heights = np.maximum(profile_support, local_support) + visible_height_mm
     result.vertices[top_indices, 2] = top_heights
+    return result
+
+
+def drape_road_mesh(
+    mesh: Trimesh,
+    surface: TerrainSurface | object,
+    corridors: tuple[RoadProfileCorridor, ...],
+    *,
+    visible_height_mm: float,
+    minimum_visible_height_mm: float,
+    smoothing_distances_mm: Mapping[str, float],
+) -> Trimesh:
+    """Drape roads while directionally grading selected major-road corridors.
+
+    Minor roads retain vertex-level terrain relief. A selected freeway or highway uses
+    one terrain support value across its width, smoothed only along its centerline. Its
+    underside still follows raw terrain so the resulting solid remains supported. At
+    junctions the highest applicable profile wins, avoiding surface seams.
+    """
+    if visible_height_mm <= 0.0:
+        raise ValueError("Road visible height must be positive")
+    if not 0.0 <= minimum_visible_height_mm <= visible_height_mm:
+        raise ValueError(
+            "Minimum road height must be between zero and the visible road height"
+        )
+
+    result = mesh.copy()
+    sample = getattr(surface, "sample", surface)
+    x = result.vertices[:, 0]
+    y = result.vertices[:, 1]
+    original_z = result.vertices[:, 2].copy()
+    raw_support = np.asarray(sample(x, y), dtype=float)
+    result.vertices[:, 2] = original_z + raw_support
+
+    top_z = float(np.max(original_z))
+    top_indices = np.flatnonzero(np.isclose(original_z, top_z, atol=1e-7))
+    if not len(top_indices) or not corridors:
+        return result
+
+    profiled_heights = np.full(len(top_indices), -np.inf, dtype=float)
+    top_x = x[top_indices]
+    top_y = y[top_indices]
+    for corridor in corridors:
+        distance = float(smoothing_distances_mm.get(corridor.classification, 0.0))
+        if distance <= 0.0 or corridor.centerline.is_empty:
+            continue
+        selected = contains_xy(corridor.region.buffer(1e-7), top_x, top_y)
+        selected_positions = np.flatnonzero(selected)
+        if not len(selected_positions):
+            continue
+        stations = np.array(
+            [
+                corridor.centerline.project(Point(top_x[index], top_y[index]))
+                for index in selected_positions
+            ],
+            dtype=float,
+        )
+        local_support = _route_cross_section_support(
+            corridor.centerline,
+            stations,
+            sample,
+            corridor.width_mm,
+        )
+        neighboring_support = [
+            _route_cross_section_support(
+                corridor.centerline,
+                np.clip(stations + offset, 0.0, corridor.centerline.length),
+                sample,
+                corridor.width_mm,
+            )
+            for offset in (-distance, 0.0, distance)
+        ]
+        smooth_support = (
+            neighboring_support[0]
+            + 2.0 * neighboring_support[1]
+            + neighboring_support[2]
+        ) / 4.0
+        desired = np.maximum(
+            smooth_support + visible_height_mm,
+            local_support + minimum_visible_height_mm,
+        )
+        profiled_heights[selected_positions] = np.maximum(
+            profiled_heights[selected_positions], desired
+        )
+
+    profiled = np.isfinite(profiled_heights)
+    result.vertices[top_indices[profiled], 2] = profiled_heights[profiled]
     return result
