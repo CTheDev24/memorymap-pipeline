@@ -2,7 +2,16 @@
 
 This project converts a GPX track into a Bambu-ready 3MF memory map.
 
-The generated model can contain separate base, route, road, and building objects.
+The generated model can contain separate base/terrain, route, road, building, and water objects.
+
+## Project documentation
+
+- [Current development status](docs/DEVELOPMENT_STATUS.md) records the production baseline,
+  active pull requests, print profile, known limitations, and planned integration order.
+- [.github/copilot-instructions.md](.github/copilot-instructions.md) gives GitHub Copilot and
+  other coding assistants the architectural constraints and validation expectations needed
+  to make safe changes in this repository.
+- This README remains the user-facing installation, configuration, and operating guide.
 
 ## Installation
 
