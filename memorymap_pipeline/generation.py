@@ -35,6 +35,7 @@ from .terrain import (
     terrain_surface_from_grid,
 )
 from .terrain_providers import TerrariumProvider, Usgs3depProvider
+from .terrain_presets import preset_settings
 from .water import (
     build_terrain_mesh_with_water,
     build_vector_water_mesh,
@@ -125,6 +126,11 @@ class GenerationResult:
 
 def _merged_config(overrides: dict[str, Any]) -> dict[str, Any]:
     config = deepcopy(DEFAULT_CONFIG)
+    for key, value in preset_settings(overrides.get("terrain_preset")).items():
+        if isinstance(value, dict) and isinstance(config.get(key), dict):
+            config[key].update(value)
+        else:
+            config[key] = value
     for key, value in overrides.items():
         if isinstance(value, dict) and isinstance(config.get(key), dict):
             config[key].update(value)

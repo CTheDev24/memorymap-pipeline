@@ -38,6 +38,29 @@ Notes:
 - Water solids are 0.6 mm thick: 0.4 mm is embedded into white support and 0.2 mm remains exclusively visible. A minimum 0.4 mm white bottom skin prevents water from appearing on the underside.
 - Water is clipped to the same margin-inset printable bounds as route, road, and building layers.
 - USGS terrain requests are cached and retried, then fall back to the public global AWS Terrarium DEM; a clearly reported flat base is used only if both elevation services fail.
+
+### Terrain presets and repeatable validation
+
+The desktop Terrain settings include three starting presets. **Flat Urban** keeps subtle
+city/river variation while protecting road legibility, **Rolling Terrain** balances hills
+with supported overlays, and **Mountain / Coast** allows up to 4 mm of relief and uses
+stronger direction-of-travel grading for routes and major highways. Selecting a preset
+fills safe defaults; Maximum relief and Water recess remain editable. Config/API clients
+can set `terrain_preset` to `flat-urban`, `rolling-terrain`, or `mountain-coast`. Explicit
+config values always override the selected preset. Omitting the key retains the v2 adaptive
+defaults.
+
+Offline fixtures in `tests/fixtures/terrain_profiles.json` cover a flat river, rolling
+hills, and a mountain/coast transect without contacting USGS or OSM. Acceptance tests require:
+
+- relief within the preset bounds and a watertight terrain solid with a 1.6 mm base;
+- a single continuous, terrain-supported 1.2 mm route with approximately 2 mm visible height;
+- directionally smoothed motorway tops whose undersides remain on raw terrain; and
+- recessed 0.6 mm water with structural terrain support beneath it.
+
+These checks establish geometric safety, not final appearance. Each preset still needs a
+representative Bambu Studio slice and physical print before its visual relief, bridge
+behavior, color changes, and adhesion can be considered production-qualified.
 - Raised features overlap the base by `feature_embed_depth` (0.2 mm by default) to keep short geometry printable without changing its visible height.
 - Export now stops when a component is non-manifold, has inconsistent face winding or
   non-positive volume, or has no geometric support path to the base. Roofs may be supported
