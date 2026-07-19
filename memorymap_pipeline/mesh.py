@@ -149,6 +149,9 @@ def refine_mesh_edges(
     mesh: Trimesh,
     maximum_edge_mm: float,
     region: BaseGeometry | None = None,
+    *,
+    maximum_iterations: int = 16,
+    allow_partial: bool = False,
 ) -> Trimesh:
     """Conformingly subdivide selected mesh edges to a length limit.
 
@@ -159,10 +162,20 @@ def refine_mesh_edges(
     """
     if maximum_edge_mm <= 0.0:
         raise ValueError("Maximum edge length must be positive")
+    if maximum_iterations <= 0:
+        raise ValueError("Maximum refinement iterations must be positive")
+
+    def result_mesh(*, incomplete: bool = False) -> Trimesh:
+        result = Trimesh(vertices=vertices, faces=faces, process=False)
+        result.remove_unreferenced_vertices()
+        result.metadata.update(mesh.metadata or {})
+        if incomplete:
+            result.metadata["edge_refinement_incomplete"] = True
+        return result
 
     vertices = np.asarray(mesh.vertices, dtype=float).copy()
     faces = np.asarray(mesh.faces, dtype=np.int64).copy()
-    for _iteration in range(16):
+    for _iteration in range(maximum_iterations):
         edge_pairs = np.stack(
             (faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]), axis=1
         )
@@ -196,10 +209,7 @@ def refine_mesh_edges(
             )
             split_unique &= edge_in_region
         if not np.any(split_unique):
-            result = Trimesh(vertices=vertices, faces=faces, process=False)
-            result.remove_unreferenced_vertices()
-            result.metadata.update(mesh.metadata or {})
-            return result
+            return result_mesh()
 
         midpoint_indices = np.full(len(unique_edges), -1, dtype=np.int64)
         selected_edges = unique_edges[split_unique]
@@ -235,7 +245,9 @@ def refine_mesh_edges(
                 )
         faces = np.asarray(refined_faces, dtype=np.int64)
 
-    raise ValueError("Route mesh refinement exceeded the iteration limit")
+    if allow_partial:
+        return result_mesh(incomplete=True)
+    raise ValueError("Mesh edge refinement exceeded the iteration limit")
 
 
 def center_meshes_to_base(meshes: list[Trimesh], width_mm: float, height_mm: float) -> None:

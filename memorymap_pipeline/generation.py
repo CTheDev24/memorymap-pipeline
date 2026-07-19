@@ -407,7 +407,12 @@ def generate_memory_map(
                     roads_mesh,
                     float(config.get("road_terrain_max_edge_mm", 4.0)),
                     region=smoothing_region,
+                    maximum_iterations=int(
+                        config.get("road_terrain_refinement_passes", 5)
+                    ),
+                    allow_partial=True,
                 )
+                roads_mesh.metadata.pop("edge_refinement_incomplete", None)
                 roads_mesh = drape_road_mesh(
                     roads_mesh,
                     feature_support_at,

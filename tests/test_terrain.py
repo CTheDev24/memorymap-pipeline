@@ -259,6 +259,23 @@ def test_route_refinement_removes_long_flare_faces_without_opening_mesh() -> Non
     assert len(refined.split(only_watertight=False)) == 1
 
 
+def test_partial_edge_refinement_returns_watertight_mesh_at_safety_limit() -> None:
+    feature = route_mesh_from_polygon(box(0.0, 0.0, 100.0, 2.4), 1.0, -0.2)
+
+    partial = refine_mesh_edges(
+        feature,
+        1.0,
+        maximum_iterations=1,
+        allow_partial=True,
+    )
+
+    assert partial.metadata["edge_refinement_incomplete"] is True
+    assert partial.is_watertight
+    assert partial.is_winding_consistent
+    with pytest.raises(ValueError, match="Mesh edge refinement exceeded"):
+        refine_mesh_edges(feature, 1.0, maximum_iterations=1)
+
+
 class FixtureProvider:
     name = "fixture"
 
