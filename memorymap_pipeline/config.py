@@ -51,6 +51,14 @@ DEFAULT_CONFIG = {
     ],
     "road_terrain_smoothing_radius_mm": 2.0,
     "road_terrain_min_visible_height_mm": 0.4,
+    "road_terrain_max_edge_mm": 4.0,
+    "road_terrain_refinement_passes": 5,
+    "road_terrain_smoothing_distances_mm": {
+        "motorway": 6.0,
+        "motorway_link": 4.0,
+        "trunk": 5.0,
+        "trunk_link": 3.5,
+    },
     # widths in mm by highway type
     "road_widths": {
         "motorway": 2.4,

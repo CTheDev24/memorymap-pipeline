@@ -30,6 +30,7 @@ from .terrain import (
     ElevationGrid,
     build_terrain_mesh,
     drape_mesh,
+    drape_road_mesh,
     drape_route_mesh,
     terrain_surface_from_grid,
 )
@@ -398,17 +399,44 @@ def generate_memory_map(
             smoothing_region = roads_mesh.metadata.pop(
                 "terrain_smoothing_region", None
             )
-            roads_mesh = drape_mesh(
-                roads_mesh,
-                feature_support_at,
-                smooth_top_region=smoothing_region,
-                smoothing_radius_mm=float(
-                    config.get("road_terrain_smoothing_radius_mm", 2.0)
-                ),
-                minimum_visible_height_mm=float(
-                    config.get("road_terrain_min_visible_height_mm", 0.4)
-                ),
+            profile_corridors = roads_mesh.metadata.pop(
+                "terrain_profile_corridors", ()
             )
+            if smoothing_region is not None and profile_corridors:
+                roads_mesh = refine_mesh_edges(
+                    roads_mesh,
+                    float(config.get("road_terrain_max_edge_mm", 4.0)),
+                    region=smoothing_region,
+                    maximum_iterations=int(
+                        config.get("road_terrain_refinement_passes", 5)
+                    ),
+                    allow_partial=True,
+                )
+                roads_mesh.metadata.pop("edge_refinement_incomplete", None)
+                roads_mesh = drape_road_mesh(
+                    roads_mesh,
+                    feature_support_at,
+                    profile_corridors,
+                    visible_height_mm=float(config["road_height"]),
+                    minimum_visible_height_mm=float(
+                        config.get("road_terrain_min_visible_height_mm", 0.4)
+                    ),
+                    smoothing_distances_mm=config.get(
+                        "road_terrain_smoothing_distances_mm", {}
+                    ),
+                )
+            else:
+                roads_mesh = drape_mesh(
+                    roads_mesh,
+                    feature_support_at,
+                    smooth_top_region=smoothing_region,
+                    smoothing_radius_mm=float(
+                        config.get("road_terrain_smoothing_radius_mm", 2.0)
+                    ),
+                    minimum_visible_height_mm=float(
+                        config.get("road_terrain_min_visible_height_mm", 0.4)
+                    ),
+                )
     progress(55, "Road mesh complete")
 
     unioned_buildings = None

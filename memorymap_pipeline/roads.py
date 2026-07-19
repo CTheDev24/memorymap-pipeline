@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterable
 import logging
 
@@ -10,6 +11,14 @@ import numpy as np
 from .projection import apply_transform, project_lonlat_array
 from .geometry import repair_polygon
 from .mesh import route_mesh_from_polygon
+
+
+@dataclass(frozen=True)
+class RoadTerrainCorridor:
+    centerline: geom.LineString
+    region: geom.base.BaseGeometry
+    width_mm: float
+    classification: str
 
 
 def _normalize_highway_value(highway):
@@ -96,6 +105,8 @@ def download_and_build_roads(
 
     buffered_polys = []
     smoothing_polys = []
+    smoothing_corridors = []
+    smoothing_corridor_keys = set()
     smoothing_types = set(terrain_smoothing_types)
 
     # Create clipping boundary to keep roads within map bounds
@@ -139,11 +150,23 @@ def download_and_build_roads(
                     buffered_polys.append(clipped)
                     if hw_norm in smoothing_types:
                         smoothing_polys.append(clipped)
+                        key = (hw_norm, line.normalize().wkb)
+                        if key not in smoothing_corridor_keys:
+                            smoothing_corridor_keys.add(key)
+                            smoothing_corridors.append(
+                                RoadTerrainCorridor(line, clipped, width_mm, hw_norm)
+                            )
             except Exception:
                 # If clipping fails, keep unclipped
                 buffered_polys.append(poly)
                 if hw_norm in smoothing_types:
                     smoothing_polys.append(poly)
+                    key = (hw_norm, line.normalize().wkb)
+                    if key not in smoothing_corridor_keys:
+                        smoothing_corridor_keys.add(key)
+                        smoothing_corridors.append(
+                            RoadTerrainCorridor(line, poly, width_mm, hw_norm)
+                        )
 
     if not buffered_polys:
         return None, None
@@ -187,6 +210,9 @@ def download_and_build_roads(
             final_mesh.metadata["terrain_smoothing_region"] = ops.unary_union(
                 smoothing_polys
             ).intersection(clip_box)
+            final_mesh.metadata["terrain_profile_corridors"] = tuple(
+                smoothing_corridors
+            )
 
     if debug:
         try:

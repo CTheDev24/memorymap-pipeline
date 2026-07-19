@@ -5,6 +5,8 @@ import re
 import zipfile
 
 import numpy as np
+from shapely import contains_xy
+from shapely.geometry.base import BaseGeometry
 from trimesh import Trimesh
 from trimesh.creation import extrude_polygon
 
@@ -143,19 +145,37 @@ def route_mesh_from_polygon(polygon, height_mm: float, z_offset: float = 0.0) ->
     return mesh
 
 
-def refine_mesh_edges(mesh: Trimesh, maximum_edge_mm: float) -> Trimesh:
-    """Conformingly subdivide a mesh until every edge meets a length limit.
+def refine_mesh_edges(
+    mesh: Trimesh,
+    maximum_edge_mm: float,
+    region: BaseGeometry | None = None,
+    *,
+    maximum_iterations: int = 16,
+    allow_partial: bool = False,
+) -> Trimesh:
+    """Conformingly subdivide selected mesh edges to a length limit.
 
     Each selected shared edge is split in every incident face during the same pass.
     This preserves watertight topology and avoids the T-junctions produced by
     independently refining individual triangles. Midpoints retain the XY footprint.
+    Without ``region`` every edge is eligible; otherwise refinement stays local.
     """
     if maximum_edge_mm <= 0.0:
         raise ValueError("Maximum edge length must be positive")
+    if maximum_iterations <= 0:
+        raise ValueError("Maximum refinement iterations must be positive")
+
+    def result_mesh(*, incomplete: bool = False) -> Trimesh:
+        result = Trimesh(vertices=vertices, faces=faces, process=False)
+        result.remove_unreferenced_vertices()
+        result.metadata.update(mesh.metadata or {})
+        if incomplete:
+            result.metadata["edge_refinement_incomplete"] = True
+        return result
 
     vertices = np.asarray(mesh.vertices, dtype=float).copy()
     faces = np.asarray(mesh.faces, dtype=np.int64).copy()
-    for _iteration in range(16):
+    for _iteration in range(maximum_iterations):
         edge_pairs = np.stack(
             (faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]), axis=1
         )
@@ -167,11 +187,29 @@ def refine_mesh_edges(mesh: Trimesh, maximum_edge_mm: float) -> Trimesh:
             vertices[unique_edges[:, 1]] - vertices[unique_edges[:, 0]], axis=1
         )
         split_unique = edge_lengths > maximum_edge_mm + 1e-9
+        if region is not None:
+            buffered_region = region.buffer(1e-7)
+            face_vertices = vertices[faces]
+            centroids = face_vertices.mean(axis=1)
+            face_in_region = contains_xy(
+                buffered_region, centroids[:, 0], centroids[:, 1]
+            ) | np.any(
+                contains_xy(
+                    buffered_region,
+                    face_vertices[:, :, 0].ravel(),
+                    face_vertices[:, :, 1].ravel(),
+                ).reshape(-1, 3),
+                axis=1,
+            )
+            edge_in_region = np.zeros(len(unique_edges), dtype=bool)
+            np.logical_or.at(
+                edge_in_region,
+                inverse,
+                np.repeat(face_in_region, 3),
+            )
+            split_unique &= edge_in_region
         if not np.any(split_unique):
-            result = Trimesh(vertices=vertices, faces=faces, process=False)
-            result.remove_unreferenced_vertices()
-            result.metadata.update(mesh.metadata or {})
-            return result
+            return result_mesh()
 
         midpoint_indices = np.full(len(unique_edges), -1, dtype=np.int64)
         selected_edges = unique_edges[split_unique]
@@ -207,7 +245,9 @@ def refine_mesh_edges(mesh: Trimesh, maximum_edge_mm: float) -> Trimesh:
                 )
         faces = np.asarray(refined_faces, dtype=np.int64)
 
-    raise ValueError("Route mesh refinement exceeded the iteration limit")
+    if allow_partial:
+        return result_mesh(incomplete=True)
+    raise ValueError("Mesh edge refinement exceeded the iteration limit")
 
 
 def center_meshes_to_base(meshes: list[Trimesh], width_mm: float, height_mm: float) -> None:

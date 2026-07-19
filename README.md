@@ -25,7 +25,9 @@ Notes:
   component parts: `Base_White` (white), `Route_Accent` (orange), `Roads_Black`
   (black), and `Buildings_Verification` (gray). Compatible slicers import the model as
   one multipart object and read the assignments from standard 3MF base materials.
-- Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`. When terrain is enabled, motorway and trunk tops use a print-safe low-pass terrain profile while their undersides remain embedded in the original relief.
+- Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`. When terrain is enabled, motorways and trunks retain one elevation across each cross-section and use classification-specific smoothing only along travel. Their undersides remain embedded in the original relief; minor streets continue following terrain directly.
+- Major-road face refinement is bounded to five conforming passes so dense city networks
+  remain watertight without allowing refinement complexity to abort map generation.
 - Route, road, and building heights are visible heights measured above the base plate.
 - On relief maps, route tops use one centerline-derived elevation across the full configured
   width and smooth only along the direction of travel. The underside remains terrain-draped,
