@@ -379,7 +379,12 @@ def export_3mf(
     roads_mesh: Trimesh | None = None,
     buildings_mesh: Trimesh | None = None,
     water_mesh: Trimesh | None = None,
-) -> None:
+    *,
+    preflight_report=None,
+    print_size_mm: tuple[float, float] | None = None,
+    margin_mm: float | None = None,
+    declared_feature_widths_mm: dict[str, float] | None = None,
+):
     from trimesh.exchange.export import export_mesh
 
     from .printability import audit_printability
@@ -433,15 +438,20 @@ def export_3mf(
         water_mesh.visual.face_colors = MESH_COLORS["water"]
         meshes.append(water_mesh)
 
-    audit_printability(
-        {
-            "base": base_mesh,
-            "route": route_mesh,
-            "roads": roads_mesh,
-            "buildings": buildings_mesh,
-            "water": water_mesh,
-        }
-    ).raise_for_errors()
+    if preflight_report is None:
+        preflight_report = audit_printability(
+            {
+                "base": base_mesh,
+                "route": route_mesh,
+                "roads": roads_mesh,
+                "buildings": buildings_mesh,
+                "water": water_mesh,
+            },
+            print_size_mm=print_size_mm,
+            margin_mm=margin_mm,
+            declared_feature_widths_mm=declared_feature_widths_mm,
+        )
+    preflight_report.raise_for_errors()
 
     export_mesh(
         meshes,
@@ -449,3 +459,4 @@ def export_3mf(
         file_type="3mf",
     )
     _apply_3mf_materials(output_path)
+    return preflight_report
