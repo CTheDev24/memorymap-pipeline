@@ -7,6 +7,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 class GenerationWorker(QObject):
     progress = Signal(int, str)
     warning = Signal(str)
+    preflight = Signal(dict)
     completed = Signal(str)
     failed = Signal(str)
     finished = Signal()
@@ -22,6 +23,7 @@ class GenerationWorker(QObject):
 
             request = GenerationRequest(**self.request_data)
             result = generate_memory_map(request, progress_callback=self._progress)
+            self.preflight.emit(result.preflight.to_dict())
             for warning in result.warnings:
                 self.warning.emit(str(warning))
             self.completed.emit(str(result.output_path))

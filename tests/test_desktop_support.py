@@ -140,3 +140,24 @@ def test_frame_zoom_preserves_center_and_scales_coverage():
     assert window.current_frame["coverage_width_m"] == pytest.approx(1_100.0)
     assert window.current_frame["coverage_height_m"] == pytest.approx(880.0)
     assert scripts and "setFrame" in scripts[-1]
+
+
+def test_preflight_formatter_produces_concise_colored_summary():
+    pytest.importorskip("PySide6")
+    from memorymap_pipeline.desktop.window import format_preflight_report
+
+    heading, details, color = format_preflight_report(
+        {
+            "status": "red",
+            "issues": [
+                {
+                    "severity": "error",
+                    "message": "route contains two disconnected printable sections",
+                }
+            ],
+        }
+    )
+
+    assert heading == "RED preflight"
+    assert "ERROR: route contains" in details
+    assert color == "#c62828"

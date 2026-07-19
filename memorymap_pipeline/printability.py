@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Literal, Mapping
 
 import numpy as np
 from shapely.geometry import Polygon
@@ -15,6 +15,28 @@ class PrintabilityIssue:
     code: str
     layer: str
     message: str
+    severity: Literal["warning", "error"] = "error"
+    blocking: bool = False
+
+
+@dataclass(frozen=True)
+class PrintabilityProfile:
+    """Printer-aware thresholds used by the production preflight audit."""
+
+    nozzle_diameter_mm: float = 0.4
+    layer_height_mm: float = 0.16
+    minimum_xy_feature_mm: float = 0.8
+    minimum_z_feature_mm: float = 0.32
+
+    def __post_init__(self) -> None:
+        values = (
+            self.nozzle_diameter_mm,
+            self.layer_height_mm,
+            self.minimum_xy_feature_mm,
+            self.minimum_z_feature_mm,
+        )
+        if any(value <= 0 for value in values):
+            raise ValueError("Printability profile dimensions must be positive")
 
 
 @dataclass(frozen=True)
@@ -22,13 +44,52 @@ class PrintabilityReport:
     issues: tuple[PrintabilityIssue, ...]
 
     @property
+    def status(self) -> Literal["green", "yellow", "red"]:
+        if any(issue.severity == "error" for issue in self.issues):
+            return "red"
+        if self.issues:
+            return "yellow"
+        return "green"
+
+    @property
     def printable(self) -> bool:
         return not self.issues
 
+    @property
+    def exportable(self) -> bool:
+        return not any(issue.blocking for issue in self.issues)
+
+    @property
+    def blocking_issues(self) -> tuple[PrintabilityIssue, ...]:
+        return tuple(issue for issue in self.issues if issue.blocking)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "exportable": self.exportable,
+            "issues": [
+                {
+                    "code": issue.code,
+                    "layer": issue.layer,
+                    "message": issue.message,
+                    "severity": issue.severity,
+                    "blocking": issue.blocking,
+                }
+                for issue in self.issues
+            ],
+        }
+
+    def summary(self) -> str:
+        if not self.issues:
+            return "GREEN - no printability issues detected"
+        errors = sum(issue.severity == "error" for issue in self.issues)
+        warnings = len(self.issues) - errors
+        return f"{self.status.upper()} - {errors} error(s), {warnings} warning(s)"
+
     def raise_for_errors(self) -> None:
-        if self.printable:
+        if self.exportable:
             return
-        details = "; ".join(issue.message for issue in self.issues)
+        details = "; ".join(issue.message for issue in self.blocking_issues)
         raise ValueError(f"3MF printability validation failed: {details}")
 
 
@@ -108,9 +169,26 @@ def _triangle_height(triangle: np.ndarray, x: float, y: float) -> float | None:
     )
 
 
+def _component_xy_width(mesh: Trimesh, component: _Component) -> float:
+    """Return a conservative oriented XY width for an isolated shell."""
+    vertex_indices = np.unique(mesh.faces[component.face_indices].reshape(-1))
+    points = np.asarray(mesh.vertices[vertex_indices, :2], dtype=float)
+    if len(points) < 3:
+        return 0.0
+    centered = points - points.mean(axis=0)
+    covariance = centered.T @ centered
+    _, axes = np.linalg.eigh(covariance)
+    extents = np.ptp(centered @ axes, axis=0)
+    return float(np.min(extents))
+
+
 def audit_printability(
     meshes: Mapping[str, Trimesh | None],
     *,
+    profile: PrintabilityProfile | None = None,
+    print_size_mm: tuple[float, float] | None = None,
+    margin_mm: float | None = None,
+    declared_feature_widths_mm: Mapping[str, float] | None = None,
     contact_tolerance_mm: float = 0.03,
     maximum_overlap_mm: float = 5.0,
     maximum_samples_per_component: int = 96,
@@ -121,13 +199,27 @@ def audit_printability(
     a shell may contact or overlap the base, or may be supported by another shell which
     ultimately contacts the base. Cycles of mutually touching floating shells do not pass.
     """
+    profile = profile or PrintabilityProfile()
+    declared_feature_widths_mm = declared_feature_widths_mm or {}
     active = {name: mesh for name, mesh in meshes.items() if mesh is not None}
     issues: list[PrintabilityIssue] = []
     component_lookup: dict[tuple[str, int], _Component] = {}
     face_components: dict[str, np.ndarray] = {}
     invalid_coordinates = False
 
+    if not active:
+        return PrintabilityReport(
+            (PrintabilityIssue("empty_model", "model", "No mesh geometry was generated", blocking=True),)
+        )
+
     for layer, mesh in active.items():
+        if len(mesh.vertices) == 0 or len(mesh.faces) == 0:
+            issues.append(
+                PrintabilityIssue(
+                    "empty_geometry", layer, f"{layer} contains no printable triangles", blocking=True
+                )
+            )
+            continue
         if not np.isfinite(mesh.vertices).all():
             invalid_coordinates = True
             issues.append(
@@ -135,9 +227,25 @@ def audit_printability(
                     "invalid_coordinates",
                     layer,
                     f"{layer} contains invalid coordinates",
+                    blocking=True,
                 )
             )
             continue
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        repeated = np.any(
+            (faces[:, 0] == faces[:, 1])
+            | (faces[:, 1] == faces[:, 2])
+            | (faces[:, 2] == faces[:, 0])
+        )
+        degenerate_count = int(np.count_nonzero(np.asarray(mesh.area_faces) <= 1e-10))
+        if repeated or degenerate_count:
+            issues.append(
+                PrintabilityIssue(
+                    "degenerate_faces",
+                    layer,
+                    f"{layer} contains {degenerate_count} zero-area face(s)",
+                )
+            )
         edge_counts = np.bincount(mesh.edges_unique_inverse)
         boundary_edges = int(np.count_nonzero(edge_counts == 1))
         overused_edges = int(np.count_nonzero(edge_counts > 2))
@@ -170,7 +278,112 @@ def audit_printability(
         face_components[layer] = face_component
         component_lookup.update((component.key, component) for component in components)
 
-    if invalid_coordinates or "base" not in active:
+        declared_width = declared_feature_widths_mm.get(layer)
+        if declared_width is not None and declared_width < profile.minimum_xy_feature_mm:
+            issues.append(
+                PrintabilityIssue(
+                    "thin_xy_feature",
+                    layer,
+                    f"{layer} is configured at {declared_width:.2f} mm; the "
+                    f"{profile.nozzle_diameter_mm:.1f} mm nozzle profile recommends "
+                    f"{profile.minimum_xy_feature_mm:.2f} mm",
+                    severity="warning",
+                )
+            )
+
+        if layer not in {"base", "route", "roads"}:
+            thin_widths = [
+                width
+                for component in components
+                if (width := _component_xy_width(mesh, component))
+                < profile.minimum_xy_feature_mm - 1e-6
+            ]
+            if thin_widths:
+                issues.append(
+                    PrintabilityIssue(
+                        "thin_xy_shell",
+                        layer,
+                        f"{layer} contains {len(thin_widths)} isolated shell(s) narrower "
+                        f"than {profile.minimum_xy_feature_mm:.2f} mm",
+                        severity="warning",
+                    )
+                )
+
+        z_span = float(np.ptp(mesh.vertices[:, 2]))
+        if layer != "base" and z_span < profile.minimum_z_feature_mm - 1e-6:
+            issues.append(
+                PrintabilityIssue(
+                    "thin_z_feature",
+                    layer,
+                    f"{layer} is only {z_span:.2f} mm tall; the profile recommends "
+                    f"at least {profile.minimum_z_feature_mm:.2f} mm",
+                    severity="warning",
+                )
+            )
+
+        if print_size_mm is not None and layer != "base":
+            width, height = print_size_mm
+            allowed_margin = max(0.0, float(margin_mm or 0.0))
+            bounds = mesh.bounds
+            tolerance = 0.03
+            if (
+                bounds[0, 0] < allowed_margin - tolerance
+                or bounds[0, 1] < allowed_margin - tolerance
+                or bounds[1, 0] > width - allowed_margin + tolerance
+                or bounds[1, 1] > height - allowed_margin + tolerance
+            ):
+                issues.append(
+                    PrintabilityIssue(
+                        "outside_printable_margin",
+                        layer,
+                        f"{layer} extends outside the {allowed_margin:.1f} mm printable margin",
+                        severity="warning",
+                    )
+                )
+
+    route_components = [
+        component for component in component_lookup.values() if component.layer == "route"
+    ]
+    meaningful_route_components = [
+        component for component in route_components if len(component.face_indices) >= 4
+    ]
+    if len(meaningful_route_components) > 1:
+        issues.append(
+            PrintabilityIssue(
+                "route_discontinuity",
+                "route",
+                f"route contains {len(meaningful_route_components)} disconnected printable sections",
+            )
+        )
+
+    base_mesh = active.get("base")
+    if base_mesh is not None and len(base_mesh.vertices):
+        base_bottom = float(base_mesh.bounds[0, 2])
+        for layer, mesh in active.items():
+            if layer == "base" or not len(mesh.vertices):
+                continue
+            if float(mesh.bounds[0, 2]) < base_bottom - contact_tolerance_mm:
+                issues.append(
+                    PrintabilityIssue(
+                        "outside_z_bounds",
+                        layer,
+                        f"{layer} extends below the base by "
+                        f"{base_bottom - float(mesh.bounds[0, 2]):.2f} mm",
+                    )
+                )
+
+    if invalid_coordinates or "base" not in active or any(
+        issue.blocking for issue in issues
+    ):
+        if "base" not in active and not invalid_coordinates:
+            issues.append(
+                PrintabilityIssue(
+                    "support_not_checked",
+                    "model",
+                    "No base mesh was supplied, so support paths could not be verified",
+                    severity="warning",
+                )
+            )
         return PrintabilityReport(tuple(issues))
 
     surface_polygons: list[Polygon] = []
@@ -268,4 +481,9 @@ def audit_printability(
     return PrintabilityReport(tuple(issues))
 
 
-__all__ = ["PrintabilityIssue", "PrintabilityReport", "audit_printability"]
+__all__ = [
+    "PrintabilityIssue",
+    "PrintabilityProfile",
+    "PrintabilityReport",
+    "audit_printability",
+]
