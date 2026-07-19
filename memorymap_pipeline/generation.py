@@ -26,6 +26,12 @@ from .mesh import (
     route_mesh_from_polygon,
 )
 from .roads import download_and_build_roads
+from .source_cache import (
+    SourceCache,
+    SourceProvenance,
+    stable_request_hash,
+    write_provenance_sidecar,
+)
 from .terrain import (
     ElevationGrid,
     build_terrain_mesh,
@@ -55,7 +61,7 @@ class _WarningCollector(logging.Handler):
         self.messages.append(self.format(record))
 
 
-def _configure_packaged_networking() -> None:
+def _configure_packaged_networking(cache_root: Path | None = None) -> None:
     """Use writable cache and explicit CA paths in source and frozen builds."""
     try:
         import certifi
@@ -69,7 +75,7 @@ def _configure_packaged_networking() -> None:
         import osmnx as ox
 
         local_data = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "MemoryMap"
-        cache_dir = local_data / "cache"
+        cache_dir = (cache_root / "osmnx") if cache_root is not None else (local_data / "cache")
         cache_dir.mkdir(parents=True, exist_ok=True)
         ox.settings.cache_folder = cache_dir
         ox.settings.use_cache = True
@@ -201,9 +207,16 @@ def generate_memory_map(
         raise ValueError("Mesh dimensions must be positive")
 
     progress(0, "Preparing print frame")
-    _configure_packaged_networking()
     frame = request.frame
     config = _merged_config(request.config)
+    configured_cache_dir = str(config.get("source_cache_dir", "")).strip()
+    source_cache = SourceCache(
+        configured_cache_dir or None,
+        ttl_seconds=float(config.get("source_cache_ttl_hours", 168.0)) * 3600.0,
+        max_bytes=int(float(config.get("source_cache_max_mb", 512))) * 1024 * 1024,
+    )
+    _configure_packaged_networking(source_cache.directory)
+    provenance: list[SourceProvenance] = []
     output_path = Path(request.output_path)
     scaled = frame.transform_points(request.route.points)
     printable = box(
@@ -229,7 +242,6 @@ def generate_memory_map(
         if elevation_grid is None:
             if config.get("terrain_provider", "usgs-3dep") != "usgs-3dep":
                 raise ValueError(f"Unsupported terrain provider: {config.get('terrain_provider')}")
-            cache_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "MemoryMap" / "dem-cache"
             provider = Usgs3depProvider(
                 timeout_seconds=float(config.get("terrain_request_timeout_seconds", 20.0)),
                 max_attempts=int(config.get("terrain_request_attempts", 3)),
@@ -237,8 +249,9 @@ def generate_memory_map(
             )
             try:
                 elevation_grid = provider.fetch(
-                    bbox, (grid_size, grid_size), cache_dir
+                    bbox, (grid_size, grid_size), source_cache
                 )
+                provenance.extend(provider.last_provenance)
             except Exception as usgs_exc:
                 warnings.append(
                     f"USGS terrain unavailable; trying the global DEM fallback: {usgs_exc}"
@@ -255,8 +268,9 @@ def generate_memory_map(
                 )
                 try:
                     elevation_grid = global_provider.fetch(
-                        bbox, (grid_size, grid_size), cache_dir
+                        bbox, (grid_size, grid_size), source_cache
                     )
+                    provenance.extend(global_provider.last_provenance)
                 except Exception as fallback_exc:
                     if not bool(config.get("terrain_flat_fallback", True)):
                         raise RuntimeError(
@@ -276,6 +290,15 @@ def generate_memory_map(
                         east,
                         "flat-fallback",
                     )
+                    provenance.append(SourceProvenance(
+                        source="terrain",
+                        endpoint="none",
+                        request_hash=stable_request_hash(
+                            "terrain-flat-fallback", {"bounds": bbox, "grid_size": grid_size}
+                        ),
+                        cache_status="fallback",
+                        retrieved_at=None,
+                    ))
         terrain_surface = terrain_surface_from_grid(
             elevation_grid,
             frame.print_width_mm,
@@ -477,6 +500,8 @@ def generate_memory_map(
             extend_elevated_parts_to_ground=bool(
                 config.get("extend_elevated_building_parts_to_ground", True)
             ),
+            source_cache=source_cache,
+            provenance=provenance,
         )
         finally:
             logging.getLogger().removeHandler(collector)
@@ -488,6 +513,7 @@ def generate_memory_map(
     if all(mesh is None for mesh in (base_mesh, route_mesh, roads_mesh, buildings_mesh, water_mesh)):
         raise ValueError("No printable layers were generated")
     export_3mf(output_path, base_mesh, route_mesh, roads_mesh, buildings_mesh, water_mesh)
+    provenance_path = write_provenance_sidecar(output_path, provenance)
     stats = {
         "route_points": len(request.route.points),
         "roads": _geometry_count(unioned_roads),
@@ -507,6 +533,10 @@ def generate_memory_map(
             "roads": _mesh_stats(roads_mesh),
             "buildings": _mesh_stats(buildings_mesh),
             "water": _mesh_stats(water_mesh),
+        },
+        "provenance": {
+            "sidecar": str(provenance_path),
+            "sources": [record.to_dict() for record in provenance],
         },
     }
     progress(100, "3MF export complete")

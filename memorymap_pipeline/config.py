@@ -30,6 +30,10 @@ DEFAULT_CONFIG = {
     "terrain_fallback_timeout_seconds": 15.0,
     "terrain_fallback_attempts": 2,
     "terrain_flat_fallback": True,
+    # Reproducible source cache. An empty path selects the writable user cache.
+    "source_cache_dir": "",
+    "source_cache_ttl_hours": 168.0,
+    "source_cache_max_mb": 512,
     "terrain_max_relief_mm": 3.0,
     "terrain_min_relief_mm": 1.5,
     "water_enabled": False,
