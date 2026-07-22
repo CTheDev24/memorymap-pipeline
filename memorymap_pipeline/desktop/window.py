@@ -377,6 +377,15 @@ class MemoryMapWindow(QMainWindow):
     def set_result(self, path: str) -> None:
         self.result_path = Path(path); self.save.setEnabled(self.result_path.is_file())
         self.progress.setValue(100)
+        provenance_path = self.result_path.with_suffix(self.result_path.suffix + ".provenance.json")
+        try:
+            document = json.loads(provenance_path.read_text(encoding="utf-8"))
+            statuses = [str(item.get("cache_status", "unknown")) for item in document.get("sources", [])]
+            if statuses:
+                summary = ", ".join(f"{status}: {statuses.count(status)}" for status in sorted(set(statuses)))
+                self.warnings.append(f"Source data: {summary}")
+        except (OSError, ValueError, TypeError):
+            pass
 
     @Slot(str)
     def add_warning(self, message: str) -> None:
@@ -387,7 +396,11 @@ class MemoryMapWindow(QMainWindow):
         if not self.result_path or not self.result_path.is_file(): return
         name, _ = QFileDialog.getSaveFileName(self, "Save MemoryMap", self.result_path.name, "3MF (*.3mf)")
         if name:
-            try: shutil.copy2(self.result_path, name)
+            try:
+                shutil.copy2(self.result_path, name)
+                provenance = self.result_path.with_suffix(self.result_path.suffix + ".provenance.json")
+                if provenance.is_file():
+                    shutil.copy2(provenance, Path(name).with_suffix(Path(name).suffix + ".provenance.json"))
             except OSError as exc: QMessageBox.critical(self, "Save failed", str(exc))
 
 

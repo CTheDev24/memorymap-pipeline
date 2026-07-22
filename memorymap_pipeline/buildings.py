@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from dataclasses import dataclass
 from typing import Callable
 
@@ -18,6 +19,7 @@ from .landmarks import (
     load_default_landmark_registry,
 )
 from .mesh import route_mesh_from_polygon
+from .source_cache import SourceCache, SourceProvenance
 from .projection import apply_transform, project_lonlat_array
 from .stadiums import StadiumRecipe, build_stadium_mesh
 
@@ -591,6 +593,8 @@ def download_and_build_buildings(
     terrain_height_at: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None,
     building_scale_mm_per_m: float | None = None,
     extend_elevated_parts_to_ground: bool = True,
+    source_cache: SourceCache | None = None,
+    provenance: list[SourceProvenance] | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
@@ -710,11 +714,38 @@ def download_and_build_buildings(
                         "User-Agent": "memorymap-pipeline/1.0 (+https://example.local)",
                         "Accept": "application/json",
                     }
-                    resp = requests.post(
-                        endpoint, data={"data": query}, headers=headers, timeout=OVERPASS_TIMEOUT
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
+                    def fetch_overpass() -> bytes:
+                        resp = requests.post(
+                            endpoint,
+                            data={"data": query},
+                            headers=headers,
+                            timeout=OVERPASS_TIMEOUT,
+                        )
+                        resp.raise_for_status()
+                        return resp.content
+
+                    def valid_overpass(payload: bytes) -> bool:
+                        try:
+                            document = json.loads(payload)
+                            return isinstance(document, dict) and isinstance(
+                                document.get("elements"), list
+                            )
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            return False
+
+                    if source_cache is not None:
+                        payload, source_record = source_cache.fetch(
+                            source="osm-buildings-overpass",
+                            endpoint=endpoint,
+                            request={"query": query},
+                            fetcher=fetch_overpass,
+                            validator=valid_overpass,
+                        )
+                        if provenance is not None:
+                            provenance.append(source_record)
+                    else:
+                        payload = fetch_overpass()
+                    data = json.loads(payload)
                     elements = data.get("elements", [])
                     for el in elements:
                         el_tags = dict(el.get("tags", {}))

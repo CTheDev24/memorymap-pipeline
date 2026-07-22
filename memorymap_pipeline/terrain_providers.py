@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from hashlib import sha256
 from io import BytesIO
-import json
 from pathlib import Path
 import time
 from typing import Any
@@ -12,6 +10,7 @@ from PIL import Image
 import requests
 
 from .terrain import ElevationGrid
+from .source_cache import SourceCache, SourceProvenance
 
 
 USGS_3DEP_EXPORT_URL = (
@@ -38,6 +37,7 @@ class Usgs3depProvider:
         self.timeout_seconds = timeout_seconds
         self.max_attempts = max_attempts
         self.backoff_seconds = backoff_seconds
+        self.last_provenance: list[SourceProvenance] = []
 
     def _get(self, url: str, **kwargs: Any) -> Any:
         last_error: Exception | None = None
@@ -62,7 +62,7 @@ class Usgs3depProvider:
         self,
         bounds: tuple[float, float, float, float],
         grid_size: tuple[int, int],
-        cache_dir: Path,
+        cache_dir: Path | SourceCache,
     ) -> ElevationGrid:
         south, north, west, east = bounds
         rows, columns = grid_size
@@ -81,12 +81,9 @@ class Usgs3depProvider:
             "interpolation": "RSP_BilinearInterpolation",
             "f": "json",
         }
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_key = sha256(json.dumps(request, sort_keys=True).encode("utf-8")).hexdigest()
-        cache_path = cache_dir / f"usgs-3dep-{cache_key}.tif"
-        if cache_path.is_file():
-            payload = cache_path.read_bytes()
-        else:
+        cache = cache_dir if isinstance(cache_dir, SourceCache) else SourceCache(cache_dir)
+
+        def fetch_payload() -> bytes:
             metadata_response = self._get(
                 USGS_3DEP_EXPORT_URL,
                 params=request,
@@ -95,8 +92,23 @@ class Usgs3depProvider:
             if "error" in metadata or not metadata.get("href"):
                 raise RuntimeError(f"USGS 3DEP export failed: {metadata.get('error', metadata)}")
             image_response = self._get(metadata["href"])
-            payload = image_response.content
-            cache_path.write_bytes(payload)
+            return image_response.content
+
+        def valid_payload(payload: bytes) -> bool:
+            try:
+                with Image.open(BytesIO(payload)) as image:
+                    return image.size == (columns, rows)
+            except (OSError, ValueError):
+                return False
+
+        payload, provenance = cache.fetch(
+            source=self.name,
+            endpoint=USGS_3DEP_EXPORT_URL,
+            request=request,
+            fetcher=fetch_payload,
+            validator=valid_payload,
+        )
+        self.last_provenance = [provenance]
 
         with Image.open(BytesIO(payload)) as image:
             elevations = np.asarray(image, dtype=float)
@@ -148,7 +160,7 @@ class TerrariumProvider(Usgs3depProvider):
         self,
         bounds: tuple[float, float, float, float],
         grid_size: tuple[int, int],
-        cache_dir: Path,
+        cache_dir: Path | SourceCache,
     ) -> ElevationGrid:
         south, north, west, east = bounds
         rows, columns = grid_size
@@ -166,23 +178,34 @@ class TerrariumProvider(Usgs3depProvider):
         min_tile_y = int(np.floor(pixel_y.min() / 256.0))
         max_tile_y = int(np.floor((pixel_y.max() + 1.0) / 256.0))
 
-        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache = cache_dir if isinstance(cache_dir, SourceCache) else SourceCache(cache_dir)
+        self.last_provenance = []
         tiles: dict[tuple[int, int], np.ndarray] = {}
         for tile_y in range(min_tile_y, max_tile_y + 1):
             for tile_x in range(min_tile_x, max_tile_x + 1):
-                cache_path = (
-                    cache_dir / f"terrarium-{self.zoom}-{tile_x}-{tile_y}.png"
-                )
-                if cache_path.is_file():
-                    payload = cache_path.read_bytes()
-                else:
+                url = TERRARIUM_TILE_URL.format(z=self.zoom, x=tile_x, y=tile_y)
+
+                def fetch_tile(url: str = url) -> bytes:
                     response = self._get(
-                        TERRARIUM_TILE_URL.format(
-                            z=self.zoom, x=tile_x, y=tile_y
-                        )
+                        url
                     )
-                    payload = response.content
-                    cache_path.write_bytes(payload)
+                    return response.content
+
+                def valid_tile(payload: bytes) -> bool:
+                    try:
+                        with Image.open(BytesIO(payload)) as image:
+                            return image.size == (256, 256)
+                    except (OSError, ValueError):
+                        return False
+
+                payload, provenance = cache.fetch(
+                    source=self.name,
+                    endpoint=url,
+                    request={"zoom": self.zoom, "x": tile_x, "y": tile_y},
+                    fetcher=fetch_tile,
+                    validator=valid_tile,
+                )
+                self.last_provenance.append(provenance)
                 with Image.open(BytesIO(payload)) as image:
                     tiles[(tile_x, tile_y)] = _decode_terrarium(image)
 

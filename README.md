@@ -275,6 +275,35 @@ are versioned, while generated binaries are distributed through Actions and Rele
 Because development builds are not code-signed, Windows SmartScreen may display a warning.
 If you trust the commit that produced the build, select **More info** and **Run anyway**.
 
+### Source cache and generation provenance
+
+MemoryMap keeps downloaded elevation and Overpass responses in a per-user cache. On
+Windows, packaged and source builds default to
+`%LOCALAPPDATA%\MemoryMap\source-cache`; the executable never writes beside itself.
+Validated entries are reused for seven days by default. If a source has a temporary
+network failure after that period, the last valid cached response is used and recorded
+as `stale_cache`. Empty, malformed, or dimensionally invalid responses are not cached.
+Writes use a temporary file followed by an atomic rename, and the managed cache is
+bounded to 512 MB with least-recently-used entries removed first.
+
+The settings `source_cache_dir`, `source_cache_ttl_hours`, and `source_cache_max_mb` can
+be overridden in configuration JSON. OSMnx road, water, and ordinary feature queries
+also use an `osmnx` folder below the same writable root; OSMnx manages those files using
+its stable request hashes. Direct building Overpass fallback requests use MemoryMap's
+validated bounded cache.
+
+Every generated `map.3mf` is accompanied by `map.3mf.provenance.json`. The sidecar lists
+the source endpoint, stable request/bounds hash, retrieval time, and whether each managed
+response came from the network, a fresh cache entry, a stale-cache recovery, or a flat
+fallback. Saving from MemoryMap Studio copies both files. The status area shows a short
+cache summary after generation.
+
+To clear cached source data, close MemoryMap Studio and delete the
+`%LOCALAPPDATA%\MemoryMap\source-cache` directory (or the configured directory). Cache
+files contain only requested geographic source responses and request metadata; no GPX
+route file is stored there. The provenance sidecar does expose hashed request identity,
+source URLs, and timestamps, so remove it before sharing if that context is sensitive.
+
 ### Download a branch or pull-request build
 
 1. Open the repository's **Actions** tab on GitHub.
