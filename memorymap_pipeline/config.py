@@ -5,6 +5,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .terrain_presets import preset_settings
+
 
 DEFAULT_CONFIG = {
     "portrait": {"map_width": 190.0, "map_height": 240.0},
@@ -20,6 +22,7 @@ DEFAULT_CONFIG = {
     "margin": 5.0,
     # terrain/water scaffold (disabled until selected by a client)
     "terrain_enabled": False,
+    "terrain_preset": None,
     "terrain_provider": "usgs-3dep",
     "terrain_grid_size": 96,
     "terrain_request_timeout_seconds": 20.0,
@@ -125,6 +128,11 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
         raise FileNotFoundError(f"Configuration file not found: {path}")
 
     loaded = json.loads(path.read_text(encoding="utf-8"))
+    for key, value in preset_settings(loaded.get("terrain_preset")).items():
+        if isinstance(value, dict) and isinstance(config.get(key), dict):
+            config[key].update(value)
+        else:
+            config[key] = value
     for key, value in loaded.items():
         if isinstance(value, dict) and isinstance(config.get(key), dict):
             config[key].update(value)

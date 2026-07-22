@@ -11,7 +11,8 @@ from memorymap_pipeline.map_frame import MapFrame
 
 def project() -> DesktopProject:
     return DesktopProject(frame=MapFrame(29.76, -95.37, 1200, 950, 240, 190, 8, 12),
-                          gpx_path="sample.gpx", include_buildings=False, route_width_mm=1.5)
+                          gpx_path="sample.gpx", include_buildings=False, route_width_mm=1.5,
+                          terrain_preset="rolling-terrain")
 
 
 def test_project_json_and_file_round_trip(tmp_path):
@@ -140,3 +141,27 @@ def test_frame_zoom_preserves_center_and_scales_coverage():
     assert window.current_frame["coverage_width_m"] == pytest.approx(1_100.0)
     assert window.current_frame["coverage_height_m"] == pytest.approx(880.0)
     assert scripts and "setFrame" in scripts[-1]
+
+
+def test_terrain_preset_populates_editable_desktop_starting_values():
+    pytest.importorskip("PySide6")
+    from memorymap_pipeline.desktop.window import MemoryMapWindow
+
+    class Combo:
+        def currentData(self):
+            return "mountain-coast"
+
+    class Spin:
+        def __init__(self):
+            self.value = None
+
+        def setValue(self, value):
+            self.value = value
+
+    window = type("WindowState", (), {})()
+    window.terrain_preset = Combo()
+    window.terrain_relief = Spin()
+    window.water_recess = Spin()
+    MemoryMapWindow._terrain_preset_changed(window, 3)
+    assert window.terrain_relief.value == pytest.approx(4.0)
+    assert window.water_recess.value == pytest.approx(0.4)

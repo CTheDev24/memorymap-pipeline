@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
+from ..terrain_presets import TERRAIN_PRESETS
 from .worker import GenerationWorker
 
 
@@ -23,7 +24,7 @@ FRAME_ZOOM_FACTOR = 1.1
 try:
     from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+        QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
         QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QProgressBar,
         QPushButton, QRadioButton, QSplitter, QTextEdit, QVBoxLayout, QWidget,
     )
@@ -156,11 +157,18 @@ class MemoryMapWindow(QMainWindow):
 
         terrain_box = QGroupBox("Terrain settings")
         terrain_form = QFormLayout(terrain_box)
+        self.terrain_preset = QComboBox()
+        self.terrain_preset.addItem("Adaptive (legacy)", None)
+        for key, preset in TERRAIN_PRESETS.items():
+            self.terrain_preset.addItem(preset.label, key)
+        self.terrain_preset.currentIndexChanged.connect(self._terrain_preset_changed)
         self.terrain_relief = self._spin(3.0, 0.5, 12.0)
         self.water_recess = self._spin(0.4, 0.1, 3.0)
         self.building_max_height = self._spin(25.0, 1.0, 31.75)
+        self.terrain_preset.setEnabled(False)
         self.terrain_relief.setEnabled(False)
         self.water_recess.setEnabled(False)
+        terrain_form.addRow("Preset", self.terrain_preset)
         terrain_form.addRow("Maximum relief", self.terrain_relief)
         terrain_form.addRow("Water recess", self.water_recess)
         terrain_form.addRow("Maximum building height", self.building_max_height)
@@ -314,11 +322,22 @@ class MemoryMapWindow(QMainWindow):
 
     @Slot(bool)
     def _terrain_toggled(self, enabled: bool) -> None:
+        self.terrain_preset.setEnabled(enabled)
         self.terrain_relief.setEnabled(enabled)
         self.water_layer.setEnabled(enabled)
         if not enabled:
             self.water_layer.setChecked(False)
         self.water_recess.setEnabled(enabled and self.water_layer.isChecked())
+
+    @Slot(int)
+    def _terrain_preset_changed(self, _index: int) -> None:
+        """Apply preset starting values while leaving both fields editable."""
+        key = self.terrain_preset.currentData()
+        if not key:
+            return
+        settings = TERRAIN_PRESETS[key].settings
+        self.terrain_relief.setValue(float(settings["terrain_max_relief_mm"]))
+        self.water_recess.setValue(float(settings["water_recess_mm"]))
 
     @Slot(bool)
     def _water_toggled(self, enabled: bool) -> None:
@@ -341,6 +360,7 @@ class MemoryMapWindow(QMainWindow):
                 "include_buildings": self.buildings_layer.isChecked(),
                 "route_width_mm": self.route_width.value(),
                 "config": {
+                    "terrain_preset": self.terrain_preset.currentData(),
                     "terrain_enabled": self.terrain_layer.isChecked(),
                     "water_enabled": self.water_layer.isChecked(),
                     "terrain_max_relief_mm": self.terrain_relief.value(),
