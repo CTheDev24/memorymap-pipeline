@@ -1,6 +1,6 @@
 # MemoryMap development status
 
-Last updated: 2026-07-19
+Last updated: 2026-07-22
 
 This document is the living engineering handoff for MemoryMap Studio. It distinguishes the
 production baseline on `main` from work that exists only in an open pull request. Update it
@@ -77,6 +77,12 @@ Recommended integration order is PR #12, then PR #11, then PR #10. All three tou
 After each merge, rebase the next branch onto current `main`, rerun its full suite, and build a
 combined executable. Do not merge all three based only on their independent green checks.
 
+Current branch status (`codex/review-development-status`): PR #12, then #11, then #10 have
+been merged in that order with conflict resolution in `generation.py` and desktop test wiring.
+Local combined validation on this branch completed with `python -m pytest -q` (149 passed,
+4 skipped). Repository-wide `ruff check .` still reports pre-existing lint debt in debug/helper
+scripts that are outside this integration scope.
+
 ## Known limitations and deferred work
 
 - Terrain presets have deterministic geometry tests but still require representative slicer
@@ -97,7 +103,7 @@ combined executable. Do not merge all three based only on their independent gree
 
 ## Development priorities
 
-1. Integrate and qualify the source cache, terrain presets, and printability preflight.
+1. Qualify the integrated #12+#11+#10 branch in slicer and physical print workflows, then merge.
 2. Perform a three-subject terrain test matrix: Houston/Buffalo Bayou, Nashville, and a
    Big Sur-style mountain/coast route.
 3. Save and reload a complete MemoryMap project containing GPX, frame, settings, and source
