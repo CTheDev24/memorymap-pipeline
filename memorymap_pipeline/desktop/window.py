@@ -21,6 +21,25 @@ from .worker import GenerationWorker
 ROUTE_FRAME_PADDING_MM = 6.0
 FRAME_ZOOM_FACTOR = 1.1
 
+
+def format_preflight_report(report: dict) -> tuple[str, str, str]:
+    """Return status label, detail text, and GUI color for a serialized report."""
+    status = str(report.get("status", "yellow")).lower()
+    colors = {"green": "#2e7d32", "yellow": "#b26a00", "red": "#c62828"}
+    issues = report.get("issues", [])
+    if not isinstance(issues, list):
+        issues = []
+    heading = f"{status.upper()} preflight"
+    if not issues:
+        return heading, "No printability issues detected.", colors.get(status, colors["yellow"])
+    lines = []
+    for issue in issues[:6]:
+        if isinstance(issue, dict):
+            lines.append(f"{str(issue.get('severity', 'warning')).upper()}: {issue.get('message', '')}")
+    if len(issues) > 6:
+        lines.append(f"+ {len(issues) - 6} more issue(s)")
+    return heading, "\n".join(lines), colors.get(status, colors["yellow"])
+
 try:
     from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
     from PySide6.QtWidgets import (
@@ -181,9 +200,18 @@ class MemoryMapWindow(QMainWindow):
         self.save.clicked.connect(self.save_result)
         outer.addWidget(self.generate); outer.addWidget(self.save)
         self.progress = QProgressBar(); self.progress.setRange(0, 100)
+        preflight_box = QGroupBox("Printability preflight")
+        preflight_layout = QVBoxLayout(preflight_box)
+        self.preflight_status = QLabel("Not run")
+        self.preflight_details = QTextEdit()
+        self.preflight_details.setReadOnly(True)
+        self.preflight_details.setMaximumHeight(105)
+        self.preflight_details.setPlaceholderText("A green/yellow/red report appears after generation.")
+        preflight_layout.addWidget(self.preflight_status)
+        preflight_layout.addWidget(self.preflight_details)
         self.warnings = QTextEdit(); self.warnings.setReadOnly(True)
         self.warnings.setPlaceholderText("Generation warnings and status appear here.")
-        outer.addWidget(self.progress); outer.addWidget(self.warnings, 1)
+        outer.addWidget(self.progress); outer.addWidget(preflight_box); outer.addWidget(self.warnings, 1)
         return panel
 
     @staticmethod
@@ -348,6 +376,9 @@ class MemoryMapWindow(QMainWindow):
         if not self.gpx_path or not self.route or not self.current_frame:
             return
         self.progress.setValue(0); self.warnings.clear(); self.generate.setEnabled(False)
+        self.preflight_status.setText("Running after mesh generation...")
+        self.preflight_status.setStyleSheet("")
+        self.preflight_details.clear()
         try:
             frame_data = dict(self.current_frame)
             frame_data.update(print_width_mm=self.print_width.value(), print_height_mm=self.print_height.value(), margin_mm=self.margin.value())
@@ -371,6 +402,7 @@ class MemoryMapWindow(QMainWindow):
             thread = QThread(self); worker = GenerationWorker(payload)
             worker.moveToThread(thread); thread.started.connect(worker.run)
             worker.progress.connect(self.set_progress); worker.warning.connect(self.add_warning)
+            worker.preflight.connect(self.set_preflight)
             worker.completed.connect(self.set_result); worker.failed.connect(self._generation_failed)
             worker.finished.connect(thread.quit); worker.finished.connect(worker.deleteLater)
             thread.finished.connect(thread.deleteLater); thread.finished.connect(self._generation_finished)
@@ -407,6 +439,13 @@ class MemoryMapWindow(QMainWindow):
         except (OSError, ValueError, TypeError):
             pass
 
+    @Slot(dict)
+    def set_preflight(self, report: dict) -> None:
+        heading, details, color = format_preflight_report(report)
+        self.preflight_status.setText(heading)
+        self.preflight_status.setStyleSheet(f"font-weight: 700; color: {color};")
+        self.preflight_details.setPlainText(details)
+
     @Slot(str)
     def add_warning(self, message: str) -> None:
         self.warnings.append(f"Warning: {message}")
@@ -430,4 +469,4 @@ def run() -> int:
     return app.exec()
 
 
-__all__ = ["MapBridge", "MemoryMapWindow", "run"]
+__all__ = ["MapBridge", "MemoryMapWindow", "format_preflight_report", "run"]

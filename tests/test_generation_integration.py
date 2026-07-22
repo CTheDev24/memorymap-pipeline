@@ -11,6 +11,7 @@ import zipfile
 
 import pytest
 from shapely.geometry import box
+from trimesh.creation import box as mesh_box
 
 generation = pytest.importorskip(
     "memorymap_pipeline.generation",
@@ -87,6 +88,26 @@ def test_partial_export_assigns_materials_only_to_present_objects(tmp_path: Path
         "Route_Accent": "#FF6633FF",
     }
     assert _model_assembly(output) == ("MemoryMap", ["Base_White", "Route_Accent"])
+
+
+def test_export_returns_nonblocking_preflight_report(tmp_path: Path) -> None:
+    output = tmp_path / "advisory.3mf"
+    base = build_base_plate(40.0, 30.0, 1.6)
+    route = mesh_box(extents=(8.0, 0.6, 2.2))
+    route.apply_translation((20.0, 15.0, 0.9))
+
+    report = export_3mf(
+        output,
+        base,
+        route,
+        print_size_mm=(40.0, 30.0),
+        margin_mm=5.0,
+        declared_feature_widths_mm={"route": 0.6},
+    )
+
+    assert output.is_file()
+    assert report.status == "yellow"
+    assert any(issue.code == "thin_xy_feature" for issue in report.issues)
 
 
 def test_full_generation_uses_frame_for_every_local_layer(tmp_path):

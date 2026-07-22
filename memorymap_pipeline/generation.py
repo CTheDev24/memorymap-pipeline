@@ -32,6 +32,7 @@ from .source_cache import (
     stable_request_hash,
     write_provenance_sidecar,
 )
+from .printability import PrintabilityReport, audit_printability
 from .terrain import (
     ElevationGrid,
     build_terrain_mesh,
@@ -114,6 +115,7 @@ class GenerationResult:
     roads_mesh: Any | None = None
     buildings_mesh: Any | None = None
     water_mesh: Any | None = None
+    preflight: PrintabilityReport = field(default_factory=lambda: PrintabilityReport(()))
 
     @property
     def meshes(self) -> dict[str, Any]:
@@ -518,7 +520,37 @@ def generate_memory_map(
 
     if all(mesh is None for mesh in (base_mesh, route_mesh, roads_mesh, buildings_mesh, water_mesh)):
         raise ValueError("No printable layers were generated")
-    export_3mf(output_path, base_mesh, route_mesh, roads_mesh, buildings_mesh, water_mesh)
+    progress(90, "Running printability preflight")
+    enabled_road_widths = [
+        float(width)
+        for road_type, width in config.get("road_widths", {}).items()
+        if road_type in config.get("road_types", [])
+    ]
+    declared_widths = {"route": float(request.route_width_mm)}
+    if enabled_road_widths:
+        declared_widths["roads"] = min(enabled_road_widths)
+    preflight = audit_printability(
+        {
+            "base": base_mesh,
+            "route": route_mesh,
+            "roads": roads_mesh,
+            "buildings": buildings_mesh,
+            "water": water_mesh,
+        },
+        print_size_mm=(frame.print_width_mm, frame.print_height_mm),
+        margin_mm=frame.margin_mm,
+        declared_feature_widths_mm=declared_widths,
+    )
+    preflight.raise_for_errors()
+    export_3mf(
+        output_path,
+        base_mesh,
+        route_mesh,
+        roads_mesh,
+        buildings_mesh,
+        water_mesh,
+        preflight_report=preflight,
+    )
     provenance_path = write_provenance_sidecar(output_path, provenance)
     stats = {
         "route_points": len(request.route.points),
@@ -544,6 +576,7 @@ def generate_memory_map(
             "sidecar": str(provenance_path),
             "sources": [record.to_dict() for record in provenance],
         },
+        "preflight": preflight.to_dict(),
     }
     progress(100, "3MF export complete")
     return GenerationResult(
@@ -555,6 +588,7 @@ def generate_memory_map(
         roads_mesh=roads_mesh,
         buildings_mesh=buildings_mesh,
         water_mesh=water_mesh,
+        preflight=preflight,
     )
 
 

@@ -71,9 +71,11 @@ These checks establish geometric safety, not final appearance. Each preset still
 representative Bambu Studio slice and physical print before its visual relief, bridge
 behavior, color changes, and adhesion can be considered production-qualified.
 - Raised features overlap the base by `feature_embed_depth` (0.2 mm by default) to keep short geometry printable without changing its visible height.
-- Export now stops when a component is non-manifold, has inconsistent face winding or
-  non-positive volume, or has no geometric support path to the base. Roofs may be supported
-  through their building body; mutually touching floating shells do not satisfy the check.
+- Every generated model receives a green/yellow/red printability preflight. Empty geometry
+  and invalid numeric coordinates stop export; topology, support, bounds, continuity, and
+  minimum-feature findings remain visible advisories so an otherwise inspectable 3MF is not
+  discarded. Roofs may be supported through their building body; mutually touching floating
+  shells do not satisfy the support check.
 - The production printability profile assumes a 0.4 mm nozzle, 0.16 mm layer height,
   0.8 mm minimum structural XY feature, and a 1.6 mm structural base.
 - Debug plots for roads can be enabled by setting `roads_debug` to `true` in the config.
@@ -236,6 +238,20 @@ downloads still require an internet connection. A newly loaded route and orienta
 reserve 6 mm between the route extents and the displayed print frame. **Zoom in** and
 **Zoom out** adjust geographic coverage around the current frame center; **Reset frame to
 route** restores the centered 6 mm fit.
+
+### Printability preflight
+
+MemoryMap Studio runs preflight after all selected meshes are built and before the final 3MF
+is saved. **Green** means no detected issues. **Yellow** identifies printable dimensions below
+a recommended threshold. **Red** asks for inspection before printing, for example non-manifold
+edges, degenerate faces, unsupported shells, geometry below the base, or a disconnected route.
+
+The production profile is a 0.4 mm nozzle, 0.16 mm layers, 0.8 mm structural XY features,
+and 0.32 mm minimum Z features. The selected frame and margin are also checked. Only an empty
+mesh or non-finite coordinates are fatal because those cannot produce a meaningful 3MF. Red
+findings are intentionally non-blocking so the model can still be inspected or repaired in a
+slicer. Minimum-width detection combines configured widths with an oriented-shell heuristic;
+it is a preflight warning rather than a full slicer simulation.
 
 ### Building parts and roofs
 

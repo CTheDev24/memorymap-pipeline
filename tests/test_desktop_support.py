@@ -165,3 +165,24 @@ def test_terrain_preset_populates_editable_desktop_starting_values():
     MemoryMapWindow._terrain_preset_changed(window, 3)
     assert window.terrain_relief.value == pytest.approx(4.0)
     assert window.water_recess.value == pytest.approx(0.4)
+
+
+def test_preflight_formatter_produces_concise_colored_summary():
+    pytest.importorskip("PySide6")
+    from memorymap_pipeline.desktop.window import format_preflight_report
+
+    heading, details, color = format_preflight_report(
+        {
+            "status": "red",
+            "issues": [
+                {
+                    "severity": "error",
+                    "message": "route contains two disconnected printable sections",
+                }
+            ],
+        }
+    )
+
+    assert heading == "RED preflight"
+    assert "ERROR: route contains" in details
+    assert color == "#c62828"
