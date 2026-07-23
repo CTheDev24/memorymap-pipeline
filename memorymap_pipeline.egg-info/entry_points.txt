@@ -1,4 +1,0 @@
-[console_scripts]
-memorymap-api = memorymap_pipeline.api.__main__:main
-memorymap-desktop = memorymap_pipeline.desktop.launcher:main
-memorymap-pipeline = memorymap_pipeline.cli:main
