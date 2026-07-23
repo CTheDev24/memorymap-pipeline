@@ -190,10 +190,13 @@ def download_and_build_roads(
             for p in parts:
                 if p.is_empty:
                     continue
-                mesh = route_mesh_from_polygon(
-                    p, height_mm=road_height_mm + embed_depth_mm, z_offset=z_offset
-                )
-                meshes.append(mesh)
+                try:
+                    mesh = route_mesh_from_polygon(
+                        p, height_mm=road_height_mm + embed_depth_mm, z_offset=z_offset
+                    )
+                    meshes.append(mesh)
+                except Exception as exc:
+                    logging.warning("Skipping invalid road polygon during extrusion: %s", exc)
     except Exception as exc:  # pragma: no cover - mesh library issues
         logging.warning("Failed creating road meshes: %s", exc)
 

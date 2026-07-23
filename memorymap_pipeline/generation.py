@@ -149,7 +149,14 @@ def _route_mesh(polygon: Any, height_mm: float, z_offset: float) -> Any | None:
     if polygon.is_empty:
         return None
     parts = list(polygon.geoms) if polygon.geom_type == "MultiPolygon" else [polygon]
-    meshes = [route_mesh_from_polygon(part, height_mm, z_offset) for part in parts if not part.is_empty]
+    meshes = []
+    for part in parts:
+        if part.is_empty:
+            continue
+        try:
+            meshes.append(route_mesh_from_polygon(part, height_mm, z_offset))
+        except Exception as exc:
+            logging.warning("Skipping invalid route polygon during extrusion: %s", exc)
     if not meshes:
         return None
     return meshes[0] if len(meshes) == 1 else concatenate(meshes)

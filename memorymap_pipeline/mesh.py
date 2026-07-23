@@ -142,6 +142,12 @@ def route_mesh_from_polygon(polygon, height_mm: float, z_offset: float = 0.0) ->
     """
     mesh = extrude_polygon(polygon, height_mm)
     mesh.apply_translation((0.0, 0.0, z_offset))
+    valid_faces = np.isfinite(mesh.area_faces) & (mesh.area_faces > 1e-12)
+    if not np.all(valid_faces):
+        mesh.update_faces(valid_faces)
+        mesh.remove_unreferenced_vertices()
+    if len(mesh.faces) == 0:
+        raise ValueError("Polygon extrusion produced no valid faces")
     return mesh
 
 

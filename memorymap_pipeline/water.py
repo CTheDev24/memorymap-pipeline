@@ -142,14 +142,18 @@ def build_vector_water_mesh(
     """Build water solids with 0.2 mm exposed above their embedded support."""
     if thickness_mm <= 0:
         raise ValueError("Water mesh thickness must be positive")
-    meshes = [
-        route_mesh_from_polygon(
-            body.geometry,
-            height_mm=thickness_mm,
-            z_offset=body.level_mm - thickness_mm,
-        )
-        for body in water_bodies
-    ]
+    meshes = []
+    for body in water_bodies:
+        try:
+            meshes.append(
+                route_mesh_from_polygon(
+                    body.geometry,
+                    height_mm=thickness_mm,
+                    z_offset=body.level_mm - thickness_mm,
+                )
+            )
+        except Exception as exc:
+            logging.warning("Skipping invalid water polygon during extrusion: %s", exc)
     if not meshes:
         return None
     return meshes[0] if len(meshes) == 1 else concatenate(meshes)

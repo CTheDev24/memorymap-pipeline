@@ -579,3 +579,55 @@ def test_water_loader_transforms_local_osm_polygons_into_print_space() -> None:
     assert polygons
     assert all(0.0 <= polygon.bounds[0] <= polygon.bounds[2] <= 120.0 for polygon in polygons)
     assert all(0.0 <= polygon.bounds[1] <= polygon.bounds[3] <= 90.0 for polygon in polygons)
+
+
+def test_water_layer_keeps_valid_parts_when_one_polygon_extrusion_fails(monkeypatch) -> None:
+    bodies = [
+        SimpleNamespace(geometry=box(0.0, 0.0, 10.0, 10.0), level_mm=0.0),
+        SimpleNamespace(geometry=box(20.0, 20.0, 30.0, 30.0), level_mm=0.0),
+    ]
+    calls = {"count": 0}
+
+    def _fake_extrude(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise ValueError("degenerate polygon")
+        return Trimesh(
+            vertices=np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                    [0.0, 1.0, 1.0],
+                ],
+            ),
+            faces=np.array(
+                [
+                    [0, 2, 1],
+                    [0, 3, 2],
+                    [4, 5, 6],
+                    [4, 6, 7],
+                    [0, 1, 5],
+                    [0, 5, 4],
+                    [1, 2, 6],
+                    [1, 6, 5],
+                    [2, 3, 7],
+                    [2, 7, 6],
+                    [3, 0, 4],
+                    [3, 4, 7],
+                ]
+            ),
+            process=False,
+        )
+
+    monkeypatch.setattr("memorymap_pipeline.water.route_mesh_from_polygon", _fake_extrude)
+
+    mesh = build_vector_water_mesh(bodies, thickness_mm=0.6)
+
+    assert calls["count"] == 2
+    assert mesh is not None
+    assert len(mesh.faces) > 0
