@@ -9,6 +9,7 @@ import pytest
 import requests
 from PIL import Image
 from shapely.geometry import LineString, Point, box
+from shapely.ops import unary_union
 from trimesh import Trimesh
 
 from memorymap_pipeline import generation
@@ -32,6 +33,7 @@ from memorymap_pipeline.terrain_providers import (
 )
 from memorymap_pipeline.water import (
     WATER_TAGS,
+    _infer_coastal_water_regions,
     build_terrain_mesh_with_water,
     build_vector_water_mesh,
     download_water_polygons,
@@ -593,6 +595,19 @@ def test_water_tags_include_marine_ocean_features() -> None:
     assert "sea" in water_values
     assert "ocean" in place_values
     assert "sea" in place_values
+
+
+def test_coastline_inference_adds_ocean_region_touching_frame_edge() -> None:
+    frame = box(0.0, 0.0, 100.0, 80.0)
+    coastline = LineString([(100.0, 50.0), (0.0, 50.0)])
+    canal = box(48.0, 50.0, 52.0, 60.0)
+
+    inferred = _infer_coastal_water_regions([canal], [coastline], frame)
+
+    assert inferred
+    ocean_union = unary_union(inferred)
+    assert ocean_union.contains(Point(50.0, 70.0))
+    assert not ocean_union.contains(Point(50.0, 30.0))
 
 
 def test_water_layer_keeps_valid_parts_when_one_polygon_extrusion_fails(monkeypatch) -> None:

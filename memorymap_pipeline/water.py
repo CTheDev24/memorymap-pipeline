@@ -8,13 +8,14 @@ import numpy as np
 from shapely.geometry import LineString, Polygon
 from shapely.geometry import box as shapely_box
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import unary_union
+from shapely.ops import linemerge, polygonize, unary_union
 from trimesh import Trimesh
 from trimesh.creation import triangulate_polygon
 from trimesh.util import concatenate
 
 from .buildings import _transform_shapely_polygon
 from .mesh import route_mesh_from_polygon
+from .projection import apply_transform, project_lonlat_array
 from .terrain import TerrainSurface
 
 WATER_TAGS = {
@@ -24,6 +25,7 @@ WATER_TAGS = {
     "landuse": ["reservoir", "basin"],
     "place": ["sea", "ocean", "bay"],
 }
+COASTLINE_TAGS = {"natural": "coastline"}
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,7 @@ def download_water_polygons(
     water_file: str | Path | None = None,
 ) -> list[BaseGeometry]:
     """Load OSM water areas and transform them into clipped print-space polygons."""
+    coastline_data = None
     try:
         import geopandas as gpd
 
@@ -61,22 +64,30 @@ def download_water_polygons(
                 data = fetch_point(
                     (center_lat, center_lon), tags=WATER_TAGS, dist=radius_m
                 )
+                coastline_data = fetch_point(
+                    (center_lat, center_lon), tags=COASTLINE_TAGS, dist=radius_m
+                )
             elif fetch_bbox is not None:
                 lat_min, lat_max, lon_min, lon_max = bbox
                 try:
                     data = fetch_bbox((lon_min, lat_min, lon_max, lat_max), tags=WATER_TAGS)
+                    coastline_data = fetch_bbox(
+                        (lon_min, lat_min, lon_max, lat_max), tags=COASTLINE_TAGS
+                    )
                 except TypeError:
                     data = fetch_bbox(lat_max, lat_min, lon_max, lon_min, tags=WATER_TAGS)
+                    coastline_data = fetch_bbox(
+                        lat_max, lat_min, lon_max, lon_min, tags=COASTLINE_TAGS
+                    )
             else:
                 raise RuntimeError("Installed OSMnx does not expose a feature query API")
     except Exception as exc:
         logging.warning("Failed to load water polygons: %s", exc)
         return []
 
-    from shapely.geometry import box as shapely_box
-
     print_bounds = shapely_box(0.0, 0.0, map_width_mm, map_height_mm)
     transformed: list[BaseGeometry] = []
+    transformed_coastlines: list[LineString] = []
     for geometry in data.geometry:
         if geometry is None or geometry.is_empty:
             continue
@@ -95,7 +106,134 @@ def download_water_polygons(
                 continue
             if not print_polygon.is_empty:
                 transformed.append(print_polygon)
+    if coastline_data is not None:
+        for geometry in coastline_data.geometry:
+            if geometry is None or geometry.is_empty:
+                continue
+            transformed_coastlines.extend(
+                _transform_coastline_geometry(
+                    geometry,
+                    center_lat=center_lat,
+                    center_lon=center_lon,
+                    transform=transform,
+                    print_bounds=print_bounds,
+                )
+            )
+    transformed.extend(
+        _infer_coastal_water_regions(transformed, transformed_coastlines, print_bounds)
+    )
     return transformed
+
+
+def _transform_coastline_geometry(
+    geometry: BaseGeometry,
+    *,
+    center_lat: float,
+    center_lon: float,
+    transform: dict,
+    print_bounds: Polygon,
+) -> list[LineString]:
+    transformed: list[LineString] = []
+    parts = (
+        list(geometry.geoms)
+        if geometry.geom_type in ("MultiLineString", "GeometryCollection")
+        else [geometry]
+    )
+    for part in parts:
+        if part is None or part.is_empty:
+            continue
+        if part.geom_type == "LineString":
+            coordinates = np.asarray(part.coords, dtype=float)
+            if coordinates.shape[0] < 2:
+                continue
+            lons = coordinates[:, 0]
+            lats = coordinates[:, 1]
+            projected = project_lonlat_array(lats, lons, center_lat=center_lat, center_lon=center_lon)
+            frame = transform.get("map_frame")
+            transformed_points = (
+                frame.transform_projected(projected)
+                if frame is not None
+                else apply_transform(projected, transform)
+            )
+            line = LineString(
+                [(float(x), float(y)) for x, y in transformed_points]
+            ).intersection(print_bounds)
+            if line.is_empty:
+                continue
+            if line.geom_type == "LineString":
+                transformed.append(line)
+            elif line.geom_type == "MultiLineString":
+                transformed.extend(
+                    segment for segment in line.geoms if not segment.is_empty
+                )
+        elif part.geom_type in ("MultiLineString", "GeometryCollection"):
+            transformed.extend(
+                _transform_coastline_geometry(
+                    part,
+                    center_lat=center_lat,
+                    center_lon=center_lon,
+                    transform=transform,
+                    print_bounds=print_bounds,
+                )
+            )
+    return transformed
+
+
+def _infer_coastal_water_regions(
+    known_water: list[BaseGeometry],
+    coastlines: list[LineString],
+    print_bounds: Polygon,
+) -> list[Polygon]:
+    if not coastlines:
+        return []
+    merged_lines = [line for line in coastlines if line.length > 1e-6]
+    if not merged_lines:
+        return []
+    boundary = print_bounds.boundary
+    try:
+        noded = unary_union([boundary, *merged_lines])
+        regions = list(polygonize(noded))
+        if not regions:
+            regions = list(polygonize(linemerge([*merged_lines, boundary])))
+    except Exception:
+        return []
+    if not regions:
+        return []
+    known_union = unary_union(known_water) if known_water else None
+    sea_hint_parts = []
+    for line in merged_lines:
+        try:
+            hint = line.buffer(-0.3, single_sided=True, cap_style=2, join_style=2)
+        except Exception:
+            continue
+        if not hint.is_empty:
+            sea_hint_parts.append(hint)
+    sea_hint = unary_union(sea_hint_parts) if sea_hint_parts else None
+    inferred: list[Polygon] = []
+    for region in regions:
+        if region.is_empty or region.area <= 1e-6:
+            continue
+        if region.boundary.intersection(boundary).length <= 0.1:
+            continue
+        if sea_hint is not None and not sea_hint.intersects(region):
+            continue
+        if known_union is not None and not known_union.buffer(0.4).intersects(region):
+            continue
+        inferred.append(region)
+    if inferred:
+        return inferred
+    if sea_hint is None:
+        return []
+    return [
+        region
+        for region in regions
+        if (
+            not region.is_empty
+            and region.area > 1e-6
+            and region.boundary.intersection(boundary).length > 0.1
+            and sea_hint.intersects(region)
+        )
+    ]
 
 
 def prepare_water_bodies(
