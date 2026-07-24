@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
 import zipfile
+from pathlib import Path
 
 import numpy as np
 from shapely import contains_xy
 from shapely.geometry.base import BaseGeometry
 from trimesh import Trimesh
 from trimesh.creation import extrude_polygon
-
 
 DEFAULT_FEATURE_EMBED_DEPTH_MM = 0.2
 
@@ -148,6 +147,8 @@ def route_mesh_from_polygon(polygon, height_mm: float, z_offset: float = 0.0) ->
         mesh.remove_unreferenced_vertices()
     if len(mesh.faces) == 0:
         raise ValueError("Polygon extrusion produced no valid faces")
+    if not mesh.is_watertight:
+        raise ValueError("Polygon extrusion produced a non-watertight mesh")
     return mesh
 
 
