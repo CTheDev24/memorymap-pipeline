@@ -5,22 +5,24 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from shapely.geometry import LineString, Polygon, box as shapely_box
+from shapely.geometry import LineString, Polygon
+from shapely.geometry import box as shapely_box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from trimesh import Trimesh
 from trimesh.creation import triangulate_polygon
 from trimesh.util import concatenate
 
-from .terrain import TerrainSurface
 from .buildings import _transform_shapely_polygon
 from .mesh import route_mesh_from_polygon
-
+from .terrain import TerrainSurface
 
 WATER_TAGS = {
-    "natural": "water",
+    "natural": ["water"],
+    "water": ["ocean", "sea", "bay", "strait", "lagoon", "fjord", "sound"],
     "waterway": "riverbank",
     "landuse": ["reservoir", "basin"],
+    "place": ["sea", "ocean", "bay"],
 }
 
 

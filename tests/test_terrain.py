@@ -1,8 +1,8 @@
-from pathlib import Path
-from io import BytesIO
-from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 import zipfile
+from io import BytesIO
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -11,11 +11,11 @@ from PIL import Image
 from shapely.geometry import LineString, Point, box
 from trimesh import Trimesh
 
-from memorymap_pipeline.mesh import export_3mf, refine_mesh_edges, route_mesh_from_polygon
 from memorymap_pipeline import generation
 from memorymap_pipeline.config import load_config
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
 from memorymap_pipeline.map_frame import MapFrame
+from memorymap_pipeline.mesh import export_3mf, refine_mesh_edges, route_mesh_from_polygon
 from memorymap_pipeline.terrain import (
     ElevationGrid,
     analyze_terrain,
@@ -31,6 +31,7 @@ from memorymap_pipeline.terrain_providers import (
     _decode_terrarium,
 )
 from memorymap_pipeline.water import (
+    WATER_TAGS,
     build_terrain_mesh_with_water,
     build_vector_water_mesh,
     download_water_polygons,
@@ -579,6 +580,19 @@ def test_water_loader_transforms_local_osm_polygons_into_print_space() -> None:
     assert polygons
     assert all(0.0 <= polygon.bounds[0] <= polygon.bounds[2] <= 120.0 for polygon in polygons)
     assert all(0.0 <= polygon.bounds[1] <= polygon.bounds[3] <= 90.0 for polygon in polygons)
+
+
+def test_water_tags_include_marine_ocean_features() -> None:
+    assert "water" in WATER_TAGS
+    assert "place" in WATER_TAGS
+    water_values = WATER_TAGS["water"]
+    place_values = WATER_TAGS["place"]
+    assert isinstance(water_values, list)
+    assert isinstance(place_values, list)
+    assert "ocean" in water_values
+    assert "sea" in water_values
+    assert "ocean" in place_values
+    assert "sea" in place_values
 
 
 def test_water_layer_keeps_valid_parts_when_one_polygon_extrusion_fails(monkeypatch) -> None:

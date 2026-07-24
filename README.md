@@ -130,9 +130,10 @@ their visible heights.
 Water polygons are part of the same multipart model and use the same gray material as
 buildings. Water starts 0.4 mm below the local terrain surface and embeds by 0.2 mm,
 while the structural base remains underneath. When Water is enabled, desktop generation
-downloads OSM areas tagged `natural=water`, `waterway=riverbank`, or reservoir/basin land
-use and transforms them into the print frame. Local water files or pre-transformed
-polygons remain available for offline tests.
+downloads OSM areas tagged `natural=water`, marine `water=*`/`place=*` values such as
+`ocean` and `sea`, `waterway=riverbank`, or reservoir/basin land use, then transforms
+them into the print frame. Local water files or pre-transformed polygons remain
+available for offline tests.
 
 Connected water polygons are merged before meshing, so a river such as Buffalo Bayou is
 one continuous vector solid rather than a collection of terrain-grid rectangles. The
@@ -203,7 +204,8 @@ The map itself uses online MapLibre/OpenStreetMap tiles, so map imagery and OSM 
 downloads still require an internet connection. A newly loaded route and orientation change
 reserve 6 mm between the route extents and the displayed print frame. **Zoom in** and
 **Zoom out** adjust geographic coverage around the current frame center; **Reset frame to
-route** restores the centered 6 mm fit.
+route** restores the centered 6 mm fit. In Terrain mode, enabling Water exports the gray
+water as its own mesh body, and the Layers panel shows this as a dedicated indicator.
 
 ### Building parts and roofs
 

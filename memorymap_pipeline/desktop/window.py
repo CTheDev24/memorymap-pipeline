@@ -141,6 +141,9 @@ class MemoryMapWindow(QMainWindow):
         self.buildings_layer = QCheckBox("Buildings"); self.buildings_layer.setChecked(True)
         self.terrain_layer = QCheckBox("Terrain (USGS 3DEP)")
         self.water_layer = QCheckBox("Water (gray, recessed)")
+        self.water_mesh_body_hint = QCheckBox("Export as separate water mesh body")
+        self.water_mesh_body_hint.setChecked(True)
+        self.water_mesh_body_hint.setEnabled(False)
         self.water_layer.setEnabled(False)
         self.terrain_layer.toggled.connect(self._terrain_toggled)
         self.water_layer.toggled.connect(self._water_toggled)
@@ -150,6 +153,7 @@ class MemoryMapWindow(QMainWindow):
             self.buildings_layer,
             self.terrain_layer,
             self.water_layer,
+            self.water_mesh_body_hint,
         ):
             layer_layout.addWidget(control)
         outer.addWidget(layers)
