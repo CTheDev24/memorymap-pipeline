@@ -111,7 +111,7 @@ def download_water_polygons(
             if not print_polygon.is_empty:
                 transformed.append(print_polygon)
     transformed.extend(
-        _infer_coastal_water_regions(transformed, transformed_coastlines, print_bounds)
+        _infer_coastal_water_regions(transformed_coastlines, print_bounds)
     )
     return transformed
 
@@ -171,7 +171,6 @@ def _transform_coastline_geometry(
 
 
 def _infer_coastal_water_regions(
-    known_water: list[BaseGeometry],
     coastlines: list[LineString],
     print_bounds: Polygon,
 ) -> list[Polygon]:
@@ -194,47 +193,48 @@ def _infer_coastal_water_regions(
         return []
     if len(regions) <= 1:
         return []
-    known_union = unary_union(known_water) if known_water else None
     sea_hint_parts = []
+    land_hint_parts = []
     for line in merged_lines:
-        try:
-            hint = line.buffer(-0.3, single_sided=True, cap_style=2, join_style=2)
-        except Exception:
-            continue
-        if not hint.is_empty:
-            sea_hint_parts.append(hint)
+        coordinates = list(line.coords)
+        for start, end in zip(coordinates, coordinates[1:]):
+            segment = LineString([start, end])
+            if segment.length <= 1e-8:
+                continue
+            try:
+                sea_hint = segment.buffer(
+                    -0.3,
+                    single_sided=True,
+                    cap_style=2,
+                    join_style=2,
+                )
+                land_hint = segment.buffer(
+                    0.3,
+                    single_sided=True,
+                    cap_style=2,
+                    join_style=2,
+                )
+            except Exception:
+                continue
+            if not sea_hint.is_empty:
+                sea_hint_parts.append(sea_hint)
+            if not land_hint.is_empty:
+                land_hint_parts.append(land_hint)
     sea_hint = unary_union(sea_hint_parts) if sea_hint_parts else None
-    inferred: list[Polygon] = []
+    land_hint = unary_union(land_hint_parts) if land_hint_parts else None
+    if sea_hint is None or land_hint is None:
+        return []
+    inferred = []
     for region in regions:
         if region.is_empty or region.area <= 1e-6:
             continue
         if region.boundary.intersection(boundary).length <= 0.1:
             continue
-        if (
-            sea_hint is not None
-            and sea_hint.intersection(region).area <= 1e-8
-        ):
-            continue
-        if (
-            known_union is not None
-            and known_union.buffer(0.4).intersection(region).area <= 1e-8
-        ):
-            continue
-        inferred.append(region)
-    if inferred:
-        return inferred
-    if sea_hint is None:
-        return []
-    return [
-        region
-        for region in regions
-        if (
-            not region.is_empty
-            and region.area > 1e-6
-            and region.boundary.intersection(boundary).length > 0.1
-            and sea_hint.intersection(region).area > 1e-8
-        )
-    ]
+        sea_evidence = sea_hint.intersection(region).area
+        land_evidence = land_hint.intersection(region).area
+        if sea_evidence > 1e-8 and sea_evidence > land_evidence:
+            inferred.append(region)
+    return inferred
 
 
 def prepare_water_bodies(

@@ -134,8 +134,10 @@ downloads OSM areas tagged `natural=water`, marine `water=*`/`place=*` values su
 `ocean` and `sea`, `waterway=riverbank`, or reservoir/basin land use. It also retrieves
 oriented `natural=coastline` ways in the same request and fills the ocean side within
 the print frame, because OpenStreetMap coastlines normally imply the ocean rather than
-storing it as a closed water polygon. Local water files or pre-transformed polygons
-remain available for offline tests.
+storing it as a closed water polygon. Coastline regions are classified using the
+dominant right-side (ocean) versus left-side (land) directional evidence, preventing
+secondary island or fragmented shoreline ways from selecting both sides of the coast.
+Local water files or pre-transformed polygons remain available for offline tests.
 
 Connected water polygons are merged before meshing, so a river such as Buffalo Bayou is
 one continuous vector solid rather than a collection of terrain-grid rectangles. The

@@ -601,9 +601,8 @@ def test_water_tags_include_marine_ocean_features() -> None:
 def test_coastline_inference_adds_ocean_region_touching_frame_edge() -> None:
     frame = box(0.0, 0.0, 100.0, 80.0)
     coastline = LineString([(100.0, 50.0), (0.0, 50.0)])
-    canal = box(48.0, 50.0, 52.0, 60.0)
 
-    inferred = _infer_coastal_water_regions([canal], [coastline], frame)
+    inferred = _infer_coastal_water_regions([coastline], frame)
 
     assert inferred
     ocean_union = unary_union(inferred)
@@ -616,7 +615,7 @@ def test_coastline_inference_respects_osm_coastline_direction() -> None:
     coastline = LineString([(0.0, 50.0), (100.0, 50.0)])
 
     ocean_union = unary_union(
-        _infer_coastal_water_regions([], [coastline], frame)
+        _infer_coastal_water_regions([coastline], frame)
     )
 
     assert ocean_union.contains(Point(50.0, 30.0))
@@ -627,7 +626,36 @@ def test_coastline_inference_ignores_line_that_does_not_split_frame() -> None:
     frame = box(0.0, 0.0, 100.0, 80.0)
     coastline = LineString([(20.0, 50.0), (80.0, 50.0)])
 
-    assert _infer_coastal_water_regions([], [coastline], frame) == []
+    assert _infer_coastal_water_regions([coastline], frame) == []
+
+
+def test_coastline_inference_keeps_closed_island_land_dry() -> None:
+    frame = box(0.0, 0.0, 100.0, 80.0)
+    coastline = LineString(
+        [(30.0, 20.0), (70.0, 20.0), (70.0, 60.0), (30.0, 60.0), (30.0, 20.0)]
+    )
+
+    ocean = unary_union(_infer_coastal_water_regions([coastline], frame))
+
+    assert ocean.contains(Point(10.0, 10.0))
+    assert not ocean.contains(Point(50.0, 40.0))
+    assert ocean.area == pytest.approx(frame.area - 1_600.0)
+
+
+def test_coastline_inference_uses_dominant_directional_evidence() -> None:
+    frame = box(0.0, 0.0, 100.0, 80.0)
+    coastline = LineString([(100.0, 50.0), (0.0, 50.0)])
+    short_reversed_fragment = LineString([(45.0, 20.0), (55.0, 20.0)])
+
+    ocean = unary_union(
+        _infer_coastal_water_regions(
+            [coastline, short_reversed_fragment],
+            frame,
+        )
+    )
+
+    assert ocean.contains(Point(50.0, 70.0))
+    assert not ocean.contains(Point(50.0, 30.0))
 
 
 def test_water_loader_fills_ocean_from_oriented_osm_coastline(monkeypatch) -> None:
