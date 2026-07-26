@@ -131,9 +131,11 @@ Water polygons are part of the same multipart model and use the same gray materi
 buildings. Water starts 0.4 mm below the local terrain surface and embeds by 0.2 mm,
 while the structural base remains underneath. When Water is enabled, desktop generation
 downloads OSM areas tagged `natural=water`, marine `water=*`/`place=*` values such as
-`ocean` and `sea`, `waterway=riverbank`, or reservoir/basin land use, then transforms
-them into the print frame. Local water files or pre-transformed polygons remain
-available for offline tests.
+`ocean` and `sea`, `waterway=riverbank`, or reservoir/basin land use. It also retrieves
+oriented `natural=coastline` ways in the same request and fills the ocean side within
+the print frame, because OpenStreetMap coastlines normally imply the ocean rather than
+storing it as a closed water polygon. Local water files or pre-transformed polygons
+remain available for offline tests.
 
 Connected water polygons are merged before meshing, so a river such as Buffalo Bayou is
 one continuous vector solid rather than a collection of terrain-grid rectangles. The

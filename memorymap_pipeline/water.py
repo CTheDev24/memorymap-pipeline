@@ -8,7 +8,7 @@ import numpy as np
 from shapely.geometry import LineString, Polygon
 from shapely.geometry import box as shapely_box
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import linemerge, polygonize, unary_union
+from shapely.ops import polygonize, split, unary_union
 from trimesh import Trimesh
 from trimesh.creation import triangulate_polygon
 from trimesh.util import concatenate
@@ -19,15 +19,12 @@ from .projection import apply_transform, project_lonlat_array
 from .terrain import TerrainSurface
 
 WATER_TAGS = {
-    "natural": ["water"],
+    "natural": ["water", "coastline"],
     "water": ["ocean", "sea", "bay", "strait", "lagoon", "fjord", "sound"],
     "waterway": "riverbank",
     "landuse": ["reservoir", "basin"],
     "place": ["sea", "ocean", "bay"],
 }
-COASTLINE_TAGS = {"natural": "coastline"}
-
-
 @dataclass(frozen=True)
 class WaterBody:
     geometry: Polygon
@@ -45,7 +42,6 @@ def download_water_polygons(
     water_file: str | Path | None = None,
 ) -> list[BaseGeometry]:
     """Load OSM water areas and transform them into clipped print-space polygons."""
-    coastline_data = None
     try:
         import geopandas as gpd
 
@@ -64,32 +60,40 @@ def download_water_polygons(
                 data = fetch_point(
                     (center_lat, center_lon), tags=WATER_TAGS, dist=radius_m
                 )
-                coastline_data = fetch_point(
-                    (center_lat, center_lon), tags=COASTLINE_TAGS, dist=radius_m
-                )
             elif fetch_bbox is not None:
                 lat_min, lat_max, lon_min, lon_max = bbox
+
                 try:
-                    data = fetch_bbox((lon_min, lat_min, lon_max, lat_max), tags=WATER_TAGS)
-                    coastline_data = fetch_bbox(
-                        (lon_min, lat_min, lon_max, lat_max), tags=COASTLINE_TAGS
+                    data = fetch_bbox(
+                        (lon_min, lat_min, lon_max, lat_max), tags=WATER_TAGS
                     )
                 except TypeError:
-                    data = fetch_bbox(lat_max, lat_min, lon_max, lon_min, tags=WATER_TAGS)
-                    coastline_data = fetch_bbox(
-                        lat_max, lat_min, lon_max, lon_min, tags=COASTLINE_TAGS
+                    data = fetch_bbox(
+                        lat_max, lat_min, lon_max, lon_min, tags=WATER_TAGS
                     )
             else:
                 raise RuntimeError("Installed OSMnx does not expose a feature query API")
     except Exception as exc:
-        logging.warning("Failed to load water polygons: %s", exc)
+        logging.warning("Failed to load water polygons and coastlines: %s", exc)
         return []
 
     print_bounds = shapely_box(0.0, 0.0, map_width_mm, map_height_mm)
     transformed: list[BaseGeometry] = []
     transformed_coastlines: list[LineString] = []
-    for geometry in data.geometry:
+    for _, feature in data.iterrows():
+        geometry = feature.geometry
         if geometry is None or geometry.is_empty:
+            continue
+        if feature.get("natural") == "coastline":
+            transformed_coastlines.extend(
+                _transform_coastline_geometry(
+                    geometry,
+                    center_lat=center_lat,
+                    center_lon=center_lon,
+                    transform=transform,
+                    print_bounds=print_bounds,
+                )
+            )
             continue
         parts = list(geometry.geoms) if geometry.geom_type == "MultiPolygon" else [geometry]
         for part in parts:
@@ -106,19 +110,6 @@ def download_water_polygons(
                 continue
             if not print_polygon.is_empty:
                 transformed.append(print_polygon)
-    if coastline_data is not None:
-        for geometry in coastline_data.geometry:
-            if geometry is None or geometry.is_empty:
-                continue
-            transformed_coastlines.extend(
-                _transform_coastline_geometry(
-                    geometry,
-                    center_lat=center_lat,
-                    center_lon=center_lon,
-                    transform=transform,
-                    print_bounds=print_bounds,
-                )
-            )
     transformed.extend(
         _infer_coastal_water_regions(transformed, transformed_coastlines, print_bounds)
     )
@@ -191,13 +182,17 @@ def _infer_coastal_water_regions(
         return []
     boundary = print_bounds.boundary
     try:
-        noded = unary_union([boundary, *merged_lines])
-        regions = list(polygonize(noded))
-        if not regions:
-            regions = list(polygonize(linemerge([*merged_lines, boundary])))
+        divider = unary_union(merged_lines)
+        regions = [
+            region
+            for region in split(print_bounds, divider).geoms
+            if region.geom_type == "Polygon"
+        ]
+        if len(regions) <= 1:
+            regions = list(polygonize(unary_union([boundary, divider])))
     except Exception:
         return []
-    if not regions:
+    if len(regions) <= 1:
         return []
     known_union = unary_union(known_water) if known_water else None
     sea_hint_parts = []
@@ -215,9 +210,15 @@ def _infer_coastal_water_regions(
             continue
         if region.boundary.intersection(boundary).length <= 0.1:
             continue
-        if sea_hint is not None and not sea_hint.intersects(region):
+        if (
+            sea_hint is not None
+            and sea_hint.intersection(region).area <= 1e-8
+        ):
             continue
-        if known_union is not None and not known_union.buffer(0.4).intersects(region):
+        if (
+            known_union is not None
+            and known_union.buffer(0.4).intersection(region).area <= 1e-8
+        ):
             continue
         inferred.append(region)
     if inferred:
@@ -231,7 +232,7 @@ def _infer_coastal_water_regions(
             not region.is_empty
             and region.area > 1e-6
             and region.boundary.intersection(boundary).length > 0.1
-            and sea_hint.intersects(region)
+            and sea_hint.intersection(region).area > 1e-8
         )
     ]
 

@@ -18,6 +18,9 @@ This repository is a Python desktop application that converts GPX routes and Ope
 ## Geometry and Output Constraints
 - Preserve the shared XY coordinate transformation and the global Z-coordinate system.
 - Keep separate 3MF bodies for base, route, roads, buildings, and other printable layers.
+- Treat OSM `natural=coastline` as an oriented boundary: land is on the left and ocean
+  is on the right. Ocean fill must be clipped to the printable frame before water
+  recess/support and separate-body export are generated.
 - Prioritize printability, geometry validity, and Bambu Studio compatibility.
 - Preserve recognizable landmark geometry and avoid unnecessary polygon simplification.
 - Keep the standard map footprint, raised route height, and modular layer structure intact unless the task explicitly requires otherwise.

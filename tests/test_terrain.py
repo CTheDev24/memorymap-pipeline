@@ -585,6 +585,7 @@ def test_water_loader_transforms_local_osm_polygons_into_print_space() -> None:
 
 
 def test_water_tags_include_marine_ocean_features() -> None:
+    assert "coastline" in WATER_TAGS["natural"]
     assert "water" in WATER_TAGS
     assert "place" in WATER_TAGS
     water_values = WATER_TAGS["water"]
@@ -608,6 +609,67 @@ def test_coastline_inference_adds_ocean_region_touching_frame_edge() -> None:
     ocean_union = unary_union(inferred)
     assert ocean_union.contains(Point(50.0, 70.0))
     assert not ocean_union.contains(Point(50.0, 30.0))
+
+
+def test_coastline_inference_respects_osm_coastline_direction() -> None:
+    frame = box(0.0, 0.0, 100.0, 80.0)
+    coastline = LineString([(0.0, 50.0), (100.0, 50.0)])
+
+    ocean_union = unary_union(
+        _infer_coastal_water_regions([], [coastline], frame)
+    )
+
+    assert ocean_union.contains(Point(50.0, 30.0))
+    assert not ocean_union.contains(Point(50.0, 70.0))
+
+
+def test_coastline_inference_ignores_line_that_does_not_split_frame() -> None:
+    frame = box(0.0, 0.0, 100.0, 80.0)
+    coastline = LineString([(20.0, 50.0), (80.0, 50.0)])
+
+    assert _infer_coastal_water_regions([], [coastline], frame) == []
+
+
+def test_water_loader_fills_ocean_from_oriented_osm_coastline(monkeypatch) -> None:
+    import geopandas as gpd
+    import osmnx as ox
+
+    frame = MapFrame(
+        center_lat=29.0,
+        center_lon=-95.0,
+        coverage_width_m=2_000.0,
+        coverage_height_m=2_000.0,
+        print_width_mm=100.0,
+        print_height_mm=80.0,
+        margin_mm=5.0,
+    )
+    features = gpd.GeoDataFrame(
+        {"natural": ["coastline"]},
+        geometry=[LineString([(-95.0, 29.02), (-95.0, 28.98)])],
+        crs="EPSG:4326",
+    )
+    calls = []
+
+    def fetch_features(*_args, **kwargs):
+        calls.append(kwargs["tags"])
+        return features
+
+    monkeypatch.setattr(ox, "features_from_point", fetch_features)
+
+    polygons = download_water_polygons(
+        bbox=(28.98, 29.02, -95.01, -94.99),
+        center_lat=frame.center_lat,
+        center_lon=frame.center_lon,
+        transform={"map_frame": frame},
+        map_width_mm=frame.print_width_mm,
+        map_height_mm=frame.print_height_mm,
+        radius_m=1_500.0,
+    )
+
+    ocean = unary_union(polygons)
+    assert len(calls) == 1
+    assert ocean.contains(Point(20.0, 40.0))
+    assert not ocean.contains(Point(80.0, 40.0))
 
 
 def test_water_layer_keeps_valid_parts_when_one_polygon_extrusion_fails(monkeypatch) -> None:
