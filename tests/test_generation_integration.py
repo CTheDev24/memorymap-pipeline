@@ -89,6 +89,34 @@ def test_partial_export_assigns_materials_only_to_present_objects(tmp_path: Path
     assert _model_assembly(output) == ("MemoryMap", ["Base_White", "Route_Accent"])
 
 
+def test_landscape_export_uses_bone_green_and_blue_material_bodies(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "landscape-layers.3mf"
+    base = build_base_plate(40.0, 30.0, 1.6)
+    green = route_mesh_from_polygon(box(5.0, 5.0, 25.0, 25.0), 0.6, -0.2)
+    water = route_mesh_from_polygon(box(25.0, 5.0, 35.0, 25.0), 0.6, -0.2)
+
+    export_3mf(
+        output,
+        base,
+        None,
+        water_mesh=water,
+        landscape_mesh=green,
+        style_profile="landscape",
+    )
+
+    assert _model_materials(output) == {
+        "Base_Bone": "#D6CBABFF",
+        "Water_Blue": "#3399FFFF",
+        "Terrain_Green": "#4F772DFF",
+    }
+    assert _model_assembly(output) == (
+        "MemoryMap",
+        ["Base_Bone", "Water_Blue", "Terrain_Green"],
+    )
+
+
 def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
     route = load_route_from_gpx(FIXTURES / "frame_route.gpx")
     frame = MapFrame(

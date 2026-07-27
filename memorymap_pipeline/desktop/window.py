@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
+from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN
 from .worker import GenerationWorker
 
 
@@ -23,9 +24,24 @@ FRAME_ZOOM_FACTOR = 1.1
 try:
     from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QDoubleSpinBox, QFileDialog, QFormLayout,
-        QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QProgressBar,
-        QPushButton, QRadioButton, QSplitter, QTextEdit, QVBoxLayout, QWidget,
+        QApplication,
+        QCheckBox,
+        QComboBox,
+        QDoubleSpinBox,
+        QFileDialog,
+        QFormLayout,
+        QGroupBox,
+        QHBoxLayout,
+        QLabel,
+        QMainWindow,
+        QMessageBox,
+        QProgressBar,
+        QPushButton,
+        QRadioButton,
+        QSplitter,
+        QTextEdit,
+        QVBoxLayout,
+        QWidget,
     )
     from PySide6.QtWebChannel import QWebChannel
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -134,6 +150,25 @@ class MemoryMapWindow(QMainWindow):
         form.addRow("Route framing", zoom_row)
         outer.addWidget(print_box)
 
+        style_box = QGroupBox("Map style")
+        style_form = QFormLayout(style_box)
+        self.style_profile = QComboBox()
+        self.style_profile.addItem("Urban", STYLE_PROFILE_URBAN)
+        self.style_profile.addItem("Landscape", STYLE_PROFILE_LANDSCAPE)
+        self.style_profile.currentIndexChanged.connect(self._style_changed)
+        self.surface_skin_thickness = self._spin(0.4, 0.2, 2.0)
+        self.minimum_waterway_width = self._spin(0.8, 0.4, 5.0)
+        self.surface_skin_thickness.setToolTip(
+            "Visible green and blue surface layer thickness for landscape maps."
+        )
+        self.minimum_waterway_width.setToolTip(
+            "Narrower mapped waterways are widened to this printable width."
+        )
+        style_form.addRow("Profile", self.style_profile)
+        style_form.addRow("Surface skin", self.surface_skin_thickness)
+        style_form.addRow("Minimum waterway width", self.minimum_waterway_width)
+        outer.addWidget(style_box)
+
         layers = QGroupBox("Layers")
         layer_layout = QVBoxLayout(layers)
         self.route_layer = QCheckBox("Route"); self.route_layer.setChecked(True)
@@ -180,6 +215,7 @@ class MemoryMapWindow(QMainWindow):
         self.warnings = QTextEdit(); self.warnings.setReadOnly(True)
         self.warnings.setPlaceholderText("Generation warnings and status appear here.")
         outer.addWidget(self.progress); outer.addWidget(self.warnings, 1)
+        self._style_changed()
         return panel
 
     @staticmethod
@@ -328,6 +364,26 @@ class MemoryMapWindow(QMainWindow):
     def _water_toggled(self, enabled: bool) -> None:
         self.water_recess.setEnabled(enabled and self.terrain_layer.isChecked())
 
+    @Slot(int)
+    def _style_changed(self, _index: int = -1) -> None:
+        landscape = (
+            self.style_profile.currentData() == STYLE_PROFILE_LANDSCAPE
+        )
+        self.surface_skin_thickness.setEnabled(landscape)
+        self.minimum_waterway_width.setEnabled(landscape)
+
+    def _generation_config_payload(self) -> dict:
+        return {
+            "terrain_enabled": self.terrain_layer.isChecked(),
+            "water_enabled": self.water_layer.isChecked(),
+            "terrain_max_relief_mm": self.terrain_relief.value(),
+            "water_recess_mm": self.water_recess.value(),
+            "max_print_height_mm": self.building_max_height.value(),
+            "style_profile": self.style_profile.currentData(),
+            "surface_skin_thickness_mm": self.surface_skin_thickness.value(),
+            "minimum_waterway_width_mm": self.minimum_waterway_width.value(),
+        }
+
     @Slot()
     def request_generation(self) -> None:
         if not self.gpx_path or not self.route or not self.current_frame:
@@ -344,13 +400,7 @@ class MemoryMapWindow(QMainWindow):
                 "include_roads": self.roads_layer.isChecked(),
                 "include_buildings": self.buildings_layer.isChecked(),
                 "route_width_mm": self.route_width.value(),
-                "config": {
-                    "terrain_enabled": self.terrain_layer.isChecked(),
-                    "water_enabled": self.water_layer.isChecked(),
-                    "terrain_max_relief_mm": self.terrain_relief.value(),
-                    "water_recess_mm": self.water_recess.value(),
-                    "max_print_height_mm": self.building_max_height.value(),
-                },
+                "config": self._generation_config_payload(),
             }
             thread = QThread(self); worker = GenerationWorker(payload)
             worker.moveToThread(thread); thread.started.connect(worker.run)

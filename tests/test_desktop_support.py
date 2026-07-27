@@ -15,7 +15,15 @@ def project() -> DesktopProject:
 
 
 def test_project_json_and_file_round_trip(tmp_path):
-    expected = project()
+    expected = DesktopProject(
+        frame=project().frame,
+        gpx_path="sample.gpx",
+        include_buildings=False,
+        route_width_mm=1.5,
+        style_profile="landscape",
+        surface_skin_thickness_mm=0.6,
+        minimum_waterway_width_mm=1.0,
+    )
     assert DesktopProject.from_json(expected.to_json()) == expected
     path = tmp_path / "sample.memorymap.json"
     expected.save(path)
@@ -30,6 +38,25 @@ def test_project_rejects_unknown_version_and_invalid_dimensions():
     value["version"] = 1
     value["route"]["width_mm"] = 0
     with pytest.raises(ValueError, match="positive"):
+        DesktopProject.from_dict(value)
+
+
+def test_project_loads_legacy_version_one_without_style_settings():
+    value = project().to_dict()
+    del value["style"]
+
+    restored = DesktopProject.from_dict(value)
+
+    assert restored.style_profile == "urban"
+    assert restored.surface_skin_thickness_mm == pytest.approx(0.4)
+    assert restored.minimum_waterway_width_mm == pytest.approx(0.8)
+
+
+def test_project_rejects_unknown_style_profile():
+    value = project().to_dict()
+    value["style"]["profile"] = "satellite"
+
+    with pytest.raises(ValueError, match="Unsupported style profile"):
         DesktopProject.from_dict(value)
 
 
@@ -140,3 +167,42 @@ def test_frame_zoom_preserves_center_and_scales_coverage():
     assert window.current_frame["coverage_width_m"] == pytest.approx(1_100.0)
     assert window.current_frame["coverage_height_m"] == pytest.approx(880.0)
     assert scripts and "setFrame" in scripts[-1]
+
+
+def test_generation_config_includes_style_profile_and_landscape_dimensions():
+    pytest.importorskip("PySide6")
+    from memorymap_pipeline.desktop.window import MemoryMapWindow
+
+    class Check:
+        def __init__(self, checked):
+            self.checked = checked
+
+        def isChecked(self):
+            return self.checked
+
+    class Value:
+        def __init__(self, value):
+            self._value = value
+
+        def value(self):
+            return self._value
+
+    class Combo:
+        def currentData(self):
+            return "landscape"
+
+    window = type("WindowState", (), {})()
+    window.terrain_layer = Check(True)
+    window.water_layer = Check(True)
+    window.terrain_relief = Value(3.0)
+    window.water_recess = Value(0.4)
+    window.building_max_height = Value(25.0)
+    window.style_profile = Combo()
+    window.surface_skin_thickness = Value(0.4)
+    window.minimum_waterway_width = Value(0.8)
+
+    payload = MemoryMapWindow._generation_config_payload(window)
+
+    assert payload["style_profile"] == "landscape"
+    assert payload["surface_skin_thickness_mm"] == pytest.approx(0.4)
+    assert payload["minimum_waterway_width_mm"] == pytest.approx(0.8)

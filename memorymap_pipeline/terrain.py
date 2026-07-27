@@ -22,6 +22,112 @@ class TerrainAnalysis:
 
 
 @dataclass(frozen=True)
+class TerrainGridSpec:
+    """Resolved DEM sampling dimensions and print-space diagnostics."""
+
+    rows: int
+    columns: int
+    mode: str
+    target_cell_size_mm: float | None
+    cell_width_mm: float
+    cell_height_mm: float
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.rows, self.columns
+
+    @property
+    def sample_count(self) -> int:
+        return self.rows * self.columns
+
+    @property
+    def estimated_terrain_faces(self) -> int:
+        # The terrain solid has top and bottom triangles plus two triangles per
+        # perimeter segment.
+        cells = (self.rows - 1) * (self.columns - 1)
+        perimeter = 2 * (self.rows - 1) + 2 * (self.columns - 1)
+        return 4 * cells + 2 * perimeter
+
+
+def terrain_grid_for_print(
+    width_mm: float,
+    height_mm: float,
+    *,
+    override: int | tuple[int, int] | list[int] | None = None,
+    target_cell_size_mm: float = 0.55,
+    maximum_samples: int = 180_000,
+    maximum_dimension: int = 512,
+) -> TerrainGridSpec:
+    """Resolve a rectangular terrain grid from the finished print dimensions.
+
+    Explicit legacy integer overrides remain square. A two-value override is
+    interpreted as ``(rows, columns)``. Adaptive dimensions preserve the print
+    aspect ratio and are capped before mesh construction so the terrain solid
+    cannot unexpectedly grow to several million triangles.
+    """
+    if width_mm <= 0 or height_mm <= 0:
+        raise ValueError("Terrain print dimensions must be positive")
+
+    if override is not None:
+        if isinstance(override, bool):
+            raise ValueError("Terrain grid override must contain integer dimensions")
+        if isinstance(override, (int, np.integer)):
+            rows = columns = int(override)
+        elif isinstance(override, (tuple, list)) and len(override) == 2:
+            rows, columns = override
+            if (
+                isinstance(rows, bool)
+                or isinstance(columns, bool)
+                or not isinstance(rows, (int, np.integer))
+                or not isinstance(columns, (int, np.integer))
+            ):
+                raise ValueError("Terrain grid override must contain integer dimensions")
+            rows, columns = int(rows), int(columns)
+        else:
+            raise ValueError("Terrain grid override must be an integer or (rows, columns)")
+        if min(rows, columns) < 2:
+            raise ValueError("Terrain grid dimensions must be at least two")
+        return TerrainGridSpec(
+            rows=rows,
+            columns=columns,
+            mode="override",
+            target_cell_size_mm=None,
+            cell_width_mm=width_mm / (columns - 1),
+            cell_height_mm=height_mm / (rows - 1),
+        )
+
+    if target_cell_size_mm <= 0:
+        raise ValueError("Terrain target cell size must be positive")
+    if maximum_samples < 4 or maximum_dimension < 2:
+        raise ValueError("Terrain adaptive grid limits are invalid")
+
+    desired_rows = max(2, int(np.ceil(height_mm / target_cell_size_mm)) + 1)
+    desired_columns = max(2, int(np.ceil(width_mm / target_cell_size_mm)) + 1)
+    scale = min(
+        1.0,
+        (maximum_dimension - 1) / float(desired_rows - 1),
+        (maximum_dimension - 1) / float(desired_columns - 1),
+        np.sqrt(maximum_samples / float(desired_rows * desired_columns)),
+    )
+    rows = max(2, int(np.floor((desired_rows - 1) * scale)) + 1)
+    columns = max(2, int(np.floor((desired_columns - 1) * scale)) + 1)
+    while rows * columns > maximum_samples:
+        if rows / height_mm >= columns / width_mm:
+            rows -= 1
+        else:
+            columns -= 1
+
+    return TerrainGridSpec(
+        rows=rows,
+        columns=columns,
+        mode="adaptive",
+        target_cell_size_mm=float(target_cell_size_mm),
+        cell_width_mm=width_mm / (columns - 1),
+        cell_height_mm=height_mm / (rows - 1),
+    )
+
+
+@dataclass(frozen=True)
 class ElevationGrid:
     """Bare-earth elevations for a geographic bounding box.
 

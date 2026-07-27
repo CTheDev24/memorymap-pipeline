@@ -24,6 +24,7 @@ from memorymap_pipeline.terrain import (
     drape_mesh,
     drape_road_mesh,
     drape_route_mesh,
+    terrain_grid_for_print,
     terrain_surface_from_grid,
 )
 from memorymap_pipeline.terrain_providers import (
@@ -32,7 +33,9 @@ from memorymap_pipeline.terrain_providers import (
     _decode_terrarium,
 )
 from memorymap_pipeline.water import (
+    LINEAR_WATERWAY_WIDTHS_MM,
     WATER_TAGS,
+    WaterFeature,
     _infer_coastal_water_regions,
     build_terrain_mesh_with_water,
     build_vector_water_mesh,
@@ -50,6 +53,42 @@ def _grid(values: list[list[float]]) -> ElevationGrid:
         east=-95.3,
         source="fixture",
     )
+
+
+def test_adaptive_terrain_grid_tracks_print_resolution_and_aspect_ratio() -> None:
+    grid = terrain_grid_for_print(240.0, 190.0)
+
+    assert grid.mode == "adaptive"
+    assert grid.shape == (347, 438)
+    assert grid.columns > grid.rows
+    assert grid.cell_width_mm == pytest.approx(0.55, abs=0.01)
+    assert grid.cell_height_mm == pytest.approx(0.55, abs=0.01)
+    assert grid.sample_count <= 180_000
+    assert grid.estimated_terrain_faces < 1_000_000
+
+
+def test_adaptive_terrain_grid_caps_fine_targets_without_becoming_square() -> None:
+    grid = terrain_grid_for_print(
+        240.0,
+        190.0,
+        target_cell_size_mm=0.1,
+        maximum_samples=50_000,
+        maximum_dimension=512,
+    )
+
+    assert grid.sample_count <= 50_000
+    assert max(grid.shape) <= 512
+    assert grid.columns > grid.rows
+    assert grid.columns / grid.rows == pytest.approx(240.0 / 190.0, rel=0.02)
+
+
+def test_explicit_terrain_grid_overrides_remain_exact() -> None:
+    square = terrain_grid_for_print(240.0, 190.0, override=96)
+    rectangular = terrain_grid_for_print(240.0, 190.0, override=(80, 120))
+
+    assert square.mode == "override"
+    assert square.shape == (96, 96)
+    assert rectangular.shape == (80, 120)
 
 
 def test_flat_houston_like_frame_uses_full_three_mm_relief() -> None:
@@ -415,6 +454,51 @@ def test_generation_uses_global_dem_when_usgs_fails(
     assert any("global DEM fallback" in warning for warning in result.warnings)
     assert not any("flat base" in warning for warning in result.warnings)
 
+
+def test_generation_requests_rectangular_adaptive_grid_and_reports_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    route = load_route_from_gpx(Path(__file__).parent / "fixtures" / "frame_route.gpx")
+    frame = MapFrame.fit_route(route.points, 120.0, 90.0, margin_mm=5.0)
+    requested_shapes: list[tuple[int, int]] = []
+
+    def fixture_grid(_self, bounds, grid_size, _cache_dir):
+        requested_shapes.append(grid_size)
+        south, north, west, east = bounds
+        rows, columns = grid_size
+        return ElevationGrid(
+            np.arange(rows * columns, dtype=float).reshape(rows, columns),
+            south,
+            north,
+            west,
+            east,
+            "fixture",
+        )
+
+    monkeypatch.setattr(Usgs3depProvider, "fetch", fixture_grid)
+    result = generation.generate_memory_map(
+        generation.GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=tmp_path / "adaptive-terrain.3mf",
+            include_route=False,
+            include_roads=False,
+            include_buildings=False,
+            config={
+                "terrain_enabled": True,
+                "terrain_target_cell_size_mm": 10.0,
+            },
+        )
+    )
+
+    assert requested_shapes == [(10, 13)]
+    diagnostics = result.stats["terrain"]["grid"]
+    assert diagnostics["mode"] == "adaptive"
+    assert (diagnostics["rows"], diagnostics["columns"]) == (10, 13)
+    assert diagnostics["samples"] == 130
+    assert diagnostics["estimated_terrain_faces"] == 516
+
+
 def test_generation_falls_back_to_flat_terrain_after_usgs_failure(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -560,6 +644,71 @@ def test_generation_service_drapes_route_and_exports_recessed_water(tmp_path: Pa
     assert result.water_mesh.bounds[0, 2] >= -0.6 - 1e-9
 
 
+def test_landscape_generation_builds_supported_bone_green_blue_layers(
+    tmp_path: Path,
+) -> None:
+    route = load_route_from_gpx(Path(__file__).parent / "fixtures" / "frame_route.gpx")
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+    water_polygon = box(25.0, 20.0, 75.0, 60.0)
+    result = generation.generate_memory_map(
+        generation.GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=tmp_path / "landscape-generation.3mf",
+            include_route=False,
+            include_roads=False,
+            include_buildings=False,
+            config={
+                "terrain_enabled": True,
+                "water_enabled": True,
+                "style_profile": "landscape",
+                "exposed_land_enabled": False,
+            },
+            elevation_grid=_grid(
+                [[30.0, 30.3, 30.6], [29.8, 30.1, 30.4], [29.5, 29.8, 30.1]]
+            ),
+            water_polygons=[water_polygon],
+        )
+    )
+
+    assert result.base_mesh is not None and result.base_mesh.is_watertight
+    assert result.landscape_mesh is not None and result.landscape_mesh.is_watertight
+    assert result.water_mesh is not None and result.water_mesh.is_watertight
+    centers = result.base_mesh.triangles_center
+    upward = result.base_mesh.face_normals[:, 2] > 0.9
+    inside_water = np.asarray(
+        [
+            water_polygon.buffer(-0.01).contains(Point(x, y))
+            for x, y in centers[:, :2]
+        ]
+    )
+    support_faces = centers[upward & inside_water]
+    assert len(support_faces) > 0
+    assert result.water_mesh.bounds[1, 2] - support_faces[:, 2].max() == pytest.approx(
+        0.4
+    )
+
+    with zipfile.ZipFile(result.output_path) as archive:
+        model_name = next(
+            name for name in archive.namelist() if name.lower().endswith(".model")
+        )
+        root = ET.fromstring(archive.read(model_name))
+    namespace = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    names = {
+        item.attrib.get("name")
+        for item in root.findall("m:resources/m:object", namespace)
+    }
+    assert {"Base_Bone", "Terrain_Green", "Water_Blue", "MemoryMap"} <= names
+
+
 def test_water_loader_transforms_local_osm_polygons_into_print_space() -> None:
     frame = MapFrame(
         center_lat=29.7600,
@@ -596,6 +745,94 @@ def test_water_tags_include_marine_ocean_features() -> None:
     assert "sea" in water_values
     assert "ocean" in place_values
     assert "sea" in place_values
+    assert set(("river", "stream", "canal", "drain", "ditch")) <= set(
+        WATER_TAGS["waterway"]
+    )
+
+
+def test_water_loader_buffers_local_linear_waterways_to_printable_widths() -> None:
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+
+    features = download_water_polygons(
+        bbox=(29.759, 29.761, -95.371, -95.369),
+        center_lat=frame.center_lat,
+        center_lon=frame.center_lon,
+        transform={"map_frame": frame},
+        map_width_mm=frame.print_width_mm,
+        map_height_mm=frame.print_height_mm,
+        water_file=Path(__file__).parent / "fixtures" / "frame_water.geojson",
+        include_metadata=True,
+    )
+
+    assert all(isinstance(feature, WaterFeature) for feature in features)
+    areas = [feature for feature in features if feature.kind == "area"]
+    waterways = {
+        feature.waterway: feature
+        for feature in features
+        if feature.kind == "waterway"
+    }
+    assert len(areas) == 1
+    assert set(waterways) == {"stream", "canal"}
+    assert waterways["stream"].geometry.bounds[3] - waterways["stream"].geometry.bounds[1] == pytest.approx(
+        LINEAR_WATERWAY_WIDTHS_MM["stream"],
+        abs=0.02,
+    )
+    assert waterways["canal"].geometry.bounds[2] - waterways["canal"].geometry.bounds[0] == pytest.approx(
+        LINEAR_WATERWAY_WIDTHS_MM["canal"],
+        abs=0.02,
+    )
+    assert all(feature.geometry.geom_type in ("Polygon", "MultiPolygon") for feature in features)
+    assert all(
+        0.0 <= feature.geometry.bounds[0] <= feature.geometry.bounds[2] <= 120.0
+        for feature in features
+    )
+    assert all(
+        0.0 <= feature.geometry.bounds[1] <= feature.geometry.bounds[3] <= 90.0
+        for feature in features
+    )
+
+
+def test_water_loader_honors_minimum_printable_waterway_width() -> None:
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+
+    features = download_water_polygons(
+        bbox=(29.759, 29.761, -95.371, -95.369),
+        center_lat=frame.center_lat,
+        center_lon=frame.center_lon,
+        transform={"map_frame": frame},
+        map_width_mm=frame.print_width_mm,
+        map_height_mm=frame.print_height_mm,
+        water_file=Path(__file__).parent / "fixtures" / "frame_water.geojson",
+        minimum_waterway_width_mm=1.4,
+        include_metadata=True,
+    )
+
+    waterways = [feature for feature in features if feature.kind == "waterway"]
+    assert len(waterways) == 2
+    assert all(
+        min(
+            feature.geometry.bounds[2] - feature.geometry.bounds[0],
+            feature.geometry.bounds[3] - feature.geometry.bounds[1],
+        )
+        == pytest.approx(1.4, abs=0.02)
+        for feature in waterways
+    )
 
 
 def test_coastline_inference_adds_ocean_region_touching_frame_edge() -> None:

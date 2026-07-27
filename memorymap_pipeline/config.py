@@ -21,7 +21,18 @@ DEFAULT_CONFIG = {
     # terrain/water scaffold (disabled until selected by a client)
     "terrain_enabled": False,
     "terrain_provider": "usgs-3dep",
-    "terrain_grid_size": 96,
+    # None selects a rectangular print-resolution-aware DEM grid. An integer
+    # remains a supported explicit square-grid override for repeatable fixtures.
+    "terrain_grid_size": None,
+    "terrain_target_cell_size_mm": 0.55,
+    "terrain_grid_max_samples": 180_000,
+    "terrain_grid_max_dimension": 512,
+    "style_profile": "urban",
+    # Landscape surfaces follow the Map2Model-style bone substrate plus skins.
+    "surface_skin_thickness_mm": 0.4,
+    "landscape_water_visible_thickness_mm": 0.4,
+    "minimum_waterway_width_mm": 0.8,
+    "exposed_land_enabled": True,
     "terrain_request_timeout_seconds": 20.0,
     "terrain_request_attempts": 3,
     "terrain_retry_backoff_seconds": 0.5,
