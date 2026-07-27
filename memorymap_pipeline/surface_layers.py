@@ -131,6 +131,98 @@ def landscape_surface_region(
     return region.buffer(0)
 
 
+def _oriented_boundary_edges(triangles: np.ndarray) -> np.ndarray:
+    """Return oriented edges used by exactly one triangle."""
+    oriented = np.concatenate(
+        (
+            triangles[:, [0, 1]],
+            triangles[:, [1, 2]],
+            triangles[:, [2, 0]],
+        ),
+        axis=0,
+    )
+    undirected = np.sort(oriented, axis=1)
+    _, inverse, counts = np.unique(
+        undirected,
+        axis=0,
+        return_inverse=True,
+        return_counts=True,
+    )
+    return oriented[counts[inverse] == 1]
+
+
+def _split_pinched_boundary_vertices(
+    triangles: np.ndarray,
+    grid: np.ndarray,
+    heights: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Duplicate only boundary vertices that contain multiple triangle fans.
+
+    A normal manifold boundary has two incident boundary edges per vertex.
+    Diagonal raster contacts create four or more. Splitting those rare vertices
+    by their local edge-connected triangle fans prevents non-manifold vertical
+    walls without graph-walking every terrain vertex.
+    """
+    remapped = np.asarray(triangles, dtype=int).copy()
+    boundary = _oriented_boundary_edges(remapped)
+    boundary_vertices, boundary_degree = np.unique(
+        boundary.reshape(-1),
+        return_counts=True,
+    )
+    pinched = set(boundary_vertices[boundary_degree > 2].tolist())
+    if not pinched:
+        return remapped, grid, heights
+
+    occurrences = np.argwhere(np.isin(remapped, list(pinched)))
+    by_vertex: dict[int, list[tuple[int, int]]] = {}
+    for triangle_index, corner_index in occurrences:
+        global_index = int(remapped[triangle_index, corner_index])
+        by_vertex.setdefault(global_index, []).append(
+            (int(triangle_index), int(corner_index))
+        )
+
+    duplicate_sources: list[int] = []
+    original_vertex_count = len(grid)
+    for global_index, vertex_occurrences in by_vertex.items():
+        triangle_indices = {triangle_index for triangle_index, _ in vertex_occurrences}
+        neighbours = {triangle_index: set() for triangle_index in triangle_indices}
+        edge_members: dict[int, list[int]] = {}
+        for triangle_index in triangle_indices:
+            for other_index in remapped[triangle_index]:
+                if other_index != global_index:
+                    edge_members.setdefault(int(other_index), []).append(triangle_index)
+        for members in edge_members.values():
+            for member in members:
+                neighbours[member].update(other for other in members if other != member)
+
+        fans: list[set[int]] = []
+        remaining = set(triangle_indices)
+        while remaining:
+            seed = remaining.pop()
+            fan = {seed}
+            pending = [seed]
+            while pending:
+                current = pending.pop()
+                connected = neighbours[current].intersection(remaining)
+                remaining.difference_update(connected)
+                fan.update(connected)
+                pending.extend(connected)
+            fans.append(fan)
+
+        for fan in fans[1:]:
+            replacement = original_vertex_count + len(duplicate_sources)
+            duplicate_sources.append(global_index)
+            for triangle_index, corner_index in vertex_occurrences:
+                if triangle_index in fan:
+                    remapped[triangle_index, corner_index] = replacement
+
+    if duplicate_sources:
+        source_indices = np.asarray(duplicate_sources, dtype=int)
+        grid = np.vstack((grid, grid[source_indices]))
+        heights = np.concatenate((heights, heights[source_indices]))
+    return remapped, grid, heights
+
+
 def build_conformal_surface_skin(
     surface: TerrainSurface,
     region: BaseGeometry,
@@ -156,69 +248,57 @@ def build_conformal_surface_skin(
         [(x, y) for y in ys for x in xs],
         dtype=float,
     )
-    top = np.column_stack(
-        (
-            grid,
-            surface.heights_mm.reshape(-1) + visible_thickness_mm,
-        )
-    )
-    bottom = np.column_stack(
-        (
-            grid,
-            surface.heights_mm.reshape(-1) - embed_depth_mm,
-        )
-    )
-    layer_size = len(grid)
-    selected: list[tuple[int, int, int]] = []
     buffered = clipped.buffer(1e-9)
-    for row in range(rows - 1):
-        for column in range(columns - 1):
-            a = row * columns + column
-            b = a + 1
-            c = a + columns
-            d = c + 1
-            for triangle in ((a, c, b), (b, c, d)):
-                center = grid[np.asarray(triangle)].mean(axis=0)
-                if bool(contains_xy(buffered, center[0], center[1])):
-                    selected.append(triangle)
-    if not selected:
+    cell_rows = np.repeat(np.arange(rows - 1, dtype=int), columns - 1)
+    cell_columns = np.tile(np.arange(columns - 1, dtype=int), rows - 1)
+    first = cell_rows * columns + cell_columns
+    second = first + 1
+    third = first + columns
+    fourth = third + 1
+    triangles = np.empty((len(first) * 2, 3), dtype=int)
+    triangles[0::2] = np.column_stack((first, third, second))
+    triangles[1::2] = np.column_stack((second, third, fourth))
+    centers = grid[triangles].mean(axis=1)
+    selected_mask = np.asarray(
+        contains_xy(buffered, centers[:, 0], centers[:, 1]),
+        dtype=bool,
+    )
+    selected = triangles[selected_mask]
+    if len(selected) == 0:
         return None
 
-    faces: list[tuple[int, int, int]] = []
-    edge_counts: dict[tuple[int, int], int] = {}
-    for first, second, third in selected:
-        faces.append((first, second, third))
-        faces.append(
-            (
-                first + layer_size,
-                third + layer_size,
-                second + layer_size,
-            )
+    height_values = surface.heights_mm.reshape(-1)
+    selected, expanded_grid, expanded_heights = _split_pinched_boundary_vertices(
+        selected,
+        grid,
+        height_values,
+    )
+    used_indices, local_indices = np.unique(selected, return_inverse=True)
+    local_triangles = local_indices.reshape((-1, 3))
+    selected_grid = expanded_grid[used_indices]
+    selected_heights = expanded_heights[used_indices]
+    top = np.column_stack(
+        (selected_grid, selected_heights + visible_thickness_mm)
+    )
+    bottom = np.column_stack(
+        (selected_grid, selected_heights - embed_depth_mm)
+    )
+    layer_size = len(selected_grid)
+    bottom_faces = local_triangles[:, [0, 2, 1]] + layer_size
+    boundary = _oriented_boundary_edges(local_triangles)
+    start = boundary[:, 0]
+    end = boundary[:, 1]
+    side_faces = np.vstack(
+        (
+            np.column_stack((start, end + layer_size, end)),
+            np.column_stack((start, start + layer_size, end + layer_size)),
         )
-        for start, end in (
-            (first, second),
-            (second, third),
-            (third, first),
-        ):
-            key = (min(start, end), max(start, end))
-            edge_counts[key] = edge_counts.get(key, 0) + 1
-    for (start, end), count in edge_counts.items():
-        if count != 1:
-            continue
-        faces.extend(
-            (
-                (start, end + layer_size, end),
-                (start, start + layer_size, end + layer_size),
-            )
-        )
-
+    )
     mesh = Trimesh(
         vertices=np.vstack((top, bottom)),
-        faces=np.asarray(faces, dtype=int),
-        process=True,
+        faces=np.vstack((local_triangles, bottom_faces, side_faces)),
+        process=False,
     )
-    mesh.remove_unreferenced_vertices()
-    mesh.fix_normals(multibody=True)
     if not mesh.is_watertight:
         raise ValueError("Landscape surface skin is not watertight")
     return mesh

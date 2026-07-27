@@ -67,3 +67,19 @@ def test_conformal_surface_skin_is_supported_and_watertight() -> None:
     assert skin.bounds[0, 2] >= surface.heights_mm.min() - 0.2 - 1e-6
     assert skin.bounds[0, 0] >= 0.0
     assert skin.bounds[1, 0] <= 60.0
+
+
+def test_conformal_skin_keeps_corner_touching_islands_watertight() -> None:
+    surface = _surface()
+    # These small regions select two DEM triangles that meet at exactly one
+    # grid corner but do not share an edge, matching diagonal coastal and
+    # waterway rasterization seen in Big Sur.
+    region = box(19.0, 45.5, 21.0, 47.5).union(
+        box(39.0, 32.2, 41.0, 34.4)
+    )
+
+    skin = build_conformal_surface_skin(surface, region)
+
+    assert skin is not None
+    assert skin.is_watertight
+    assert skin.is_winding_consistent
