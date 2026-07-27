@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 
 import numpy as np
-from shapely.geometry import Point
+from shapely.geometry import Point, box
 from trimesh import Trimesh
 
 from memorymap_pipeline.map_frame import MapFrame
-from memorymap_pipeline.roads import download_and_build_roads
+from memorymap_pipeline.roads import _extrude_road_polygon, download_and_build_roads
 
 
 def test_major_highways_mark_their_mesh_for_terrain_smoothing(tmp_path) -> None:
@@ -175,3 +175,62 @@ def test_road_layer_keeps_valid_parts_when_one_polygon_extrusion_fails(
     assert calls["count"] >= 2
     assert mesh is not None
     assert len(mesh.faces) > 0
+
+
+def test_large_connected_road_polygon_is_subdivided_after_extrusion_failure(
+    monkeypatch,
+) -> None:
+    calls = []
+    successful_areas = []
+
+    def _fake_extrude(polygon, *, height_mm, z_offset):
+        calls.append(polygon.area)
+        if polygon.area > 600.0:
+            raise ValueError("polygon is too complex to triangulate")
+        successful_areas.append(polygon.area)
+        mesh = Trimesh(
+            vertices=np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                    [0.0, 1.0, 1.0],
+                ],
+            ),
+            faces=np.array(
+                [
+                    [0, 2, 1],
+                    [0, 3, 2],
+                    [4, 5, 6],
+                    [4, 6, 7],
+                    [0, 1, 5],
+                    [0, 5, 4],
+                    [1, 2, 6],
+                    [1, 6, 5],
+                    [2, 3, 7],
+                    [2, 7, 6],
+                    [3, 0, 4],
+                    [3, 4, 7],
+                ]
+            ),
+            process=False,
+        )
+        mesh.apply_translation((polygon.centroid.x, polygon.centroid.y, z_offset))
+        return mesh
+
+    monkeypatch.setattr("memorymap_pipeline.roads.route_mesh_from_polygon", _fake_extrude)
+
+    meshes = _extrude_road_polygon(
+        box(0.0, 0.0, 100.0, 80.0),
+        height_mm=0.8,
+        z_offset=1.4,
+    )
+
+    assert calls[0] == 8000.0
+    assert len(meshes) == 16
+    assert len(successful_areas) == len(meshes)
+    assert all(area <= 600.0 for area in successful_areas)

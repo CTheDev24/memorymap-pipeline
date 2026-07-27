@@ -36,6 +36,107 @@ OVERPASS_ENDPOINTS = [
 
 OVERPASS_TIMEOUT = 60
 
+_ROAD_EXTRUSION_MAX_SPLIT_DEPTH = 8
+_ROAD_EXTRUSION_MIN_AREA_MM2 = 0.01
+
+
+def _polygon_parts(shape) -> list[geom.Polygon]:
+    if isinstance(shape, geom.Polygon):
+        return [] if shape.is_empty else [shape]
+    if isinstance(shape, geom.MultiPolygon):
+        return [part for part in shape.geoms if not part.is_empty]
+    if hasattr(shape, "geoms"):
+        return [
+            part
+            for child in shape.geoms
+            for part in _polygon_parts(child)
+        ]
+    return []
+
+
+def _bisect_polygon(polygon: geom.Polygon) -> list[geom.Polygon]:
+    """Split a complex polygon without changing its printable footprint."""
+    min_x, min_y, max_x, max_y = polygon.bounds
+    width = max_x - min_x
+    height = max_y - min_y
+    padding = max(width, height, 1.0) + 1.0
+    if width >= height:
+        midpoint = (min_x + max_x) / 2.0
+        cutter = geom.LineString(
+            [(midpoint, min_y - padding), (midpoint, max_y + padding)]
+        )
+    else:
+        midpoint = (min_y + max_y) / 2.0
+        cutter = geom.LineString(
+            [(min_x - padding, midpoint), (max_x + padding, midpoint)]
+        )
+
+    try:
+        pieces = _polygon_parts(ops.split(polygon, cutter))
+    except Exception:
+        return []
+    return [
+        piece
+        for piece in pieces
+        if piece.area >= _ROAD_EXTRUSION_MIN_AREA_MM2
+    ]
+
+
+def _extrude_road_polygon(
+    polygon: geom.Polygon,
+    *,
+    height_mm: float,
+    z_offset: float,
+    split_depth: int = 0,
+) -> list[object]:
+    """Extrude a road polygon, subdividing only when triangulation is invalid.
+
+    Dense urban road buffers often union into one polygon with thousands of
+    vertices and holes.  A triangulation failure in that single polygon used to
+    discard the entire connected street network.  Spatial bisection keeps the
+    same footprint while giving the triangulator smaller, independently
+    watertight solids that slicers can combine as one road object.
+    """
+    try:
+        return [
+            route_mesh_from_polygon(
+                polygon,
+                height_mm=height_mm,
+                z_offset=z_offset,
+            )
+        ]
+    except Exception as exc:
+        if (
+            split_depth >= _ROAD_EXTRUSION_MAX_SPLIT_DEPTH
+            or polygon.area < 2.0 * _ROAD_EXTRUSION_MIN_AREA_MM2
+        ):
+            logging.warning(
+                "Skipping invalid road polygon after %d subdivision levels: %s",
+                split_depth,
+                exc,
+            )
+            return []
+
+        pieces = _bisect_polygon(polygon)
+        if len(pieces) < 2:
+            logging.warning(
+                "Skipping invalid road polygon that could not be subdivided: %s",
+                exc,
+            )
+            return []
+
+        meshes = []
+        for piece in pieces:
+            meshes.extend(
+                _extrude_road_polygon(
+                    piece,
+                    height_mm=height_mm,
+                    z_offset=z_offset,
+                    split_depth=split_depth + 1,
+                )
+            )
+        return meshes
+
 
 def download_and_build_roads(
     bbox: tuple[float, float, float, float] | None,
@@ -190,13 +291,13 @@ def download_and_build_roads(
             for p in parts:
                 if p.is_empty:
                     continue
-                try:
-                    mesh = route_mesh_from_polygon(
-                        p, height_mm=road_height_mm + embed_depth_mm, z_offset=z_offset
+                meshes.extend(
+                    _extrude_road_polygon(
+                        p,
+                        height_mm=road_height_mm + embed_depth_mm,
+                        z_offset=z_offset,
                     )
-                    meshes.append(mesh)
-                except Exception as exc:
-                    logging.warning("Skipping invalid road polygon during extrusion: %s", exc)
+                )
     except Exception as exc:  # pragma: no cover - mesh library issues
         logging.warning("Failed creating road meshes: %s", exc)
 
