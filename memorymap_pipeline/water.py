@@ -9,6 +9,7 @@ from shapely.geometry import LineString, Polygon
 from shapely.geometry import box as shapely_box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import polygonize, split, unary_union
+from shapely.strtree import STRtree
 from trimesh import Trimesh
 from trimesh.creation import triangulate_polygon
 from trimesh.util import concatenate
@@ -445,6 +446,12 @@ def build_terrain_mesh_with_water(
         id(body): body.level_mm - water_mesh_thickness_mm + support_overlap_mm
         for body in water_bodies
     }
+    water_tree = STRtree([body.geometry for body in water_bodies])
+
+    def nearby_bodies(geometry: BaseGeometry) -> list[WaterBody]:
+        indices = water_tree.query(geometry, predicate="intersects")
+        return [water_bodies[int(index)] for index in indices]
+
     rows, columns = surface.heights_mm.shape
     xs = np.linspace(0.0, surface.width_mm, columns)
     ys = np.linspace(surface.height_mm, 0.0, rows)
@@ -487,7 +494,7 @@ def build_terrain_mesh_with_water(
         for column in range(columns - 1):
             cell = shapely_box(xs[column], ys[row + 1], xs[column + 1], ys[row])
             add_region(cell.difference(water_union), surface.sample)
-            for body in water_bodies:
+            for body in nearby_bodies(cell):
                 add_region(
                     cell.intersection(body.geometry),
                     support_levels[id(body)],
@@ -559,7 +566,7 @@ def build_terrain_mesh_with_water(
         segment = LineString([first, second])
         for part in line_parts(segment.difference(water_union)):
             add_outer_wall(part, surface.sample)
-        for body in water_bodies:
+        for body in nearby_bodies(segment):
             for part in line_parts(segment.intersection(body.geometry)):
                 add_outer_wall(part, support_levels[id(body)])
 
@@ -571,7 +578,7 @@ def build_terrain_mesh_with_water(
                 -base_thickness_mm,
                 reverse=True,
             )
-            for body in water_bodies:
+            for body in nearby_bodies(cell):
                 add_region(
                     cell.intersection(body.geometry),
                     -base_thickness_mm,
