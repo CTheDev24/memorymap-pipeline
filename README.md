@@ -270,6 +270,25 @@ reserve 6 mm between the route extents and the displayed print frame. **Zoom in*
 route** restores the centered 6 mm fit. In Terrain mode, enabling Water exports the gray
 water as its own mesh body, and the Layers panel shows this as a dedicated indicator.
 
+### Generated 3D preview
+
+After a successful generation, **3D Preview** displays the same generated component
+meshes used to create the 3MF. The preview can be rotated, panned, zoomed, and fitted to
+the window. Route, roads, buildings, terrain/landscape, water, and base retain their
+assigned print colors, and each available layer can be shown or hidden independently.
+This makes missing layers, unexpected water coverage, discontinuities, and obvious
+geometry problems visible before opening the file in Bambu Studio.
+
+The viewer and its JavaScript assets are bundled locally with both the Python package and
+the standalone Windows executable. It does not need an external browser, localhost server,
+or internet connection after the meshes have been generated. Large maps may use simplified
+display geometry to keep interaction responsive; simplification affects only the preview,
+not the exported 3MF.
+
+The 3D preview is a geometry inspection tool, **not a slicer or toolpath preview**. Bambu
+Studio is still required to inspect layers, bridges and overhangs, filament changes, purge
+behavior, supports, and printer-specific toolpaths.
+
 ### Building parts and roofs
 
 Building generation follows the core OpenStreetMap Simple 3D Buildings tags. Both
