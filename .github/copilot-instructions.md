@@ -24,6 +24,11 @@ This repository is a Python desktop application that converts GPX routes and Ope
   default) and `terrain_grid_max_dimension` (512 by default) before mesh construction.
 - Keep integer and `(rows, columns)` terrain grid overrides working for fixtures,
   diagnostics, and reproducible tests.
+- Preserve a coplanar structural trim across Urban and Landscape maps. The configured
+  margin is the inner trim boundary; terrain must not contour the outer annulus and no
+  feature or surface skin may extend across it.
+- Preserve monotonic elevation detail outside the robust 5th-to-95th-percentile range.
+  Compress DEM tails instead of clipping them into flat minimum/maximum shelves.
 - Landscape surface boundaries follow the resolved DEM triangles. Avoid adding detail
   finer than either the terrain grid or the 0.4 mm nozzle can reproduce.
 

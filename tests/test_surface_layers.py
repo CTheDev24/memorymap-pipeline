@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from shapely.geometry import box
 
 from memorymap_pipeline.surface_layers import (
@@ -67,6 +68,22 @@ def test_conformal_surface_skin_is_supported_and_watertight() -> None:
     assert skin.bounds[0, 2] >= surface.heights_mm.min() - 0.2 - 1e-6
     assert skin.bounds[0, 0] >= 0.0
     assert skin.bounds[1, 0] <= 60.0
+
+
+def test_conformal_skin_respects_an_exact_rectangular_trim() -> None:
+    surface = _surface()
+    trim = box(5.0, 5.0, 85.0, 55.0)
+
+    skin = build_conformal_surface_skin(
+        surface,
+        box(0.0, 0.0, 90.0, 60.0),
+        clip_region=trim,
+    )
+
+    assert skin is not None
+    assert skin.is_watertight
+    assert skin.bounds[0, :2] == pytest.approx((5.0, 5.0))
+    assert skin.bounds[1, :2] == pytest.approx((85.0, 55.0))
 
 
 def test_conformal_skin_keeps_corner_touching_islands_watertight() -> None:

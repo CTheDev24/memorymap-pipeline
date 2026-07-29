@@ -265,7 +265,23 @@ def terrain_surface_from_grid(
     if high - low <= 1e-9:
         normalized = np.zeros_like(values)
     else:
-        normalized = np.clip((values - low) / (high - low), 0.0, 1.0)
+        # Preserve the robust percentile range without turning the lower and
+        # upper five percent into flat shelves.  The tails receive a compact,
+        # monotonic five percent of the printed relief instead of being clipped.
+        robust_range = high - low
+        central = 0.05 + 0.90 * (values - low) / robust_range
+        normalized = central.copy()
+        below = values < low
+        above = values > high
+        normalized[below] = 0.05 * np.exp(
+            (values[below] - low) / robust_range
+        )
+        normalized[above] = 1.0 - 0.05 * np.exp(
+            -(values[above] - high) / robust_range
+        )
+        minimum = float(np.min(normalized))
+        maximum = float(np.max(normalized))
+        normalized = (normalized - minimum) / (maximum - minimum)
     return TerrainSurface(
         heights_mm=normalized * analysis.target_relief_mm,
         width_mm=width_mm,
@@ -274,17 +290,77 @@ def terrain_surface_from_grid(
     )
 
 
-def build_terrain_mesh(surface: TerrainSurface, base_thickness_mm: float) -> Trimesh:
-    """Create a watertight terrain solid above a flat structural bottom."""
-    if base_thickness_mm <= 0:
-        raise ValueError("Terrain base thickness must be positive")
+def terrain_mesh_axes(
+    surface: TerrainSurface,
+    flat_margin_mm: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return terrain axes with exact inner trim boundaries when requested."""
+    if flat_margin_mm < 0:
+        raise ValueError("Terrain trim margin cannot be negative")
+    if flat_margin_mm * 2.0 >= min(surface.width_mm, surface.height_mm):
+        raise ValueError("Terrain trim margin is too large")
     rows, columns = surface.heights_mm.shape
     xs = np.linspace(0.0, surface.width_mm, columns)
     ys = np.linspace(surface.height_mm, 0.0, rows)
-    top = np.array(
-        [(x, y, surface.heights_mm[row, column]) for row, y in enumerate(ys) for column, x in enumerate(xs)],
-        dtype=float,
+    if flat_margin_mm > 0.0:
+        xs = np.unique(
+            np.append(
+                xs,
+                (flat_margin_mm, surface.width_mm - flat_margin_mm),
+            )
+        )
+        ys = np.unique(
+            np.append(
+                ys,
+                (flat_margin_mm, surface.height_mm - flat_margin_mm),
+            )
+        )[::-1]
+    return xs, ys
+
+
+def terrain_mesh_heights(
+    surface: TerrainSurface,
+    x_mm: np.ndarray,
+    y_mm: np.ndarray,
+    flat_margin_mm: float = 0.0,
+) -> np.ndarray:
+    """Sample terrain while keeping the outer trim at one constant elevation."""
+    heights = np.asarray(surface.sample(x_mm, y_mm), dtype=float)
+    if flat_margin_mm <= 0.0:
+        return heights
+    flat_height = float(np.min(surface.heights_mm))
+    trim = (
+        (x_mm <= flat_margin_mm + 1e-9)
+        | (x_mm >= surface.width_mm - flat_margin_mm - 1e-9)
+        | (y_mm <= flat_margin_mm + 1e-9)
+        | (y_mm >= surface.height_mm - flat_margin_mm - 1e-9)
     )
+    return np.where(trim, flat_height, heights)
+
+
+def build_terrain_mesh(
+    surface: TerrainSurface,
+    base_thickness_mm: float,
+    flat_margin_mm: float = 0.0,
+) -> Trimesh:
+    """Create a watertight terrain solid above a flat structural bottom."""
+    if base_thickness_mm <= 0:
+        raise ValueError("Terrain base thickness must be positive")
+    xs, ys = terrain_mesh_axes(surface, flat_margin_mm)
+    x_grid, y_grid = np.meshgrid(xs, ys)
+    top = np.column_stack(
+        (
+            x_grid.reshape(-1),
+            y_grid.reshape(-1),
+            terrain_mesh_heights(
+                surface,
+                x_grid,
+                y_grid,
+                flat_margin_mm,
+            ).reshape(-1),
+        )
+    )
+    rows, columns = len(ys), len(xs)
     bottom = top.copy()
     bottom[:, 2] = -base_thickness_mm
     vertices = np.vstack((top, bottom))

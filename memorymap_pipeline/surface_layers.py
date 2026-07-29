@@ -11,7 +11,7 @@ from shapely.ops import unary_union
 from trimesh import Trimesh
 
 from .buildings import _transform_shapely_polygon
-from .terrain import TerrainSurface
+from .terrain import TerrainSurface, terrain_mesh_heights
 
 
 EXPOSED_LAND_TAGS = {
@@ -229,6 +229,8 @@ def build_conformal_surface_skin(
     *,
     visible_thickness_mm: float = 0.4,
     embed_depth_mm: float = 0.2,
+    clip_region: BaseGeometry | None = None,
+    flat_margin_mm: float = 0.0,
 ) -> Trimesh | None:
     """Rasterize a supported, terrain-following material skin.
 
@@ -241,9 +243,20 @@ def build_conformal_surface_skin(
     if clipped.is_empty:
         return None
 
-    rows, columns = surface.heights_mm.shape
-    xs = np.linspace(0.0, surface.width_mm, columns)
-    ys = np.linspace(surface.height_mm, 0.0, rows)
+    source_rows, source_columns = surface.heights_mm.shape
+    xs = np.linspace(0.0, surface.width_mm, source_columns)
+    ys = np.linspace(surface.height_mm, 0.0, source_rows)
+    clip = None
+    if clip_region is not None:
+        clip = clip_region.intersection(
+            box(0.0, 0.0, surface.width_mm, surface.height_mm)
+        )
+        if clip.is_empty:
+            return None
+        minimum_x, minimum_y, maximum_x, maximum_y = clip.bounds
+        xs = np.unique(np.append(xs, (minimum_x, maximum_x)))
+        ys = np.unique(np.append(ys, (minimum_y, maximum_y)))[::-1]
+    rows, columns = len(ys), len(xs)
     grid = np.asarray(
         [(x, y) for y in ys for x in xs],
         dtype=float,
@@ -263,11 +276,28 @@ def build_conformal_surface_skin(
         contains_xy(buffered, centers[:, 0], centers[:, 1]),
         dtype=bool,
     )
+    if clip is not None:
+        selected_mask &= np.asarray(
+            contains_xy(
+                clip.buffer(1e-9),
+                centers[:, 0],
+                centers[:, 1],
+            ),
+            dtype=bool,
+        )
     selected = triangles[selected_mask]
     if len(selected) == 0:
         return None
 
-    height_values = surface.heights_mm.reshape(-1)
+    height_values = np.asarray(
+        terrain_mesh_heights(
+            surface,
+            grid[:, 0],
+            grid[:, 1],
+            flat_margin_mm,
+        ),
+        dtype=float,
+    )
     selected, expanded_grid, expanded_heights = _split_pinched_boundary_vertices(
         selected,
         grid,
