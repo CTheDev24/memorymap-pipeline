@@ -39,6 +39,7 @@ from .terrain import (
     drape_road_mesh,
     drape_route_mesh,
     terrain_grid_for_print,
+    terrain_mesh_heights,
     terrain_surface_from_grid,
 )
 from .terrain_providers import TerrariumProvider, Usgs3depProvider
@@ -174,12 +175,11 @@ def _route_mesh(polygon: Any, height_mm: float, z_offset: float) -> Any | None:
 
 
 def _feature_support_sampler(
-    terrain_surface: Any, water_bodies: list[Any]
+    terrain_surface: Any,
+    water_bodies: list[Any],
+    flat_margin_mm: float = 0.0,
 ) -> Callable[[Any, Any], np.ndarray]:
     """Sample the actual printable surface, including recessed water tops."""
-    if not water_bodies:
-        return terrain_surface.sample
-
     buffered_water = [
         (body.geometry.buffer(1e-7), float(body.level_mm)) for body in water_bodies
     ]
@@ -187,7 +187,15 @@ def _feature_support_sampler(
     def sample(x_mm, y_mm):
         x = np.asarray(x_mm, dtype=float)
         y = np.asarray(y_mm, dtype=float)
-        heights = np.asarray(terrain_surface.sample(x, y), dtype=float).copy()
+        heights = np.asarray(
+            terrain_mesh_heights(
+                terrain_surface,
+                x,
+                y,
+                flat_margin_mm,
+            ),
+            dtype=float,
+        ).copy()
         for geometry, level in buffered_water:
             heights = np.where(contains_xy(geometry, x, y), level, heights)
         return heights
@@ -409,6 +417,8 @@ def generate_memory_map(
                         config.get("surface_skin_thickness_mm", 0.4)
                     ),
                     embed_depth_mm=float(config.get("feature_embed_depth", 0.2)),
+                    clip_region=printable,
+                    flat_margin_mm=frame.margin_mm,
                 )
                 if linear_water_mesh is not None:
                     water_mesh = (
@@ -425,9 +435,14 @@ def generate_memory_map(
                 water_bodies,
                 water_mesh_thickness_mm,
                 water_support_overlap_mm,
+                flat_margin_mm=frame.margin_mm,
             )
             if water_bodies
-            else build_terrain_mesh(terrain_surface, request.base_thickness_mm)
+            else build_terrain_mesh(
+                terrain_surface,
+                request.base_thickness_mm,
+                flat_margin_mm=frame.margin_mm,
+            )
         )
         if landscape_style:
             exposed_land = (
@@ -458,6 +473,8 @@ def generate_memory_map(
                     config.get("surface_skin_thickness_mm", 0.4)
                 ),
                 embed_depth_mm=float(config.get("feature_embed_depth", 0.2)),
+                clip_region=printable,
+                flat_margin_mm=frame.margin_mm,
             )
     else:
         base_mesh = (
@@ -466,7 +483,11 @@ def generate_memory_map(
             else None
         )
     feature_support_at = (
-        _feature_support_sampler(terrain_surface, water_bodies)
+        _feature_support_sampler(
+            terrain_surface,
+            water_bodies,
+            frame.margin_mm,
+        )
         if terrain_surface is not None
         else None
     )

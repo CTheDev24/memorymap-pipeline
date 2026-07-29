@@ -117,6 +117,23 @@ def test_surface_normalizes_robust_elevations_and_samples_print_space() -> None:
     assert surface.sample(100.0, 0.0) == pytest.approx(surface.heights_mm[-1, -1])
 
 
+def test_surface_preserves_contours_in_robust_elevation_tails() -> None:
+    elevations = np.arange(100.0).reshape(10, 10)
+    surface = terrain_surface_from_grid(
+        _grid(elevations),
+        width_mm=100.0,
+        height_mm=100.0,
+        horizontal_span_m=10_000.0,
+        maximum_relief_mm=12.0,
+    )
+    ordered = np.sort(surface.heights_mm.reshape(-1))
+
+    assert ordered[0] == pytest.approx(0.0)
+    assert ordered[1] > ordered[0]
+    assert ordered[-1] == pytest.approx(surface.analysis.target_relief_mm)
+    assert ordered[-2] < ordered[-1]
+
+
 def test_terrain_mesh_is_watertight_with_structural_bottom() -> None:
     surface = terrain_surface_from_grid(
         _grid([[30.0, 40.0, 45.0], [20.0, 25.0, 35.0], [10.0, 15.0, 20.0]]),
@@ -130,6 +147,32 @@ def test_terrain_mesh_is_watertight_with_structural_bottom() -> None:
     assert mesh.volume > 0.0
     assert mesh.bounds[0, 2] == pytest.approx(-1.0)
     assert mesh.bounds[1, 2] == pytest.approx(surface.analysis.target_relief_mm)
+
+
+def test_terrain_mesh_keeps_the_outer_trim_flat() -> None:
+    surface = terrain_surface_from_grid(
+        _grid(np.arange(121.0).reshape(11, 11)),
+        width_mm=100.0,
+        height_mm=80.0,
+        horizontal_span_m=10_000.0,
+    )
+    mesh = build_terrain_mesh(
+        surface,
+        base_thickness_mm=1.0,
+        flat_margin_mm=10.0,
+    )
+    vertices = mesh.vertices
+    top_vertices = vertices[:, 2] > -0.5
+    trim_vertices = (
+        (vertices[:, 0] <= 10.0 + 1e-8)
+        | (vertices[:, 0] >= 90.0 - 1e-8)
+        | (vertices[:, 1] <= 10.0 + 1e-8)
+        | (vertices[:, 1] >= 70.0 - 1e-8)
+    )
+
+    assert mesh.is_watertight
+    assert np.max(vertices[top_vertices & trim_vertices, 2]) == pytest.approx(0.0)
+    assert np.max(vertices[top_vertices & ~trim_vertices, 2]) > 0.0
 
 
 def test_drape_preserves_visible_feature_height_over_local_surface() -> None:
@@ -682,6 +725,33 @@ def test_landscape_generation_builds_supported_bone_green_blue_layers(
     assert result.base_mesh is not None and result.base_mesh.is_watertight
     assert result.landscape_mesh is not None and result.landscape_mesh.is_watertight
     assert result.water_mesh is not None and result.water_mesh.is_watertight
+    assert result.landscape_mesh.bounds[0, 0] >= frame.margin_mm - 1e-8
+    assert result.landscape_mesh.bounds[0, 1] >= frame.margin_mm - 1e-8
+    assert (
+        result.landscape_mesh.bounds[1, 0]
+        <= frame.print_width_mm - frame.margin_mm + 1e-8
+    )
+    assert (
+        result.landscape_mesh.bounds[1, 1]
+        <= frame.print_height_mm - frame.margin_mm + 1e-8
+    )
+    base_vertices = result.base_mesh.vertices
+    trim_vertices = (
+        (base_vertices[:, 0] <= frame.margin_mm + 1e-8)
+        | (
+            base_vertices[:, 0]
+            >= frame.print_width_mm - frame.margin_mm - 1e-8
+        )
+        | (base_vertices[:, 1] <= frame.margin_mm + 1e-8)
+        | (
+            base_vertices[:, 1]
+            >= frame.print_height_mm - frame.margin_mm - 1e-8
+        )
+    )
+    trim_top = trim_vertices & (
+        base_vertices[:, 2] > result.base_mesh.bounds[0, 2] + 1e-8
+    )
+    assert base_vertices[trim_top, 2] == pytest.approx(0.0)
     centers = result.base_mesh.triangles_center
     upward = result.base_mesh.face_normals[:, 2] > 0.9
     inside_water = np.asarray(

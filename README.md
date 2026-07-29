@@ -146,7 +146,15 @@ Each frame receives a flatness rating from 0 (rugged) to 5 (very flat), based on
 robust elevation range relative to the frame diagonal. Very flat areas receive the full
 3 mm printed relief; rugged areas taper toward 1.5 mm so terrain does not overpower map
 features. Routes and roads are draped over the resulting height field while retaining
-their visible heights.
+their visible heights. Elevations outside the robust 5th-to-95th-percentile range are
+softly compressed into the relief tails rather than hard-clipped, preserving contours
+through unusually low and high areas without allowing one DEM outlier to dominate the
+entire print.
+
+The configured print margin is also the model's flat trim. Terrain grid lines are inserted
+at the exact inner trim boundary, the outer annulus remains coplanar, and route, road,
+building, water, and landscape bodies remain inside that boundary. This perimeter contract
+is shared by Urban and Landscape profiles.
 
 #### Urban and Landscape profiles
 

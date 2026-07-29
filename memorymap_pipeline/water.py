@@ -17,7 +17,7 @@ from trimesh.util import concatenate
 from .buildings import _transform_shapely_polygon
 from .mesh import route_mesh_from_polygon
 from .projection import apply_transform, project_lonlat_array
-from .terrain import TerrainSurface
+from .terrain import TerrainSurface, terrain_mesh_axes, terrain_mesh_heights
 
 WATER_TAGS = {
     "natural": ["water", "coastline"],
@@ -432,6 +432,7 @@ def build_terrain_mesh_with_water(
     water_bodies: list[WaterBody],
     water_mesh_thickness_mm: float = 0.6,
     support_overlap_mm: float = 0.4,
+    flat_margin_mm: float = 0.0,
 ) -> Trimesh:
     """Create terrain with a recessed support cavity below each water body."""
     if base_thickness_mm <= 0:
@@ -452,9 +453,17 @@ def build_terrain_mesh_with_water(
         indices = water_tree.query(geometry, predicate="intersects")
         return [water_bodies[int(index)] for index in indices]
 
-    rows, columns = surface.heights_mm.shape
-    xs = np.linspace(0.0, surface.width_mm, columns)
-    ys = np.linspace(surface.height_mm, 0.0, rows)
+    xs, ys = terrain_mesh_axes(surface, flat_margin_mm)
+    rows, columns = len(ys), len(xs)
+
+    def sample_land(x_mm, y_mm):
+        return terrain_mesh_heights(
+            surface,
+            np.asarray(x_mm, dtype=float),
+            np.asarray(y_mm, dtype=float),
+            flat_margin_mm,
+        )
+
     vertices: list[tuple[float, float, float]] = []
     faces: list[tuple[int, int, int]] = []
     water_edges: dict[tuple[tuple[float, float], tuple[float, float]], list] = {}
@@ -493,7 +502,7 @@ def build_terrain_mesh_with_water(
     for row in range(rows - 1):
         for column in range(columns - 1):
             cell = shapely_box(xs[column], ys[row + 1], xs[column + 1], ys[row])
-            add_region(cell.difference(water_union), surface.sample)
+            add_region(cell.difference(water_union), sample_land)
             for body in nearby_bodies(cell):
                 add_region(
                     cell.intersection(body.geometry),
@@ -510,8 +519,8 @@ def build_terrain_mesh_with_water(
             continue
         x1, y1 = first
         x2, y2 = second
-        land1 = float(surface.sample(x1, y1))
-        land2 = float(surface.sample(x2, y2))
+        land1 = float(sample_land(x1, y1))
+        land2 = float(sample_land(x2, y2))
         start = len(vertices)
         vertices.extend(
             (
@@ -565,7 +574,7 @@ def build_terrain_mesh_with_water(
     for first, second in perimeter_segments:
         segment = LineString([first, second])
         for part in line_parts(segment.difference(water_union)):
-            add_outer_wall(part, surface.sample)
+            add_outer_wall(part, sample_land)
         for body in nearby_bodies(segment):
             for part in line_parts(segment.intersection(body.geometry)):
                 add_outer_wall(part, support_levels[id(body)])
