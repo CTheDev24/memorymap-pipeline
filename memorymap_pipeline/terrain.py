@@ -10,6 +10,8 @@ from shapely.geometry import LineString, Point
 from shapely.geometry.base import BaseGeometry
 from trimesh import Trimesh
 
+from .map_frame import MapFrame
+
 
 @dataclass(frozen=True)
 class TerrainAnalysis:
@@ -292,6 +294,59 @@ def terrain_surface_from_grid(
         width_mm=width_mm,
         height_mm=height_mm,
         analysis=analysis,
+    )
+
+
+def elevation_grid_for_frame(
+    grid: ElevationGrid,
+    frame: MapFrame,
+    shape: tuple[int, int] | None = None,
+) -> ElevationGrid:
+    """Resample an axis-aligned geographic DEM onto the exact map frame.
+
+    Provider rasters cover the bounding rectangle around the map. Stretching
+    that rectangle directly over a rotated or differently proportioned print
+    maps its corner cells into the wrong locations, which is especially visible
+    as sea-level shelves on long coastal routes.
+    """
+    rows, columns = shape or grid.elevations_m.shape
+    if min(rows, columns) < 2:
+        raise ValueError("Resampled elevation grid must be at least two by two")
+    source = _repair_elevation_samples(grid.elevations_m)
+    x = np.linspace(0.0, frame.print_width_mm, columns)
+    y = np.linspace(frame.print_height_mm, 0.0, rows)
+    x_grid, y_grid = np.meshgrid(x, y)
+    latitudes, longitudes = frame.print_to_lonlat(x_grid, y_grid)
+
+    source_rows, source_columns = source.shape
+    source_column = np.clip(
+        (longitudes - grid.west) / (grid.east - grid.west)
+        * (source_columns - 1),
+        0.0,
+        source_columns - 1,
+    )
+    source_row = np.clip(
+        (grid.north - latitudes) / (grid.north - grid.south)
+        * (source_rows - 1),
+        0.0,
+        source_rows - 1,
+    )
+    c0 = np.floor(source_column).astype(int)
+    r0 = np.floor(source_row).astype(int)
+    c1 = np.minimum(c0 + 1, source_columns - 1)
+    r1 = np.minimum(r0 + 1, source_rows - 1)
+    tx = source_column - c0
+    ty = source_row - r0
+    north = source[r0, c0] * (1.0 - tx) + source[r0, c1] * tx
+    south = source[r1, c0] * (1.0 - tx) + source[r1, c1] * tx
+    values = north * (1.0 - ty) + south * ty
+    return ElevationGrid(
+        values,
+        grid.south,
+        grid.north,
+        grid.west,
+        grid.east,
+        grid.source,
     )
 
 

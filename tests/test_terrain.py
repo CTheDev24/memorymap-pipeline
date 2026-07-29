@@ -24,6 +24,7 @@ from memorymap_pipeline.terrain import (
     drape_mesh,
     drape_road_mesh,
     drape_route_mesh,
+    elevation_grid_for_frame,
     terrain_grid_for_print,
     terrain_surface_from_grid,
 )
@@ -176,6 +177,36 @@ def test_terrain_detail_gamma_expands_lowland_relief_without_moving_peaks() -> N
     assert detailed.heights_mm.min() == pytest.approx(linear.heights_mm.min())
     assert detailed.heights_mm.max() == pytest.approx(linear.heights_mm.max())
     assert detailed.heights_mm[1, 0] > linear.heights_mm[1, 0]
+
+
+def test_geographic_dem_is_cropped_to_the_exact_print_frame() -> None:
+    frame = MapFrame(
+        center_lat=36.25,
+        center_lon=-121.75,
+        coverage_width_m=10_000.0,
+        coverage_height_m=20_000.0,
+        print_width_mm=100.0,
+        print_height_mm=200.0,
+    )
+    _, frame_longitudes = frame.print_to_lonlat(
+        np.array([0.0, 100.0]),
+        np.array([100.0, 100.0]),
+    )
+    half_span = float(np.ptp(frame_longitudes)) / 2.0
+    source = ElevationGrid(
+        np.tile(np.linspace(0.0, 100.0, 5), (5, 1)),
+        south=36.0,
+        north=36.5,
+        west=frame.center_lon - 2.0 * half_span,
+        east=frame.center_lon + 2.0 * half_span,
+        source="oversized-fixture",
+    )
+
+    cropped = elevation_grid_for_frame(source, frame, (5, 5))
+
+    assert cropped.elevations_m[:, 0] == pytest.approx(25.0, abs=0.1)
+    assert cropped.elevations_m[:, -1] == pytest.approx(75.0, abs=0.1)
+    assert np.ptp(cropped.elevations_m) == pytest.approx(50.0, abs=0.2)
 
 
 def test_terrain_mesh_is_watertight_with_structural_bottom() -> None:

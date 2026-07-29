@@ -43,6 +43,9 @@ This repository is a Python desktop application that converts GPX routes and Ope
   Compress DEM tails instead of clipping them into flat minimum/maximum shelves.
 - Treat both positive and negative out-of-range DEM values as no-data and fill holes from
   nearby valid samples. Do not let ArcGIS float sentinels propagate into draped layers.
+- Resample every geographic provider raster onto the exact rotated `MapFrame` before
+  normalization. Never stretch an axis-aligned provider bounding rectangle directly over
+  the plate; doing so maps coastal/ocean corners into false flat land shelves.
 - Preserve the configured lowland detail curve (`terrain_detail_gamma`, 0.75 by default)
   so subtle coastal relief remains visible without moving the terrain endpoints.
 - Landscape surface boundaries follow the resolved DEM triangles. Avoid adding detail

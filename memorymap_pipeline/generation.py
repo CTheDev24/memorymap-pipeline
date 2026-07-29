@@ -38,6 +38,7 @@ from .terrain import (
     drape_mesh,
     drape_road_mesh,
     drape_route_mesh,
+    elevation_grid_for_frame,
     terrain_grid_for_print,
     terrain_mesh_heights,
     terrain_surface_from_grid,
@@ -147,13 +148,26 @@ def _merged_config(overrides: dict[str, Any]) -> dict[str, Any]:
 
 def _query_bounds(frame: MapFrame) -> tuple[tuple[float, float, float, float], float]:
     radius = math.hypot(frame.coverage_width_m, frame.coverage_height_m) / 2.0
-    lat_delta = radius / 111319.49
-    lon_delta = radius / (111319.49 * max(1e-6, math.cos(math.radians(frame.center_lat))))
+    margin = frame.margin_mm
+    x = np.asarray(
+        [margin, frame.print_width_mm - margin] * 2,
+        dtype=float,
+    )
+    y = np.asarray(
+        [
+            margin,
+            margin,
+            frame.print_height_mm - margin,
+            frame.print_height_mm - margin,
+        ],
+        dtype=float,
+    )
+    latitudes, longitudes = frame.print_to_lonlat(x, y)
     return (
-        frame.center_lat - lat_delta,
-        frame.center_lat + lat_delta,
-        frame.center_lon - lon_delta,
-        frame.center_lon + lon_delta,
+        float(np.min(latitudes)),
+        float(np.max(latitudes)),
+        float(np.min(longitudes)),
+        float(np.max(longitudes)),
     ), radius
 
 
@@ -352,6 +366,11 @@ def generate_memory_map(
                 frame.print_height_mm,
                 override=(provided_rows, provided_columns),
             )
+        elevation_grid = elevation_grid_for_frame(
+            elevation_grid,
+            frame,
+            terrain_grid_spec.shape,
+        )
         terrain_surface = terrain_surface_from_grid(
             elevation_grid,
             frame.print_width_mm,
