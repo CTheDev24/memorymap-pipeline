@@ -18,6 +18,8 @@ DEFAULT_CONFIG = {
     # overlap raised features into the base; feature heights remain visible heights
     "feature_embed_depth": 0.2,
     "margin": 5.0,
+    # Optional coplanar perimeter trim. Desktop launch defaults to borderless.
+    "flat_border_enabled": False,
     # terrain/water scaffold (disabled until selected by a client)
     "terrain_enabled": False,
     "terrain_provider": "usgs-3dep",

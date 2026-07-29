@@ -23,6 +23,7 @@ class DesktopProject:
     include_buildings: bool = True
     include_terrain: bool = False
     include_water: bool = False
+    flat_border_enabled: bool = False
     terrain_relief_mm: float = 3.0
     water_recess_mm: float = 0.4
     route_width_mm: float = 1.2
@@ -52,6 +53,7 @@ class DesktopProject:
             "version": self.version,
             "gpx_path": self.gpx_path,
             "frame": asdict(self.frame),
+            "flat_border_enabled": self.flat_border_enabled,
             "layers": {
                 "roads": self.include_roads,
                 "buildings": self.include_buildings,
@@ -89,6 +91,9 @@ class DesktopProject:
                 include_buildings=bool(layers.get("buildings", True)),
                 include_terrain=bool(layers.get("terrain", False)),
                 include_water=bool(layers.get("water", False)),
+                flat_border_enabled=bool(
+                    value.get("flat_border_enabled", False)
+                ),
                 terrain_relief_mm=float(terrain.get("relief_mm", 3.0)),
                 water_recess_mm=float(terrain.get("water_recess_mm", 0.4)),
                 route_width_mm=float(route.get("width_mm", 1.2)),

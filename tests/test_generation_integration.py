@@ -26,6 +26,29 @@ from memorymap_pipeline.mesh import build_base_plate, export_3mf, route_mesh_fro
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+def test_optional_border_uses_full_plate_extents_when_disabled() -> None:
+    frame = MapFrame(
+        center_lat=29.76,
+        center_lon=-95.37,
+        coverage_width_m=1_000.0,
+        coverage_height_m=800.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+
+    bordered = generation._frame_for_border(frame, True)
+    borderless = generation._frame_for_border(frame, False)
+
+    assert bordered is frame
+    assert bordered.margin_mm == pytest.approx(5.0)
+    assert borderless.margin_mm == pytest.approx(0.0)
+    assert borderless.coverage_width_m == pytest.approx(frame.coverage_width_m)
+    assert borderless.coverage_height_m == pytest.approx(frame.coverage_height_m)
+    assert borderless.printable_width_mm == pytest.approx(frame.print_width_mm)
+    assert borderless.printable_height_mm == pytest.approx(frame.print_height_mm)
+
+
 def _model_objects(path: Path) -> tuple[set[str], list[tuple[float, float, float]]]:
     with zipfile.ZipFile(path) as archive:
         model_name = next(name for name in archive.namelist() if name.lower().endswith(".model"))

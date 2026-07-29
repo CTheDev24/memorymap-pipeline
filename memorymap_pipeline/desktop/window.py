@@ -130,9 +130,18 @@ class MemoryMapWindow(QMainWindow):
         self.print_width = self._spin(240, 10, 1000)
         self.print_height = self._spin(190, 10, 1000)
         self.margin = self._spin(5, 0, 100)
+        self.flat_border = QCheckBox("Flat trim around map")
+        self.flat_border.setChecked(False)
+        self.flat_border.setToolTip(
+            "When enabled, reserves the configured width as a flat perimeter trim "
+            "and clips every map layer inside it."
+        )
+        self.flat_border.toggled.connect(self._border_toggled)
+        self.margin.setEnabled(False)
         self.route_width = self._spin(1.2, .1, 20)
         form.addRow("Width (mm)", self.print_width)
         form.addRow("Height (mm)", self.print_height)
+        form.addRow("Border", self.flat_border)
         form.addRow("Margin (mm)", self.margin)
         form.addRow("Route width (mm)", self.route_width)
         reset = QPushButton("Reset frame to route")
@@ -259,7 +268,7 @@ class MemoryMapWindow(QMainWindow):
                 self.route.points,
                 self.print_width.value(),
                 self.print_height.value(),
-                self.margin.value(),
+                MemoryMapWindow._effective_margin(self),
                 route_padding_mm=ROUTE_FRAME_PADDING_MM,
             )
             self.default_frame = {
@@ -290,7 +299,7 @@ class MemoryMapWindow(QMainWindow):
                 self.route.points,
                 width,
                 height,
-                self.margin.value(),
+                MemoryMapWindow._effective_margin(self),
                 route_padding_mm=ROUTE_FRAME_PADDING_MM,
             )
             fitted = {
@@ -352,6 +361,41 @@ class MemoryMapWindow(QMainWindow):
     def zoom_frame_out(self) -> None:
         self._zoom_frame(FRAME_ZOOM_FACTOR)
 
+    def _effective_margin(self) -> float:
+        border = getattr(self, "flat_border", None)
+        if border is not None and not border.isChecked():
+            return 0.0
+        return float(self.margin.value())
+
+    @Slot(bool)
+    def _border_toggled(self, enabled: bool) -> None:
+        self.margin.setEnabled(enabled)
+        if self.route is None:
+            return
+        frame = MapFrame.fit_route(
+            self.route.points,
+            self.print_width.value(),
+            self.print_height.value(),
+            MemoryMapWindow._effective_margin(self),
+            route_padding_mm=ROUTE_FRAME_PADDING_MM,
+        )
+        fitted = {
+            "center_lat": frame.center_lat,
+            "center_lon": frame.center_lon,
+            "coverage_width_m": frame.coverage_width_m,
+            "coverage_height_m": frame.coverage_height_m,
+            "rotation_degrees": frame.rotation_degrees,
+            "print_width_mm": frame.print_width_mm,
+            "print_height_mm": frame.print_height_mm,
+            "margin_mm": frame.margin_mm,
+        }
+        self.default_frame = fitted
+        self.current_frame = fitted.copy()
+        self.map_view.page().runJavaScript(
+            f"window.defaultFrame={json.dumps(self.default_frame)};"
+            f"setFrame({json.dumps(self.current_frame)});"
+        )
+
     @Slot(bool)
     def _terrain_toggled(self, enabled: bool) -> None:
         self.terrain_relief.setEnabled(enabled)
@@ -382,6 +426,10 @@ class MemoryMapWindow(QMainWindow):
             "style_profile": self.style_profile.currentData(),
             "surface_skin_thickness_mm": self.surface_skin_thickness.value(),
             "minimum_waterway_width_mm": self.minimum_waterway_width.value(),
+            "flat_border_enabled": bool(
+                getattr(self, "flat_border", None)
+                and self.flat_border.isChecked()
+            ),
         }
 
     @Slot()
@@ -391,7 +439,11 @@ class MemoryMapWindow(QMainWindow):
         self.progress.setValue(0); self.warnings.clear(); self.generate.setEnabled(False)
         try:
             frame_data = dict(self.current_frame)
-            frame_data.update(print_width_mm=self.print_width.value(), print_height_mm=self.print_height.value(), margin_mm=self.margin.value())
+            frame_data.update(
+                print_width_mm=self.print_width.value(),
+                print_height_mm=self.print_height.value(),
+                margin_mm=MemoryMapWindow._effective_margin(self),
+            )
             directory = Path(tempfile.mkdtemp(prefix="memorymap-desktop-"))
             payload = {
                 "route": self.route, "frame": MapFrame(**frame_data),

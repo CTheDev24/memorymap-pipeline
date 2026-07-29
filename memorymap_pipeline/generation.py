@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 import logging
 import os
@@ -157,6 +157,16 @@ def _query_bounds(frame: MapFrame) -> tuple[tuple[float, float, float, float], f
     ), radius
 
 
+def _frame_for_border(
+    frame: MapFrame,
+    flat_border_enabled: bool,
+) -> MapFrame:
+    """Use the selected frame margin only when a physical trim is requested."""
+    if flat_border_enabled or frame.margin_mm == 0.0:
+        return frame
+    return replace(frame, margin_mm=0.0)
+
+
 def _route_mesh(polygon: Any, height_mm: float, z_offset: float) -> Any | None:
     if polygon.is_empty:
         return None
@@ -228,8 +238,9 @@ def generate_memory_map(
 
     progress(0, "Preparing print frame")
     _configure_packaged_networking()
-    frame = request.frame
     config = _merged_config(request.config)
+    flat_border_enabled = bool(config.get("flat_border_enabled", False))
+    frame = _frame_for_border(request.frame, flat_border_enabled)
     style_profile = str(config.get("style_profile", "urban"))
     if style_profile not in {"urban", "landscape"}:
         raise ValueError(f"Unsupported style profile: {style_profile}")
@@ -662,6 +673,7 @@ def generate_memory_map(
     )
     stats = {
         "route_points": len(request.route.points),
+        "flat_border_enabled": flat_border_enabled,
         "roads": _geometry_count(unioned_roads),
         "buildings": _geometry_count(unioned_buildings),
         "terrain": (
