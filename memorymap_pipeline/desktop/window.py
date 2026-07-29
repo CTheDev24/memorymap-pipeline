@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
+from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN
 from .worker import GenerationWorker
 
 
@@ -23,9 +24,24 @@ FRAME_ZOOM_FACTOR = 1.1
 try:
     from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QDoubleSpinBox, QFileDialog, QFormLayout,
-        QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QProgressBar,
-        QPushButton, QRadioButton, QSplitter, QTextEdit, QVBoxLayout, QWidget,
+        QApplication,
+        QCheckBox,
+        QComboBox,
+        QDoubleSpinBox,
+        QFileDialog,
+        QFormLayout,
+        QGroupBox,
+        QHBoxLayout,
+        QLabel,
+        QMainWindow,
+        QMessageBox,
+        QProgressBar,
+        QPushButton,
+        QRadioButton,
+        QSplitter,
+        QTextEdit,
+        QVBoxLayout,
+        QWidget,
     )
     from PySide6.QtWebChannel import QWebChannel
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -114,9 +130,18 @@ class MemoryMapWindow(QMainWindow):
         self.print_width = self._spin(240, 10, 1000)
         self.print_height = self._spin(190, 10, 1000)
         self.margin = self._spin(5, 0, 100)
+        self.flat_border = QCheckBox("Flat trim around map")
+        self.flat_border.setChecked(False)
+        self.flat_border.setToolTip(
+            "When enabled, reserves the configured width as a flat perimeter trim "
+            "and clips every map layer inside it."
+        )
+        self.flat_border.toggled.connect(self._border_toggled)
+        self.margin.setEnabled(False)
         self.route_width = self._spin(1.2, .1, 20)
         form.addRow("Width (mm)", self.print_width)
         form.addRow("Height (mm)", self.print_height)
+        form.addRow("Border", self.flat_border)
         form.addRow("Margin (mm)", self.margin)
         form.addRow("Route width (mm)", self.route_width)
         reset = QPushButton("Reset frame to route")
@@ -133,6 +158,25 @@ class MemoryMapWindow(QMainWindow):
         zoom_layout.addWidget(zoom_out)
         form.addRow("Route framing", zoom_row)
         outer.addWidget(print_box)
+
+        style_box = QGroupBox("Map style")
+        style_form = QFormLayout(style_box)
+        self.style_profile = QComboBox()
+        self.style_profile.addItem("Urban", STYLE_PROFILE_URBAN)
+        self.style_profile.addItem("Landscape", STYLE_PROFILE_LANDSCAPE)
+        self.style_profile.currentIndexChanged.connect(self._style_changed)
+        self.surface_skin_thickness = self._spin(0.4, 0.2, 2.0)
+        self.minimum_waterway_width = self._spin(0.8, 0.4, 5.0)
+        self.surface_skin_thickness.setToolTip(
+            "Visible green and blue surface layer thickness for landscape maps."
+        )
+        self.minimum_waterway_width.setToolTip(
+            "Narrower mapped waterways are widened to this printable width."
+        )
+        style_form.addRow("Profile", self.style_profile)
+        style_form.addRow("Surface skin", self.surface_skin_thickness)
+        style_form.addRow("Minimum waterway width", self.minimum_waterway_width)
+        outer.addWidget(style_box)
 
         layers = QGroupBox("Layers")
         layer_layout = QVBoxLayout(layers)
@@ -180,6 +224,7 @@ class MemoryMapWindow(QMainWindow):
         self.warnings = QTextEdit(); self.warnings.setReadOnly(True)
         self.warnings.setPlaceholderText("Generation warnings and status appear here.")
         outer.addWidget(self.progress); outer.addWidget(self.warnings, 1)
+        self._style_changed()
         return panel
 
     @staticmethod
@@ -223,7 +268,7 @@ class MemoryMapWindow(QMainWindow):
                 self.route.points,
                 self.print_width.value(),
                 self.print_height.value(),
-                self.margin.value(),
+                MemoryMapWindow._effective_margin(self),
                 route_padding_mm=ROUTE_FRAME_PADDING_MM,
             )
             self.default_frame = {
@@ -254,7 +299,7 @@ class MemoryMapWindow(QMainWindow):
                 self.route.points,
                 width,
                 height,
-                self.margin.value(),
+                MemoryMapWindow._effective_margin(self),
                 route_padding_mm=ROUTE_FRAME_PADDING_MM,
             )
             fitted = {
@@ -316,6 +361,41 @@ class MemoryMapWindow(QMainWindow):
     def zoom_frame_out(self) -> None:
         self._zoom_frame(FRAME_ZOOM_FACTOR)
 
+    def _effective_margin(self) -> float:
+        border = getattr(self, "flat_border", None)
+        if border is not None and not border.isChecked():
+            return 0.0
+        return float(self.margin.value())
+
+    @Slot(bool)
+    def _border_toggled(self, enabled: bool) -> None:
+        self.margin.setEnabled(enabled)
+        if self.route is None:
+            return
+        frame = MapFrame.fit_route(
+            self.route.points,
+            self.print_width.value(),
+            self.print_height.value(),
+            MemoryMapWindow._effective_margin(self),
+            route_padding_mm=ROUTE_FRAME_PADDING_MM,
+        )
+        fitted = {
+            "center_lat": frame.center_lat,
+            "center_lon": frame.center_lon,
+            "coverage_width_m": frame.coverage_width_m,
+            "coverage_height_m": frame.coverage_height_m,
+            "rotation_degrees": frame.rotation_degrees,
+            "print_width_mm": frame.print_width_mm,
+            "print_height_mm": frame.print_height_mm,
+            "margin_mm": frame.margin_mm,
+        }
+        self.default_frame = fitted
+        self.current_frame = fitted.copy()
+        self.map_view.page().runJavaScript(
+            f"window.defaultFrame={json.dumps(self.default_frame)};"
+            f"setFrame({json.dumps(self.current_frame)});"
+        )
+
     @Slot(bool)
     def _terrain_toggled(self, enabled: bool) -> None:
         self.terrain_relief.setEnabled(enabled)
@@ -328,6 +408,30 @@ class MemoryMapWindow(QMainWindow):
     def _water_toggled(self, enabled: bool) -> None:
         self.water_recess.setEnabled(enabled and self.terrain_layer.isChecked())
 
+    @Slot(int)
+    def _style_changed(self, _index: int = -1) -> None:
+        landscape = (
+            self.style_profile.currentData() == STYLE_PROFILE_LANDSCAPE
+        )
+        self.surface_skin_thickness.setEnabled(landscape)
+        self.minimum_waterway_width.setEnabled(landscape)
+
+    def _generation_config_payload(self) -> dict:
+        return {
+            "terrain_enabled": self.terrain_layer.isChecked(),
+            "water_enabled": self.water_layer.isChecked(),
+            "terrain_max_relief_mm": self.terrain_relief.value(),
+            "water_recess_mm": self.water_recess.value(),
+            "max_print_height_mm": self.building_max_height.value(),
+            "style_profile": self.style_profile.currentData(),
+            "surface_skin_thickness_mm": self.surface_skin_thickness.value(),
+            "minimum_waterway_width_mm": self.minimum_waterway_width.value(),
+            "flat_border_enabled": bool(
+                getattr(self, "flat_border", None)
+                and self.flat_border.isChecked()
+            ),
+        }
+
     @Slot()
     def request_generation(self) -> None:
         if not self.gpx_path or not self.route or not self.current_frame:
@@ -335,7 +439,11 @@ class MemoryMapWindow(QMainWindow):
         self.progress.setValue(0); self.warnings.clear(); self.generate.setEnabled(False)
         try:
             frame_data = dict(self.current_frame)
-            frame_data.update(print_width_mm=self.print_width.value(), print_height_mm=self.print_height.value(), margin_mm=self.margin.value())
+            frame_data.update(
+                print_width_mm=self.print_width.value(),
+                print_height_mm=self.print_height.value(),
+                margin_mm=MemoryMapWindow._effective_margin(self),
+            )
             directory = Path(tempfile.mkdtemp(prefix="memorymap-desktop-"))
             payload = {
                 "route": self.route, "frame": MapFrame(**frame_data),
@@ -344,13 +452,7 @@ class MemoryMapWindow(QMainWindow):
                 "include_roads": self.roads_layer.isChecked(),
                 "include_buildings": self.buildings_layer.isChecked(),
                 "route_width_mm": self.route_width.value(),
-                "config": {
-                    "terrain_enabled": self.terrain_layer.isChecked(),
-                    "water_enabled": self.water_layer.isChecked(),
-                    "terrain_max_relief_mm": self.terrain_relief.value(),
-                    "water_recess_mm": self.water_recess.value(),
-                    "max_print_height_mm": self.building_max_height.value(),
-                },
+                "config": self._generation_config_payload(),
             }
             thread = QThread(self); worker = GenerationWorker(payload)
             worker.moveToThread(thread); thread.started.connect(worker.run)

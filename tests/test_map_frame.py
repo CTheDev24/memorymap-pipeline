@@ -50,6 +50,26 @@ def test_frame_rotation_changes_axis_direction():
     assert transformed[0] == pytest.approx([50.0, 40.0])
 
 
+def test_print_to_lonlat_round_trips_rotated_frame_coordinates():
+    frame = MapFrame(
+        36.25,
+        -121.75,
+        20_000.0,
+        30_000.0,
+        190.0,
+        240.0,
+        margin_mm=5.0,
+        rotation_degrees=27.0,
+    )
+    x = np.array([5.0, 70.0, 185.0])
+    y = np.array([5.0, 125.0, 235.0])
+
+    latitudes, longitudes = frame.print_to_lonlat(x, y)
+    restored = frame.transform_lonlat(latitudes, longitudes)
+
+    assert restored == pytest.approx(np.column_stack((x, y)), abs=1e-6)
+
+
 def test_frame_rejects_invalid_margin():
     with pytest.raises(ValueError, match="Margin"):
         MapFrame(40.0, -74.0, 100.0, 100.0, 100.0, 100.0, margin_mm=50.0)

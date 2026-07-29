@@ -9,6 +9,7 @@ from shapely.geometry import LineString, Polygon
 from shapely.geometry import box as shapely_box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import polygonize, split, unary_union
+from shapely.strtree import STRtree
 from trimesh import Trimesh
 from trimesh.creation import triangulate_polygon
 from trimesh.util import concatenate
@@ -16,15 +17,34 @@ from trimesh.util import concatenate
 from .buildings import _transform_shapely_polygon
 from .mesh import route_mesh_from_polygon
 from .projection import apply_transform, project_lonlat_array
-from .terrain import TerrainSurface
+from .terrain import TerrainSurface, terrain_mesh_axes, terrain_mesh_heights
 
 WATER_TAGS = {
     "natural": ["water", "coastline"],
     "water": ["ocean", "sea", "bay", "strait", "lagoon", "fjord", "sound"],
-    "waterway": "riverbank",
+    "waterway": ["riverbank", "river", "stream", "canal", "drain", "ditch"],
     "landuse": ["reservoir", "basin"],
     "place": ["sea", "ocean", "bay"],
 }
+
+LINEAR_WATERWAY_WIDTHS_MM = {
+    "river": 1.6,
+    "canal": 1.2,
+    "stream": 0.8,
+    "drain": 0.8,
+    "ditch": 0.8,
+}
+
+
+@dataclass(frozen=True)
+class WaterFeature:
+    """Print-space water geometry with enough provenance for surface styling."""
+
+    geometry: BaseGeometry
+    kind: str
+    waterway: str | None = None
+
+
 @dataclass(frozen=True)
 class WaterBody:
     geometry: Polygon
@@ -40,8 +60,18 @@ def download_water_polygons(
     map_height_mm: float,
     radius_m: float | None = None,
     water_file: str | Path | None = None,
-) -> list[BaseGeometry]:
+    minimum_waterway_width_mm: float = 0.8,
+    waterway_widths_mm: dict[str, float] | None = None,
+    include_metadata: bool = False,
+) -> list[BaseGeometry] | list[WaterFeature]:
     """Load OSM water areas and transform them into clipped print-space polygons."""
+    if minimum_waterway_width_mm <= 0:
+        raise ValueError("Minimum waterway width must be positive")
+    configured_widths = dict(LINEAR_WATERWAY_WIDTHS_MM)
+    if waterway_widths_mm:
+        configured_widths.update(waterway_widths_mm)
+    if any(width <= 0 for width in configured_widths.values()):
+        raise ValueError("Waterway widths must be positive")
     try:
         import geopandas as gpd
 
@@ -78,7 +108,7 @@ def download_water_polygons(
         return []
 
     print_bounds = shapely_box(0.0, 0.0, map_width_mm, map_height_mm)
-    transformed: list[BaseGeometry] = []
+    transformed: list[WaterFeature] = []
     transformed_coastlines: list[LineString] = []
     for _, feature in data.iterrows():
         geometry = feature.geometry
@@ -95,10 +125,31 @@ def download_water_polygons(
                 )
             )
             continue
-        parts = list(geometry.geoms) if geometry.geom_type == "MultiPolygon" else [geometry]
-        for part in parts:
-            if part.geom_type != "Polygon":
-                continue
+        waterway = feature.get("waterway")
+        if not isinstance(waterway, str):
+            waterway = None
+        if waterway in configured_widths:
+            width_mm = max(
+                minimum_waterway_width_mm,
+                configured_widths[waterway],
+            )
+            for line in _transform_linear_geometry(
+                geometry,
+                center_lat=center_lat,
+                center_lon=center_lon,
+                transform=transform,
+                print_bounds=print_bounds,
+            ):
+                buffered = line.buffer(
+                    width_mm / 2.0,
+                    cap_style="round",
+                    join_style="round",
+                ).intersection(print_bounds)
+                if not buffered.is_empty:
+                    transformed.append(
+                        WaterFeature(buffered, kind="waterway", waterway=waterway)
+                    )
+        for part in _polygon_geometry_parts(geometry):
             try:
                 print_polygon = _transform_shapely_polygon(
                     part,
@@ -109,10 +160,75 @@ def download_water_polygons(
             except Exception:
                 continue
             if not print_polygon.is_empty:
-                transformed.append(print_polygon)
+                transformed.append(WaterFeature(print_polygon, kind="area"))
     transformed.extend(
-        _infer_coastal_water_regions(transformed_coastlines, print_bounds)
+        WaterFeature(region, kind="ocean")
+        for region in _infer_coastal_water_regions(
+            transformed_coastlines,
+            print_bounds,
+        )
     )
+    if include_metadata:
+        return transformed
+    return [feature.geometry for feature in transformed]
+
+
+def _polygon_geometry_parts(geometry: BaseGeometry) -> list[Polygon]:
+    if geometry.is_empty:
+        return []
+    if geometry.geom_type == "Polygon":
+        return [geometry]
+    if geometry.geom_type in ("MultiPolygon", "GeometryCollection"):
+        parts: list[Polygon] = []
+        for part in geometry.geoms:
+            parts.extend(_polygon_geometry_parts(part))
+        return parts
+    return []
+
+
+def _line_geometry_parts(geometry: BaseGeometry) -> list[LineString]:
+    if geometry.is_empty:
+        return []
+    if geometry.geom_type == "LineString":
+        return [geometry]
+    if geometry.geom_type in ("MultiLineString", "GeometryCollection"):
+        parts: list[LineString] = []
+        for part in geometry.geoms:
+            parts.extend(_line_geometry_parts(part))
+        return parts
+    return []
+
+
+def _transform_linear_geometry(
+    geometry: BaseGeometry,
+    *,
+    center_lat: float,
+    center_lon: float,
+    transform: dict,
+    print_bounds: Polygon,
+) -> list[LineString]:
+    """Transform and clip line components without applying coastline semantics."""
+    transformed: list[LineString] = []
+    for part in _line_geometry_parts(geometry):
+        coordinates = np.asarray(part.coords, dtype=float)
+        if coordinates.shape[0] < 2:
+            continue
+        projected = project_lonlat_array(
+            coordinates[:, 1],
+            coordinates[:, 0],
+            center_lat=center_lat,
+            center_lon=center_lon,
+        )
+        frame = transform.get("map_frame")
+        transformed_points = (
+            frame.transform_projected(projected)
+            if frame is not None
+            else apply_transform(projected, transform)
+        )
+        clipped = LineString(
+            [(float(x), float(y)) for x, y in transformed_points]
+        ).intersection(print_bounds)
+        transformed.extend(_line_geometry_parts(clipped))
     return transformed
 
 
@@ -316,6 +432,7 @@ def build_terrain_mesh_with_water(
     water_bodies: list[WaterBody],
     water_mesh_thickness_mm: float = 0.6,
     support_overlap_mm: float = 0.4,
+    flat_margin_mm: float = 0.0,
 ) -> Trimesh:
     """Create terrain with a recessed support cavity below each water body."""
     if base_thickness_mm <= 0:
@@ -330,9 +447,23 @@ def build_terrain_mesh_with_water(
         id(body): body.level_mm - water_mesh_thickness_mm + support_overlap_mm
         for body in water_bodies
     }
-    rows, columns = surface.heights_mm.shape
-    xs = np.linspace(0.0, surface.width_mm, columns)
-    ys = np.linspace(surface.height_mm, 0.0, rows)
+    water_tree = STRtree([body.geometry for body in water_bodies])
+
+    def nearby_bodies(geometry: BaseGeometry) -> list[WaterBody]:
+        indices = water_tree.query(geometry, predicate="intersects")
+        return [water_bodies[int(index)] for index in indices]
+
+    xs, ys = terrain_mesh_axes(surface, flat_margin_mm)
+    rows, columns = len(ys), len(xs)
+
+    def sample_land(x_mm, y_mm):
+        return terrain_mesh_heights(
+            surface,
+            np.asarray(x_mm, dtype=float),
+            np.asarray(y_mm, dtype=float),
+            flat_margin_mm,
+        )
+
     vertices: list[tuple[float, float, float]] = []
     faces: list[tuple[int, int, int]] = []
     water_edges: dict[tuple[tuple[float, float], tuple[float, float]], list] = {}
@@ -371,8 +502,8 @@ def build_terrain_mesh_with_water(
     for row in range(rows - 1):
         for column in range(columns - 1):
             cell = shapely_box(xs[column], ys[row + 1], xs[column + 1], ys[row])
-            add_region(cell.difference(water_union), surface.sample)
-            for body in water_bodies:
+            add_region(cell.difference(water_union), sample_land)
+            for body in nearby_bodies(cell):
                 add_region(
                     cell.intersection(body.geometry),
                     support_levels[id(body)],
@@ -388,8 +519,8 @@ def build_terrain_mesh_with_water(
             continue
         x1, y1 = first
         x2, y2 = second
-        land1 = float(surface.sample(x1, y1))
-        land2 = float(surface.sample(x2, y2))
+        land1 = float(sample_land(x1, y1))
+        land2 = float(sample_land(x2, y2))
         start = len(vertices)
         vertices.extend(
             (
@@ -443,8 +574,8 @@ def build_terrain_mesh_with_water(
     for first, second in perimeter_segments:
         segment = LineString([first, second])
         for part in line_parts(segment.difference(water_union)):
-            add_outer_wall(part, surface.sample)
-        for body in water_bodies:
+            add_outer_wall(part, sample_land)
+        for body in nearby_bodies(segment):
             for part in line_parts(segment.intersection(body.geometry)):
                 add_outer_wall(part, support_levels[id(body)])
 
@@ -456,7 +587,7 @@ def build_terrain_mesh_with_water(
                 -base_thickness_mm,
                 reverse=True,
             )
-            for body in water_bodies:
+            for body in nearby_bodies(cell):
                 add_region(
                     cell.intersection(body.geometry),
                     -base_thickness_mm,

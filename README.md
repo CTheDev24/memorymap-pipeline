@@ -2,7 +2,8 @@
 
 This project converts a GPX track into a Bambu-ready 3MF memory map.
 
-The generated model can contain separate base, route, road, and building objects.
+The generated model can contain separate base, route, road, building, water, and
+landscape-surface objects.
 
 ## Installation
 
@@ -35,8 +36,13 @@ Notes:
 - Route faces are locally refined to a 2.4 mm maximum edge before terrain draping, preventing
   long triangulation diagonals from becoming thin fins near bends or converging segments.
 - Building heights follow the physical map scale by default; only unusually tall outliers are adaptively compressed to the GUI maximum (25 mm by default, 31.75 mm hard limit).
-- Water solids are 0.6 mm thick: 0.4 mm is embedded into white support and 0.2 mm remains exclusively visible. A minimum 0.4 mm white bottom skin prevents water from appearing on the underside.
+- Urban water solids are 0.6 mm thick: 0.4 mm is embedded into structural support and
+  0.2 mm remains exclusively visible. A minimum 0.4 mm base-material bottom skin prevents
+  water from appearing on the underside. Landscape surface dimensions are described below.
 - Water is clipped to the same margin-inset printable bounds as route, road, and building layers.
+- Terrain sampling is print-resolution aware by default. The adaptive rectangular grid targets
+  0.55 mm cells while preserving the print aspect ratio, then applies sample-count and
+  per-dimension caps before mesh construction.
 - USGS terrain requests are cached and retried, then fall back to the public global AWS Terrarium DEM; a clearly reported flat base is used only if both elevation services fail.
 - Raised features overlap the base by `feature_embed_depth` (0.2 mm by default) to keep short geometry printable without changing its visible height.
 - Export now stops when a component is non-manifold, has inconsistent face winding or
@@ -95,43 +101,101 @@ python -m memorymap_pipeline.cli sample.gpx output.3mf --config config.json --or
 
 The pipeline will maximize the printed route area within the selected map dimensions while reserving a consistent border on all sides.
 
-### Terrain and water scaffold
+### Terrain, water, and map styles
 
 Terrain uses bare-earth DEM samples through a provider interface. The first provider is
 the official USGS 3DEP ImageServer for United States frames; downloaded TIFF samples are
-cached under the user's local MemoryMap data directory. The provider boundary accepts
-offline fixtures today and is intended to support a global DEM provider later.
+cached under the user's local MemoryMap data directory. AWS Terrarium supplies the global
+fallback when USGS data is unavailable. The provider boundary also accepts offline fixtures
+for deterministic testing.
+
+Provider rasters are geographic, axis-aligned bounding rectangles. Before relief
+normalization, MemoryMap resamples them into the exact print frame, including its aspect
+ratio and rotation. Do not stretch the provider rectangle directly over the plate: on
+coastal routes, its corner and ocean cells otherwise become large false sea-level shelves
+inside the land surface.
 
 Terrain is disabled by default. MemoryMap Studio exposes Terrain and Water layer toggles,
-maximum relief, and water recess controls. Its initial configuration is:
+maximum relief, water recess, and an Urban/Landscape style selector. Its initial terrain and
+landscape configuration is:
 
 ```json
 {
   "terrain_enabled": false,
   "terrain_provider": "usgs-3dep",
-  "terrain_grid_size": 96,
+  "terrain_grid_size": null,
+  "terrain_target_cell_size_mm": 0.55,
+  "terrain_grid_max_samples": 180000,
+  "terrain_grid_max_dimension": 512,
+  "flat_border_enabled": false,
   "terrain_max_relief_mm": 3.0,
   "terrain_min_relief_mm": 1.5,
+  "terrain_detail_gamma": 0.75,
   "water_enabled": false,
   "water_recess_mm": 0.4,
   "water_mesh_thickness_mm": 0.6,
   "water_support_overlap_mm": 0.4,
   "water_base_skin_mm": 0.4,
-  "water_shoreline_tolerance_mm": 0.1
+  "water_shoreline_tolerance_mm": 0.1,
+  "style_profile": "urban",
+  "surface_skin_thickness_mm": 0.4,
+  "landscape_water_visible_thickness_mm": 0.4,
+  "minimum_waterway_width_mm": 0.8
 }
 ```
+
+With `terrain_grid_size` set to `null`, grid rows and columns are derived from the finished
+print dimensions rather than using one fixed square raster. The default 240 x 190 mm plate
+resolves to approximately 0.55 mm cells. The 180,000-sample and 512-cell dimension limits
+bound terrain mesh complexity. An integer still requests an explicit square grid, while a
+two-value `(rows, columns)` override is available to fixtures and programmatic clients.
 
 Each frame receives a flatness rating from 0 (rugged) to 5 (very flat), based on its
 robust elevation range relative to the frame diagonal. Very flat areas receive the full
 3 mm printed relief; rugged areas taper toward 1.5 mm so terrain does not overpower map
 features. Routes and roads are draped over the resulting height field while retaining
-their visible heights.
+their visible heights. Elevations outside the robust 5th-to-95th-percentile range are
+softly compressed into the relief tails rather than hard-clipped, preserving contours
+through unusually low and high areas without allowing one DEM outlier to dominate the
+entire print.
+USGS TIFF values outside the physically plausible -12,000 to 12,000 metre range are
+treated as undeclared no-data sentinels and locally interpolated from valid neighbours.
+This prevents isolated terrain needles from propagating into routes, water, and landscape
+skins. The default `terrain_detail_gamma` gently expands lowland elevation differences
+while preserving both the minimum and the selected maximum relief.
+
+The flat border is optional and unchecked when MemoryMap Studio launches. With
+`flat_border_enabled` set to `false`, terrain and map layers use the full plate extents.
+When enabled, the configured margin becomes the trim width: terrain grid lines are inserted
+at its exact inner boundary, the outer annulus remains coplanar, and route, road, building,
+water, and landscape bodies remain inside it. This behavior is shared by Urban and
+Landscape profiles.
+
+#### Urban and Landscape profiles
+
+The **Urban** profile preserves the production palette and behavior: a white structural
+base, gray buildings and water, black roads, and an orange route.
+
+The **Landscape** profile uses a complete bone-colored structural terrain substrate and
+adds independently colored, terrain-following surface bodies:
+
+- `Terrain_Green`: a supported 0.4 mm visible conformal skin over ordinary land.
+- `Water_Blue`: a blue water body for oceans, mapped water areas, and mapped linear
+  waterways.
+- Exposed substrate: OSM polygons tagged as beach, sand, bare rock, scree, shingle, mud,
+  gravel, rock, or quarry are omitted from the green skin so the bone terrain shows through.
+- Existing black roads and the orange route remain separate printable parts.
+
+Surface skins follow the DEM triangles and overlap their structural support by the normal
+feature embed depth. This keeps the colored layer supported instead of creating a floating
+shell. The user-facing skin thickness defaults to 0.4 mm.
 
 Water polygons are part of the same multipart model and use the same gray material as
-buildings. Water starts 0.4 mm below the local terrain surface and embeds by 0.2 mm,
-while the structural base remains underneath. When Water is enabled, desktop generation
-downloads OSM areas tagged `natural=water`, marine `water=*`/`place=*` values such as
-`ocean` and `sea`, `waterway=riverbank`, or reservoir/basin land use. It also retrieves
+buildings in Urban mode and the blue material in Landscape mode. Water starts 0.4 mm below
+the local terrain surface and embeds into supported terrain, while the structural base
+remains underneath. When Water is enabled, desktop generation downloads OSM areas tagged
+`natural=water`, marine `water=*`/`place=*` values such as `ocean` and `sea`,
+`waterway=riverbank`, or reservoir/basin land use. It also retrieves
 oriented `natural=coastline` ways in the same request and fills the ocean side within
 the print frame, because OpenStreetMap coastlines normally imply the ocean rather than
 storing it as a closed water polygon. Coastline regions are classified using the
@@ -139,11 +203,29 @@ dominant right-side (ocean) versus left-side (land) directional evidence, preven
 secondary island or fragmented shoreline ways from selecting both sides of the coast.
 Local water files or pre-transformed polygons remain available for offline tests.
 
+Mapped `waterway=river|stream|canal|drain|ditch` lines are buffered into printable water
+areas and merged with polygonal water. Class-specific widths are used where available,
+and every linear waterway is widened to at least 0.8 mm by default. This minimum is a
+print-space requirement; it does not claim the mapped channel is that wide in the real
+world.
+
 Connected water polygons are merged before meshing, so a river such as Buffalo Bayou is
 one continuous vector solid rather than a collection of terrain-grid rectangles. The
 terrain is partitioned along the same shoreline and cut down to the water level. A 0.1 mm
 print-space simplification removes insignificant OSM noise while preserving islands and
 inner openings.
+
+Landscape classification currently depends on the completeness and geometry of OSM tags.
+Unmapped streams cannot be inferred from the DEM yet, and the green surface is a default
+land treatment with OSM exposed-ground exclusions rather than a global vegetation or
+land-cover classification product. DEM-derived drainage and global land-cover data are
+future refinements, not current generation behavior.
+
+Landscape regression subjects are:
+
+- Big Sur: rugged relief, coastline, linear waterways, and exposed ground.
+- San Juan: ocean/land classification and dense urban roads.
+- Houston: flatness scaling and protection of established urban road/building output.
 
 To omit the base plate:
 

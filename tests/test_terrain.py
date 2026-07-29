@@ -24,6 +24,8 @@ from memorymap_pipeline.terrain import (
     drape_mesh,
     drape_road_mesh,
     drape_route_mesh,
+    elevation_grid_for_frame,
+    terrain_grid_for_print,
     terrain_surface_from_grid,
 )
 from memorymap_pipeline.terrain_providers import (
@@ -32,7 +34,9 @@ from memorymap_pipeline.terrain_providers import (
     _decode_terrarium,
 )
 from memorymap_pipeline.water import (
+    LINEAR_WATERWAY_WIDTHS_MM,
     WATER_TAGS,
+    WaterFeature,
     _infer_coastal_water_regions,
     build_terrain_mesh_with_water,
     build_vector_water_mesh,
@@ -50,6 +54,42 @@ def _grid(values: list[list[float]]) -> ElevationGrid:
         east=-95.3,
         source="fixture",
     )
+
+
+def test_adaptive_terrain_grid_tracks_print_resolution_and_aspect_ratio() -> None:
+    grid = terrain_grid_for_print(240.0, 190.0)
+
+    assert grid.mode == "adaptive"
+    assert grid.shape == (347, 438)
+    assert grid.columns > grid.rows
+    assert grid.cell_width_mm == pytest.approx(0.55, abs=0.01)
+    assert grid.cell_height_mm == pytest.approx(0.55, abs=0.01)
+    assert grid.sample_count <= 180_000
+    assert grid.estimated_terrain_faces < 1_000_000
+
+
+def test_adaptive_terrain_grid_caps_fine_targets_without_becoming_square() -> None:
+    grid = terrain_grid_for_print(
+        240.0,
+        190.0,
+        target_cell_size_mm=0.1,
+        maximum_samples=50_000,
+        maximum_dimension=512,
+    )
+
+    assert grid.sample_count <= 50_000
+    assert max(grid.shape) <= 512
+    assert grid.columns > grid.rows
+    assert grid.columns / grid.rows == pytest.approx(240.0 / 190.0, rel=0.02)
+
+
+def test_explicit_terrain_grid_overrides_remain_exact() -> None:
+    square = terrain_grid_for_print(240.0, 190.0, override=96)
+    rectangular = terrain_grid_for_print(240.0, 190.0, override=(80, 120))
+
+    assert square.mode == "override"
+    assert square.shape == (96, 96)
+    assert rectangular.shape == (80, 120)
 
 
 def test_flat_houston_like_frame_uses_full_three_mm_relief() -> None:
@@ -78,6 +118,97 @@ def test_surface_normalizes_robust_elevations_and_samples_print_space() -> None:
     assert surface.sample(100.0, 0.0) == pytest.approx(surface.heights_mm[-1, -1])
 
 
+def test_surface_preserves_contours_in_robust_elevation_tails() -> None:
+    elevations = np.arange(100.0).reshape(10, 10)
+    surface = terrain_surface_from_grid(
+        _grid(elevations),
+        width_mm=100.0,
+        height_mm=100.0,
+        horizontal_span_m=10_000.0,
+        maximum_relief_mm=12.0,
+    )
+    ordered = np.sort(surface.heights_mm.reshape(-1))
+
+    assert ordered[0] == pytest.approx(0.0)
+    assert ordered[1] > ordered[0]
+    assert ordered[-1] == pytest.approx(surface.analysis.target_relief_mm)
+    assert ordered[-2] < ordered[-1]
+
+
+def test_surface_repairs_both_polarities_of_dem_nodata_without_spikes() -> None:
+    elevations = np.tile(np.linspace(0.0, 400.0, 9), (9, 1))
+    elevations[4, 4] = np.finfo(np.float32).max
+    elevations[6:8, 1:3] = -8.0e19
+    surface = terrain_surface_from_grid(
+        _grid(elevations),
+        width_mm=90.0,
+        height_mm=90.0,
+        horizontal_span_m=10_000.0,
+        maximum_relief_mm=12.0,
+    )
+
+    assert np.isfinite(surface.heights_mm).all()
+    assert surface.heights_mm[4, 4] == pytest.approx(
+        np.mean((surface.heights_mm[4, 3], surface.heights_mm[4, 5])),
+        abs=0.1,
+    )
+    assert np.max(np.abs(np.diff(surface.heights_mm, axis=1))) < 3.0
+
+
+def test_terrain_detail_gamma_expands_lowland_relief_without_moving_peaks() -> None:
+    elevations = np.linspace(0.0, 1_000.0, 25).reshape(5, 5)
+    linear = terrain_surface_from_grid(
+        _grid(elevations),
+        width_mm=100.0,
+        height_mm=100.0,
+        horizontal_span_m=10_000.0,
+        maximum_relief_mm=12.0,
+        detail_gamma=1.0,
+    )
+    detailed = terrain_surface_from_grid(
+        _grid(elevations),
+        width_mm=100.0,
+        height_mm=100.0,
+        horizontal_span_m=10_000.0,
+        maximum_relief_mm=12.0,
+        detail_gamma=0.75,
+    )
+
+    assert detailed.heights_mm.min() == pytest.approx(linear.heights_mm.min())
+    assert detailed.heights_mm.max() == pytest.approx(linear.heights_mm.max())
+    assert detailed.heights_mm[1, 0] > linear.heights_mm[1, 0]
+
+
+def test_geographic_dem_is_cropped_to_the_exact_print_frame() -> None:
+    frame = MapFrame(
+        center_lat=36.25,
+        center_lon=-121.75,
+        coverage_width_m=10_000.0,
+        coverage_height_m=20_000.0,
+        print_width_mm=100.0,
+        print_height_mm=200.0,
+    )
+    _, frame_longitudes = frame.print_to_lonlat(
+        np.array([0.0, 100.0]),
+        np.array([100.0, 100.0]),
+    )
+    half_span = float(np.ptp(frame_longitudes)) / 2.0
+    source = ElevationGrid(
+        np.tile(np.linspace(0.0, 100.0, 5), (5, 1)),
+        south=36.0,
+        north=36.5,
+        west=frame.center_lon - 2.0 * half_span,
+        east=frame.center_lon + 2.0 * half_span,
+        source="oversized-fixture",
+    )
+
+    cropped = elevation_grid_for_frame(source, frame, (5, 5))
+
+    assert cropped.elevations_m[:, 0] == pytest.approx(25.0, abs=0.1)
+    assert cropped.elevations_m[:, -1] == pytest.approx(75.0, abs=0.1)
+    assert np.ptp(cropped.elevations_m) == pytest.approx(50.0, abs=0.2)
+
+
 def test_terrain_mesh_is_watertight_with_structural_bottom() -> None:
     surface = terrain_surface_from_grid(
         _grid([[30.0, 40.0, 45.0], [20.0, 25.0, 35.0], [10.0, 15.0, 20.0]]),
@@ -91,6 +222,32 @@ def test_terrain_mesh_is_watertight_with_structural_bottom() -> None:
     assert mesh.volume > 0.0
     assert mesh.bounds[0, 2] == pytest.approx(-1.0)
     assert mesh.bounds[1, 2] == pytest.approx(surface.analysis.target_relief_mm)
+
+
+def test_terrain_mesh_keeps_the_outer_trim_flat() -> None:
+    surface = terrain_surface_from_grid(
+        _grid(np.arange(121.0).reshape(11, 11)),
+        width_mm=100.0,
+        height_mm=80.0,
+        horizontal_span_m=10_000.0,
+    )
+    mesh = build_terrain_mesh(
+        surface,
+        base_thickness_mm=1.0,
+        flat_margin_mm=10.0,
+    )
+    vertices = mesh.vertices
+    top_vertices = vertices[:, 2] > -0.5
+    trim_vertices = (
+        (vertices[:, 0] <= 10.0 + 1e-8)
+        | (vertices[:, 0] >= 90.0 - 1e-8)
+        | (vertices[:, 1] <= 10.0 + 1e-8)
+        | (vertices[:, 1] >= 70.0 - 1e-8)
+    )
+
+    assert mesh.is_watertight
+    assert np.max(vertices[top_vertices & trim_vertices, 2]) == pytest.approx(0.0)
+    assert np.max(vertices[top_vertices & ~trim_vertices, 2]) > 0.0
 
 
 def test_drape_preserves_visible_feature_height_over_local_surface() -> None:
@@ -347,6 +504,24 @@ def test_usgs_provider_decodes_and_caches_float_dem(tmp_path: Path) -> None:
     assert session.calls == 2  # the second provider call is served entirely from cache
 
 
+def test_usgs_provider_recognizes_positive_and_negative_float_sentinels(
+    tmp_path: Path,
+) -> None:
+    values = np.array(
+        [[12.5, np.finfo(np.float32).max], [-8.0e19, 11.5]],
+        dtype=np.float32,
+    )
+    payload = BytesIO()
+    Image.fromarray(values, mode="F").save(payload, format="TIFF")
+    provider = Usgs3depProvider(session=FakeSession(payload.getvalue()))
+
+    result = provider.fetch((36.0, 36.1, -122.1, -122.0), (2, 2), tmp_path)
+
+    assert np.isnan(result.elevations_m[0, 1])
+    assert np.isnan(result.elevations_m[1, 0])
+    assert result.elevations_m[0, 0] == pytest.approx(12.5)
+
+
 class FlakyTerrainSession(FakeSession):
     def get(self, url: str, **kwargs) -> FakeResponse:
         self.calls += 1
@@ -414,6 +589,51 @@ def test_generation_uses_global_dem_when_usgs_fails(
     assert result.stats["terrain"]["source"] == "aws-terrarium"
     assert any("global DEM fallback" in warning for warning in result.warnings)
     assert not any("flat base" in warning for warning in result.warnings)
+
+
+def test_generation_requests_rectangular_adaptive_grid_and_reports_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    route = load_route_from_gpx(Path(__file__).parent / "fixtures" / "frame_route.gpx")
+    frame = MapFrame.fit_route(route.points, 120.0, 90.0, margin_mm=5.0)
+    requested_shapes: list[tuple[int, int]] = []
+
+    def fixture_grid(_self, bounds, grid_size, _cache_dir):
+        requested_shapes.append(grid_size)
+        south, north, west, east = bounds
+        rows, columns = grid_size
+        return ElevationGrid(
+            np.arange(rows * columns, dtype=float).reshape(rows, columns),
+            south,
+            north,
+            west,
+            east,
+            "fixture",
+        )
+
+    monkeypatch.setattr(Usgs3depProvider, "fetch", fixture_grid)
+    result = generation.generate_memory_map(
+        generation.GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=tmp_path / "adaptive-terrain.3mf",
+            include_route=False,
+            include_roads=False,
+            include_buildings=False,
+            config={
+                "terrain_enabled": True,
+                "terrain_target_cell_size_mm": 10.0,
+            },
+        )
+    )
+
+    assert requested_shapes == [(10, 13)]
+    diagnostics = result.stats["terrain"]["grid"]
+    assert diagnostics["mode"] == "adaptive"
+    assert (diagnostics["rows"], diagnostics["columns"]) == (10, 13)
+    assert diagnostics["samples"] == 130
+    assert diagnostics["estimated_terrain_faces"] == 516
+
 
 def test_generation_falls_back_to_flat_terrain_after_usgs_failure(
     tmp_path: Path, monkeypatch
@@ -560,6 +780,146 @@ def test_generation_service_drapes_route_and_exports_recessed_water(tmp_path: Pa
     assert result.water_mesh.bounds[0, 2] >= -0.6 - 1e-9
 
 
+def test_landscape_generation_builds_supported_bone_green_blue_layers(
+    tmp_path: Path,
+) -> None:
+    route = load_route_from_gpx(Path(__file__).parent / "fixtures" / "frame_route.gpx")
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+    water_polygon = box(25.0, 20.0, 75.0, 60.0)
+    result = generation.generate_memory_map(
+        generation.GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=tmp_path / "landscape-generation.3mf",
+            include_route=False,
+            include_roads=False,
+            include_buildings=False,
+            config={
+                "terrain_enabled": True,
+                "water_enabled": True,
+                "style_profile": "landscape",
+                "exposed_land_enabled": False,
+                "flat_border_enabled": True,
+            },
+            elevation_grid=_grid(
+                [[30.0, 30.3, 30.6], [29.8, 30.1, 30.4], [29.5, 29.8, 30.1]]
+            ),
+            water_polygons=[water_polygon],
+        )
+    )
+
+    assert result.base_mesh is not None and result.base_mesh.is_watertight
+    assert result.landscape_mesh is not None and result.landscape_mesh.is_watertight
+    assert result.water_mesh is not None and result.water_mesh.is_watertight
+    assert result.landscape_mesh.bounds[0, 0] >= frame.margin_mm - 1e-8
+    assert result.landscape_mesh.bounds[0, 1] >= frame.margin_mm - 1e-8
+    assert (
+        result.landscape_mesh.bounds[1, 0]
+        <= frame.print_width_mm - frame.margin_mm + 1e-8
+    )
+    assert (
+        result.landscape_mesh.bounds[1, 1]
+        <= frame.print_height_mm - frame.margin_mm + 1e-8
+    )
+    base_vertices = result.base_mesh.vertices
+    trim_vertices = (
+        (base_vertices[:, 0] <= frame.margin_mm + 1e-8)
+        | (
+            base_vertices[:, 0]
+            >= frame.print_width_mm - frame.margin_mm - 1e-8
+        )
+        | (base_vertices[:, 1] <= frame.margin_mm + 1e-8)
+        | (
+            base_vertices[:, 1]
+            >= frame.print_height_mm - frame.margin_mm - 1e-8
+        )
+    )
+    trim_top = trim_vertices & (
+        base_vertices[:, 2] > result.base_mesh.bounds[0, 2] + 1e-8
+    )
+    assert base_vertices[trim_top, 2] == pytest.approx(0.0)
+    centers = result.base_mesh.triangles_center
+    upward = result.base_mesh.face_normals[:, 2] > 0.9
+    inside_water = np.asarray(
+        [
+            water_polygon.buffer(-0.01).contains(Point(x, y))
+            for x, y in centers[:, :2]
+        ]
+    )
+    support_faces = centers[upward & inside_water]
+    assert len(support_faces) > 0
+    assert result.water_mesh.bounds[1, 2] - support_faces[:, 2].max() == pytest.approx(
+        0.4
+    )
+
+    with zipfile.ZipFile(result.output_path) as archive:
+        model_name = next(
+            name for name in archive.namelist() if name.lower().endswith(".model")
+        )
+        root = ET.fromstring(archive.read(model_name))
+    namespace = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    names = {
+        item.attrib.get("name")
+        for item in root.findall("m:resources/m:object", namespace)
+    }
+    assert {"Base_Bone", "Terrain_Green", "Water_Blue", "MemoryMap"} <= names
+
+
+def test_borderless_generation_contours_terrain_to_plate_extents(
+    tmp_path: Path,
+) -> None:
+    route = load_route_from_gpx(Path(__file__).parent / "fixtures" / "frame_route.gpx")
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+    result = generation.generate_memory_map(
+        generation.GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=tmp_path / "borderless-terrain.3mf",
+            include_route=False,
+            include_roads=False,
+            include_buildings=False,
+            config={
+                "terrain_enabled": True,
+                "water_enabled": False,
+                "flat_border_enabled": False,
+            },
+            elevation_grid=_grid(
+                [[10.0, 30.0, 50.0], [20.0, 40.0, 60.0], [30.0, 50.0, 70.0]]
+            ),
+        )
+    )
+
+    assert result.base_mesh is not None and result.base_mesh.is_watertight
+    assert result.stats["flat_border_enabled"] is False
+    vertices = result.base_mesh.vertices
+    edge = (
+        np.isclose(vertices[:, 0], 0.0)
+        | np.isclose(vertices[:, 0], frame.print_width_mm)
+        | np.isclose(vertices[:, 1], 0.0)
+        | np.isclose(vertices[:, 1], frame.print_height_mm)
+    )
+    edge_top = edge & (
+        vertices[:, 2] > result.base_mesh.bounds[0, 2] + 1e-8
+    )
+    assert np.ptp(vertices[edge_top, 2]) > 0.0
+
+
 def test_water_loader_transforms_local_osm_polygons_into_print_space() -> None:
     frame = MapFrame(
         center_lat=29.7600,
@@ -596,6 +956,94 @@ def test_water_tags_include_marine_ocean_features() -> None:
     assert "sea" in water_values
     assert "ocean" in place_values
     assert "sea" in place_values
+    assert set(("river", "stream", "canal", "drain", "ditch")) <= set(
+        WATER_TAGS["waterway"]
+    )
+
+
+def test_water_loader_buffers_local_linear_waterways_to_printable_widths() -> None:
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+
+    features = download_water_polygons(
+        bbox=(29.759, 29.761, -95.371, -95.369),
+        center_lat=frame.center_lat,
+        center_lon=frame.center_lon,
+        transform={"map_frame": frame},
+        map_width_mm=frame.print_width_mm,
+        map_height_mm=frame.print_height_mm,
+        water_file=Path(__file__).parent / "fixtures" / "frame_water.geojson",
+        include_metadata=True,
+    )
+
+    assert all(isinstance(feature, WaterFeature) for feature in features)
+    areas = [feature for feature in features if feature.kind == "area"]
+    waterways = {
+        feature.waterway: feature
+        for feature in features
+        if feature.kind == "waterway"
+    }
+    assert len(areas) == 1
+    assert set(waterways) == {"stream", "canal"}
+    assert waterways["stream"].geometry.bounds[3] - waterways["stream"].geometry.bounds[1] == pytest.approx(
+        LINEAR_WATERWAY_WIDTHS_MM["stream"],
+        abs=0.02,
+    )
+    assert waterways["canal"].geometry.bounds[2] - waterways["canal"].geometry.bounds[0] == pytest.approx(
+        LINEAR_WATERWAY_WIDTHS_MM["canal"],
+        abs=0.02,
+    )
+    assert all(feature.geometry.geom_type in ("Polygon", "MultiPolygon") for feature in features)
+    assert all(
+        0.0 <= feature.geometry.bounds[0] <= feature.geometry.bounds[2] <= 120.0
+        for feature in features
+    )
+    assert all(
+        0.0 <= feature.geometry.bounds[1] <= feature.geometry.bounds[3] <= 90.0
+        for feature in features
+    )
+
+
+def test_water_loader_honors_minimum_printable_waterway_width() -> None:
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+
+    features = download_water_polygons(
+        bbox=(29.759, 29.761, -95.371, -95.369),
+        center_lat=frame.center_lat,
+        center_lon=frame.center_lon,
+        transform={"map_frame": frame},
+        map_width_mm=frame.print_width_mm,
+        map_height_mm=frame.print_height_mm,
+        water_file=Path(__file__).parent / "fixtures" / "frame_water.geojson",
+        minimum_waterway_width_mm=1.4,
+        include_metadata=True,
+    )
+
+    waterways = [feature for feature in features if feature.kind == "waterway"]
+    assert len(waterways) == 2
+    assert all(
+        min(
+            feature.geometry.bounds[2] - feature.geometry.bounds[0],
+            feature.geometry.bounds[3] - feature.geometry.bounds[1],
+        )
+        == pytest.approx(1.4, abs=0.02)
+        for feature in waterways
+    )
 
 
 def test_coastline_inference_adds_ocean_region_touching_frame_edge() -> None:

@@ -14,18 +14,24 @@ DEFAULT_FEATURE_EMBED_DEPTH_MM = 0.2
 
 MESH_COLORS = {
     "base": np.array([255, 255, 255, 255], dtype=np.uint8),
+    "base_bone": np.array([214, 203, 171, 255], dtype=np.uint8),
     "route": np.array([255, 102, 51, 255], dtype=np.uint8),
     "roads": np.array([0, 0, 0, 255], dtype=np.uint8),
     "buildings": np.array([128, 128, 128, 255], dtype=np.uint8),
     "water": np.array([128, 128, 128, 255], dtype=np.uint8),
+    "water_blue": np.array([51, 153, 255, 255], dtype=np.uint8),
+    "landscape": np.array([79, 119, 45, 255], dtype=np.uint8),
 }
 
 MESH_MATERIALS = {
     "Base_White": ("White", "#FFFFFFFF"),
+    "Base_Bone": ("Bone", "#D6CBABFF"),
     "Route_Accent": ("Orange", "#FF6633FF"),
     "Roads_Black": ("Black", "#000000FF"),
     "Buildings_Verification": ("Gray", "#808080FF"),
     "Water_Gray": ("Gray Water", "#808080FF"),
+    "Water_Blue": ("Blue Water", "#3399FFFF"),
+    "Terrain_Green": ("Landscape Green", "#4F772DFF"),
 }
 
 def embedded_feature_dimensions(
@@ -386,6 +392,8 @@ def export_3mf(
     roads_mesh: Trimesh | None = None,
     buildings_mesh: Trimesh | None = None,
     water_mesh: Trimesh | None = None,
+    landscape_mesh: Trimesh | None = None,
+    style_profile: str = "urban",
 ) -> None:
     from trimesh.exchange.export import export_mesh
 
@@ -395,13 +403,19 @@ def export_3mf(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     meshes = []
 
+    if style_profile not in {"urban", "landscape"}:
+        raise ValueError(f"Unsupported style profile: {style_profile}")
+    landscape_style = style_profile == "landscape"
+
     if base_mesh is not None:
         try:
             base_mesh.metadata = base_mesh.metadata or {}
         except Exception:
             base_mesh.metadata = {}
-        base_mesh.metadata["name"] = "Base_White"
-        base_mesh.visual.face_colors = MESH_COLORS["base"]
+        base_mesh.metadata["name"] = "Base_Bone" if landscape_style else "Base_White"
+        base_mesh.visual.face_colors = MESH_COLORS[
+            "base_bone" if landscape_style else "base"
+        ]
         meshes.append(base_mesh)
 
     if route_mesh is not None:
@@ -436,9 +450,20 @@ def export_3mf(
             water_mesh.metadata = water_mesh.metadata or {}
         except Exception:
             water_mesh.metadata = {}
-        water_mesh.metadata["name"] = "Water_Gray"
-        water_mesh.visual.face_colors = MESH_COLORS["water"]
+        water_mesh.metadata["name"] = "Water_Blue" if landscape_style else "Water_Gray"
+        water_mesh.visual.face_colors = MESH_COLORS[
+            "water_blue" if landscape_style else "water"
+        ]
         meshes.append(water_mesh)
+
+    if landscape_mesh is not None:
+        try:
+            landscape_mesh.metadata = landscape_mesh.metadata or {}
+        except Exception:
+            landscape_mesh.metadata = {}
+        landscape_mesh.metadata["name"] = "Terrain_Green"
+        landscape_mesh.visual.face_colors = MESH_COLORS["landscape"]
+        meshes.append(landscape_mesh)
 
     audit_printability(
         {
@@ -447,6 +472,7 @@ def export_3mf(
             "roads": roads_mesh,
             "buildings": buildings_mesh,
             "water": water_mesh,
+            "landscape": landscape_mesh,
         }
     ).raise_for_errors()
 
