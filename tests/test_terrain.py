@@ -134,6 +134,50 @@ def test_surface_preserves_contours_in_robust_elevation_tails() -> None:
     assert ordered[-2] < ordered[-1]
 
 
+def test_surface_repairs_both_polarities_of_dem_nodata_without_spikes() -> None:
+    elevations = np.tile(np.linspace(0.0, 400.0, 9), (9, 1))
+    elevations[4, 4] = np.finfo(np.float32).max
+    elevations[6:8, 1:3] = -8.0e19
+    surface = terrain_surface_from_grid(
+        _grid(elevations),
+        width_mm=90.0,
+        height_mm=90.0,
+        horizontal_span_m=10_000.0,
+        maximum_relief_mm=12.0,
+    )
+
+    assert np.isfinite(surface.heights_mm).all()
+    assert surface.heights_mm[4, 4] == pytest.approx(
+        np.mean((surface.heights_mm[4, 3], surface.heights_mm[4, 5])),
+        abs=0.1,
+    )
+    assert np.max(np.abs(np.diff(surface.heights_mm, axis=1))) < 3.0
+
+
+def test_terrain_detail_gamma_expands_lowland_relief_without_moving_peaks() -> None:
+    elevations = np.linspace(0.0, 1_000.0, 25).reshape(5, 5)
+    linear = terrain_surface_from_grid(
+        _grid(elevations),
+        width_mm=100.0,
+        height_mm=100.0,
+        horizontal_span_m=10_000.0,
+        maximum_relief_mm=12.0,
+        detail_gamma=1.0,
+    )
+    detailed = terrain_surface_from_grid(
+        _grid(elevations),
+        width_mm=100.0,
+        height_mm=100.0,
+        horizontal_span_m=10_000.0,
+        maximum_relief_mm=12.0,
+        detail_gamma=0.75,
+    )
+
+    assert detailed.heights_mm.min() == pytest.approx(linear.heights_mm.min())
+    assert detailed.heights_mm.max() == pytest.approx(linear.heights_mm.max())
+    assert detailed.heights_mm[1, 0] > linear.heights_mm[1, 0]
+
+
 def test_terrain_mesh_is_watertight_with_structural_bottom() -> None:
     surface = terrain_surface_from_grid(
         _grid([[30.0, 40.0, 45.0], [20.0, 25.0, 35.0], [10.0, 15.0, 20.0]]),
@@ -427,6 +471,24 @@ def test_usgs_provider_decodes_and_caches_float_dem(tmp_path: Path) -> None:
     assert first.elevations_m == pytest.approx(values)
     assert second.elevations_m == pytest.approx(values)
     assert session.calls == 2  # the second provider call is served entirely from cache
+
+
+def test_usgs_provider_recognizes_positive_and_negative_float_sentinels(
+    tmp_path: Path,
+) -> None:
+    values = np.array(
+        [[12.5, np.finfo(np.float32).max], [-8.0e19, 11.5]],
+        dtype=np.float32,
+    )
+    payload = BytesIO()
+    Image.fromarray(values, mode="F").save(payload, format="TIFF")
+    provider = Usgs3depProvider(session=FakeSession(payload.getvalue()))
+
+    result = provider.fetch((36.0, 36.1, -122.1, -122.0), (2, 2), tmp_path)
+
+    assert np.isnan(result.elevations_m[0, 1])
+    assert np.isnan(result.elevations_m[1, 0])
+    assert result.elevations_m[0, 0] == pytest.approx(12.5)
 
 
 class FlakyTerrainSession(FakeSession):

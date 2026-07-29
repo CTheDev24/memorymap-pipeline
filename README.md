@@ -124,6 +124,7 @@ landscape configuration is:
   "flat_border_enabled": false,
   "terrain_max_relief_mm": 3.0,
   "terrain_min_relief_mm": 1.5,
+  "terrain_detail_gamma": 0.75,
   "water_enabled": false,
   "water_recess_mm": 0.4,
   "water_mesh_thickness_mm": 0.6,
@@ -151,6 +152,11 @@ their visible heights. Elevations outside the robust 5th-to-95th-percentile rang
 softly compressed into the relief tails rather than hard-clipped, preserving contours
 through unusually low and high areas without allowing one DEM outlier to dominate the
 entire print.
+USGS TIFF values outside the physically plausible -12,000 to 12,000 metre range are
+treated as undeclared no-data sentinels and locally interpolated from valid neighbours.
+This prevents isolated terrain needles from propagating into routes, water, and landscape
+skins. The default `terrain_detail_gamma` gently expands lowland elevation differences
+while preserving both the minimum and the selected maximum relief.
 
 The flat border is optional and unchecked when MemoryMap Studio launches. With
 `flat_border_enabled` set to `false`, terrain and map layers use the full plate extents.
