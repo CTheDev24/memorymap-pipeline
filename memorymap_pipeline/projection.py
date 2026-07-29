@@ -43,6 +43,43 @@ def project_lonlat_array(latitudes: np.ndarray, longitudes: np.ndarray, center_l
     return projected * scale
 
 
+def unproject_local_array(
+    projected: np.ndarray,
+    center_lat: float,
+    center_lon: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Invert the local orthographic projection used by GPX and map layers."""
+    coordinates = np.asarray(projected, dtype=float)
+    if coordinates.ndim != 2 or coordinates.shape[1] != 2:
+        raise ValueError("Projected coordinates must be an Nx2 array")
+    radius = 6378137.0
+    x = coordinates[:, 0] / radius
+    y = coordinates[:, 1] / radius
+    rho = np.hypot(x, y)
+    if np.any(rho > 1.0 + 1e-9):
+        raise ValueError("Projected coordinates exceed the orthographic horizon")
+    rho = np.clip(rho, 0.0, 1.0)
+    central_angle = np.arcsin(rho)
+    sin_c = np.sin(central_angle)
+    cos_c = np.cos(central_angle)
+    lat0 = math.radians(center_lat)
+    lon0 = math.radians(center_lon)
+    safe_rho = np.where(rho > 1e-15, rho, 1.0)
+    latitude = np.arcsin(
+        cos_c * math.sin(lat0)
+        + y * sin_c * math.cos(lat0) / safe_rho
+    )
+    longitude = lon0 + np.arctan2(
+        x * sin_c,
+        safe_rho * math.cos(lat0) * cos_c
+        - y * math.sin(lat0) * sin_c,
+    )
+    center = rho <= 1e-15
+    latitude[center] = lat0
+    longitude[center] = lon0
+    return np.degrees(latitude), np.degrees(longitude)
+
+
 def normalize_and_scale_points(projected: np.ndarray, width_mm: float, height_mm: float) -> np.ndarray:
     if projected.shape[0] == 0:
         raise ValueError("No projected points available")

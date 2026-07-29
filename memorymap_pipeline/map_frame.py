@@ -6,7 +6,7 @@ from typing import Sequence
 
 import numpy as np
 
-from .projection import project_lonlat_array, project_points
+from .projection import project_lonlat_array, project_points, unproject_local_array
 
 
 @dataclass(frozen=True)
@@ -137,6 +137,32 @@ class MapFrame:
     def transform_points(self, points: Sequence[object]) -> np.ndarray:
         """Project point objects having latitude/longitude attributes to print mm."""
         return self.transform_projected(project_points(points, self.center_lat, self.center_lon))
+
+    def print_to_lonlat(
+        self,
+        x_mm: np.ndarray | float,
+        y_mm: np.ndarray | float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Map print-space coordinates back to geographic latitude/longitude."""
+        x, y = np.broadcast_arrays(
+            np.asarray(x_mm, dtype=float),
+            np.asarray(y_mm, dtype=float),
+        )
+        rotated = np.column_stack(
+            (
+                (x.reshape(-1) - self.print_width_mm / 2.0)
+                * (self.coverage_width_m / self.printable_width_mm),
+                (y.reshape(-1) - self.print_height_mm / 2.0)
+                * (self.coverage_height_m / self.printable_height_mm),
+            )
+        )
+        projected = _rotate(rotated, self.rotation_degrees)
+        latitudes, longitudes = unproject_local_array(
+            projected,
+            self.center_lat,
+            self.center_lon,
+        )
+        return latitudes.reshape(x.shape), longitudes.reshape(x.shape)
 
 
 def _rotate(coordinates: np.ndarray, degrees: float) -> np.ndarray:

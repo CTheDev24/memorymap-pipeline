@@ -109,6 +109,12 @@ cached under the user's local MemoryMap data directory. AWS Terrarium supplies t
 fallback when USGS data is unavailable. The provider boundary also accepts offline fixtures
 for deterministic testing.
 
+Provider rasters are geographic, axis-aligned bounding rectangles. Before relief
+normalization, MemoryMap resamples them into the exact print frame, including its aspect
+ratio and rotation. Do not stretch the provider rectangle directly over the plate: on
+coastal routes, its corner and ocean cells otherwise become large false sea-level shelves
+inside the land surface.
+
 Terrain is disabled by default. MemoryMap Studio exposes Terrain and Water layer toggles,
 maximum relief, water recess, and an Urban/Landscape style selector. Its initial terrain and
 landscape configuration is:
