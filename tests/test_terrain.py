@@ -714,6 +714,7 @@ def test_landscape_generation_builds_supported_bone_green_blue_layers(
                 "water_enabled": True,
                 "style_profile": "landscape",
                 "exposed_land_enabled": False,
+                "flat_border_enabled": True,
             },
             elevation_grid=_grid(
                 [[30.0, 30.3, 30.6], [29.8, 30.1, 30.4], [29.5, 29.8, 30.1]]
@@ -777,6 +778,53 @@ def test_landscape_generation_builds_supported_bone_green_blue_layers(
         for item in root.findall("m:resources/m:object", namespace)
     }
     assert {"Base_Bone", "Terrain_Green", "Water_Blue", "MemoryMap"} <= names
+
+
+def test_borderless_generation_contours_terrain_to_plate_extents(
+    tmp_path: Path,
+) -> None:
+    route = load_route_from_gpx(Path(__file__).parent / "fixtures" / "frame_route.gpx")
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+    result = generation.generate_memory_map(
+        generation.GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=tmp_path / "borderless-terrain.3mf",
+            include_route=False,
+            include_roads=False,
+            include_buildings=False,
+            config={
+                "terrain_enabled": True,
+                "water_enabled": False,
+                "flat_border_enabled": False,
+            },
+            elevation_grid=_grid(
+                [[10.0, 30.0, 50.0], [20.0, 40.0, 60.0], [30.0, 50.0, 70.0]]
+            ),
+        )
+    )
+
+    assert result.base_mesh is not None and result.base_mesh.is_watertight
+    assert result.stats["flat_border_enabled"] is False
+    vertices = result.base_mesh.vertices
+    edge = (
+        np.isclose(vertices[:, 0], 0.0)
+        | np.isclose(vertices[:, 0], frame.print_width_mm)
+        | np.isclose(vertices[:, 1], 0.0)
+        | np.isclose(vertices[:, 1], frame.print_height_mm)
+    )
+    edge_top = edge & (
+        vertices[:, 2] > result.base_mesh.bounds[0, 2] + 1e-8
+    )
+    assert np.ptp(vertices[edge_top, 2]) > 0.0
 
 
 def test_water_loader_transforms_local_osm_polygons_into_print_space() -> None:

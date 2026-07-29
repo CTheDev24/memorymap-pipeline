@@ -121,6 +121,7 @@ landscape configuration is:
   "terrain_target_cell_size_mm": 0.55,
   "terrain_grid_max_samples": 180000,
   "terrain_grid_max_dimension": 512,
+  "flat_border_enabled": false,
   "terrain_max_relief_mm": 3.0,
   "terrain_min_relief_mm": 1.5,
   "water_enabled": false,
@@ -151,10 +152,12 @@ softly compressed into the relief tails rather than hard-clipped, preserving con
 through unusually low and high areas without allowing one DEM outlier to dominate the
 entire print.
 
-The configured print margin is also the model's flat trim. Terrain grid lines are inserted
-at the exact inner trim boundary, the outer annulus remains coplanar, and route, road,
-building, water, and landscape bodies remain inside that boundary. This perimeter contract
-is shared by Urban and Landscape profiles.
+The flat border is optional and unchecked when MemoryMap Studio launches. With
+`flat_border_enabled` set to `false`, terrain and map layers use the full plate extents.
+When enabled, the configured margin becomes the trim width: terrain grid lines are inserted
+at its exact inner boundary, the outer annulus remains coplanar, and route, road, building,
+water, and landscape bodies remain inside it. This behavior is shared by Urban and
+Landscape profiles.
 
 #### Urban and Landscape profiles
 
