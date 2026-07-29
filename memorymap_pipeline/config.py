@@ -45,6 +45,8 @@ DEFAULT_CONFIG = {
     "terrain_flat_fallback": True,
     "terrain_max_relief_mm": 3.0,
     "terrain_min_relief_mm": 1.5,
+    # Values below 1.0 expand subtle lowland relief while preserving peaks.
+    "terrain_detail_gamma": 0.75,
     "water_enabled": False,
     "water_recess_mm": 0.4,
     # 0.2 mm remains exclusively gray above 0.4 mm embedded in white support

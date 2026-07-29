@@ -251,16 +251,17 @@ def terrain_surface_from_grid(
     horizontal_span_m: float,
     maximum_relief_mm: float = 3.0,
     minimum_relief_mm: float = 1.5,
+    detail_gamma: float = 1.0,
 ) -> TerrainSurface:
+    if detail_gamma <= 0.0:
+        raise ValueError("Terrain detail gamma must be positive")
+    values = _repair_elevation_samples(grid.elevations_m)
     analysis = analyze_terrain(
-        grid.elevations_m,
+        values,
         horizontal_span_m,
         maximum_relief_mm,
         minimum_relief_mm,
     )
-    values = grid.elevations_m.copy()
-    if not np.isfinite(values).all():
-        values[~np.isfinite(values)] = float(np.nanmedian(values))
     low, high = np.percentile(values, [5.0, 95.0])
     if high - low <= 1e-9:
         normalized = np.zeros_like(values)
@@ -282,12 +283,78 @@ def terrain_surface_from_grid(
         minimum = float(np.min(normalized))
         maximum = float(np.max(normalized))
         normalized = (normalized - minimum) / (maximum - minimum)
+        # A mild power curve allocates more of the printable Z range to
+        # lowland changes.  This keeps coastal valleys legible without clipping
+        # peaks or changing the configured maximum relief.
+        normalized = np.power(normalized, detail_gamma)
     return TerrainSurface(
         heights_mm=normalized * analysis.target_relief_mm,
         width_mm=width_mm,
         height_mm=height_mm,
         analysis=analysis,
     )
+
+
+def _repair_elevation_samples(elevations_m: np.ndarray) -> np.ndarray:
+    """Replace DEM no-data sentinels with nearby terrain without creating shelves."""
+    values = np.asarray(elevations_m, dtype=float).copy()
+    valid = (
+        np.isfinite(values)
+        & (values >= -12_000.0)
+        & (values <= 12_000.0)
+    )
+    if not np.any(valid):
+        raise ValueError("Elevation grid contains no plausible terrain samples")
+    if np.all(valid):
+        return values
+
+    # Grow valid values into no-data holes one cell at a time. Averaging all
+    # available neighbours avoids the global-median plateaus produced by the
+    # previous fallback and naturally fills offshore sentinels from sea level.
+    missing = ~valid
+    rows, columns = values.shape
+    for _ in range(rows + columns):
+        if not np.any(missing):
+            break
+        totals = np.zeros_like(values)
+        counts = np.zeros_like(values, dtype=np.int16)
+        for row_offset, column_offset in (
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+        ):
+            source_rows = slice(max(0, -row_offset), rows - max(0, row_offset))
+            source_columns = slice(
+                max(0, -column_offset),
+                columns - max(0, column_offset),
+            )
+            target_rows = slice(max(0, row_offset), rows - max(0, -row_offset))
+            target_columns = slice(
+                max(0, column_offset),
+                columns - max(0, -column_offset),
+            )
+            neighbour_valid = valid[source_rows, source_columns]
+            totals[target_rows, target_columns] += np.where(
+                neighbour_valid,
+                values[source_rows, source_columns],
+                0.0,
+            )
+            counts[target_rows, target_columns] += neighbour_valid
+        fillable = missing & (counts > 0)
+        if not np.any(fillable):
+            break
+        values[fillable] = totals[fillable] / counts[fillable]
+        valid[fillable] = True
+        missing[fillable] = False
+
+    if np.any(missing):
+        values[missing] = float(np.median(values[valid]))
+    return values
 
 
 def terrain_mesh_axes(

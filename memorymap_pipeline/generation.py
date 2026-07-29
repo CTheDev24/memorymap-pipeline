@@ -359,6 +359,7 @@ def generate_memory_map(
             math.hypot(frame.coverage_width_m, frame.coverage_height_m),
             float(config.get("terrain_max_relief_mm", 3.0)),
             float(config.get("terrain_min_relief_mm", 1.5)),
+            float(config.get("terrain_detail_gamma", 0.75)),
         )
         if bool(config.get("water_enabled", False)):
             water_polygons = request.water_polygons
