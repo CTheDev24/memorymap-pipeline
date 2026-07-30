@@ -24,12 +24,15 @@ def test_project_json_and_file_round_trip(tmp_path):
         surface_skin_thickness_mm=0.6,
         minimum_waterway_width_mm=1.0,
         flat_border_enabled=True,
+        color_preset="urban-classic",
+        layer_colors={"route": "#AA5500"},
     )
     assert DesktopProject.from_json(expected.to_json()) == expected
     path = tmp_path / "sample.memorymap.json"
     expected.save(path)
     assert DesktopProject.load(path) == expected
     assert expected.to_dict()["flat_border_enabled"] is True
+    assert expected.to_dict()["style"]["layer_colors"]["route"] == "#AA5500"
 
 
 def test_project_rejects_unknown_version_and_invalid_dimensions():
@@ -204,6 +207,8 @@ def test_generation_config_includes_style_profile_and_landscape_dimensions():
     window.surface_skin_thickness = Value(0.4)
     window.minimum_waterway_width = Value(0.8)
     window.flat_border = Check(False)
+    window.color_preset_name = "landscape-classic"
+    window.layer_colors = {"water": "#102030"}
 
     payload = MemoryMapWindow._generation_config_payload(window)
 
@@ -211,6 +216,8 @@ def test_generation_config_includes_style_profile_and_landscape_dimensions():
     assert payload["surface_skin_thickness_mm"] == pytest.approx(0.4)
     assert payload["minimum_waterway_width_mm"] == pytest.approx(0.8)
     assert payload["flat_border_enabled"] is False
+    assert payload["color_preset"] == "landscape-classic"
+    assert payload["layer_colors"]["water"] == "#102030"
 
 
 def test_optional_border_defaults_to_full_extent_and_enables_margin_when_checked():

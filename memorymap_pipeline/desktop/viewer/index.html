@@ -114,6 +114,7 @@
     let modelCenter = new THREE.Vector3();
     let modelSize = new THREE.Vector3(1, 1, 1);
     const layerObjects = new Map();
+    let desiredLayerColors = {};
 
     function resize() {
       const width = viewport.clientWidth || 1;
@@ -150,6 +151,36 @@
         layerList.appendChild(label);
       });
     }
+
+    function paletteKey(layer) {
+      if (layer === "Landscape" || layer === "Terrain") return "landscape";
+      return layer.toLowerCase();
+    }
+
+    function applyLayerColors() {
+      layerObjects.forEach((objects, layer) => {
+        const color = desiredLayerColors[paletteKey(layer)];
+        if (!color) return;
+        objects.forEach(object => {
+          const materials = Array.isArray(object.material)
+            ? object.material : [object.material];
+          const recolored = materials.map(material => {
+            if (!material) return material;
+            const result = material.clone();
+            result.vertexColors = false;
+            result.color.set(color);
+            result.needsUpdate = true;
+            return result;
+          });
+          object.material = Array.isArray(object.material) ? recolored : recolored[0];
+        });
+      });
+    }
+
+    window.setLayerColors = colors => {
+      desiredLayerColors = colors || {};
+      applyLayerColors();
+    };
 
     function fitCamera(view = "perspective") {
       if (!modelBox) return;
@@ -188,6 +219,7 @@
         layerObjects.get(layer).push(object);
       });
       buildLayerControls();
+      applyLayerColors();
       const format = value => Number(value).toFixed(1);
       info.innerHTML =
         `<strong>${format(modelSize.x)} × ${format(modelSize.y)} × ${format(modelSize.z)} mm</strong><br>` +

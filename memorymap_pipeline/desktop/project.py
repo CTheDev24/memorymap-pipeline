@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..map_frame import MapFrame
+from ..palettes import default_preset, resolve_palette
 
 
 STYLE_PROFILE_URBAN = "urban"
@@ -31,6 +32,8 @@ class DesktopProject:
     style_profile: str = STYLE_PROFILE_URBAN
     surface_skin_thickness_mm: float = 0.4
     minimum_waterway_width_mm: float = 0.8
+    color_preset: str | None = None
+    layer_colors: dict[str, str] = field(default_factory=dict)
     version: int = field(default=1, init=False)
 
     def __post_init__(self) -> None:
@@ -47,6 +50,7 @@ class DesktopProject:
             self.minimum_waterway_width_mm,
         ) <= 0:
             raise ValueError("Route, terrain, and style dimensions must be positive")
+        resolve_palette(self.style_profile, self.color_preset, self.layer_colors)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +69,8 @@ class DesktopProject:
                 "profile": self.style_profile,
                 "surface_skin_thickness_mm": self.surface_skin_thickness_mm,
                 "minimum_waterway_width_mm": self.minimum_waterway_width_mm,
+                "color_preset": self.color_preset or default_preset(self.style_profile),
+                "layer_colors": dict(self.layer_colors),
             },
             "terrain": {
                 "relief_mm": self.terrain_relief_mm,
@@ -105,6 +111,8 @@ class DesktopProject:
                 minimum_waterway_width_mm=float(
                     style.get("minimum_waterway_width_mm", 0.8)
                 ),
+                color_preset=style.get("color_preset"),
+                layer_colors=dict(style.get("layer_colors", {})),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"Invalid desktop project: {exc}") from exc

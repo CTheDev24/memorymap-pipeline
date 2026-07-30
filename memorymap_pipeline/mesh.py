@@ -10,29 +10,10 @@ from shapely.geometry.base import BaseGeometry
 from trimesh import Trimesh
 from trimesh.creation import extrude_polygon
 
+from .palettes import resolve_palette, rgba
+
+
 DEFAULT_FEATURE_EMBED_DEPTH_MM = 0.2
-
-MESH_COLORS = {
-    "base": np.array([255, 255, 255, 255], dtype=np.uint8),
-    "base_bone": np.array([214, 203, 171, 255], dtype=np.uint8),
-    "route": np.array([255, 102, 51, 255], dtype=np.uint8),
-    "roads": np.array([0, 0, 0, 255], dtype=np.uint8),
-    "buildings": np.array([128, 128, 128, 255], dtype=np.uint8),
-    "water": np.array([128, 128, 128, 255], dtype=np.uint8),
-    "water_blue": np.array([51, 153, 255, 255], dtype=np.uint8),
-    "landscape": np.array([79, 119, 45, 255], dtype=np.uint8),
-}
-
-MESH_MATERIALS = {
-    "Base_White": ("White", "#FFFFFFFF"),
-    "Base_Bone": ("Bone", "#D6CBABFF"),
-    "Route_Accent": ("Orange", "#FF6633FF"),
-    "Roads_Black": ("Black", "#000000FF"),
-    "Buildings_Verification": ("Gray", "#808080FF"),
-    "Water_Gray": ("Gray Water", "#808080FF"),
-    "Water_Blue": ("Blue Water", "#3399FFFF"),
-    "Terrain_Green": ("Landscape Green", "#4F772DFF"),
-}
 
 def embedded_feature_dimensions(
     visible_height_mm: float,
@@ -358,7 +339,10 @@ def center_meshes_to_base(meshes: list[Trimesh], width_mm: float, height_mm: flo
         mesh.apply_translation((offset_x, offset_y, 0.0))
 
 
-def _apply_3mf_materials(output_path: Path) -> None:
+def _apply_3mf_materials(
+    output_path: Path,
+    materials: dict[str, tuple[str, str]],
+) -> None:
     """Inject slicer-visible materials without reserializing the model XML.
 
     Some slicers reject otherwise valid 3MF files when the core namespace is rewritten
@@ -385,7 +369,7 @@ def _apply_3mf_materials(output_path: Path) -> None:
     material_id = max(used_ids, default=0) + 1
     material_xml = [f'<basematerials id="{material_id}">']
     material_indices: dict[str, int] = {}
-    for index, (object_name, (material_name, display_color)) in enumerate(MESH_MATERIALS.items()):
+    for index, (object_name, (material_name, display_color)) in enumerate(materials.items()):
         material_xml.append(
             f'<base name="{material_name}" displaycolor="{display_color}" />'
         )
@@ -470,6 +454,8 @@ def export_3mf(
     water_mesh: Trimesh | None = None,
     landscape_mesh: Trimesh | None = None,
     style_profile: str = "urban",
+    color_preset: str | None = None,
+    layer_colors: dict[str, str] | None = None,
 ) -> None:
     from trimesh.exchange.export import export_mesh
 
@@ -482,64 +468,48 @@ def export_3mf(
     if style_profile not in {"urban", "landscape"}:
         raise ValueError(f"Unsupported style profile: {style_profile}")
     landscape_style = style_profile == "landscape"
+    colors = resolve_palette(style_profile, color_preset, layer_colors)
+    materials: dict[str, tuple[str, str]] = {}
+
+    def color_mesh(mesh: Trimesh, name: str, label: str, layer: str) -> None:
+        try:
+            mesh.metadata = mesh.metadata or {}
+        except Exception:
+            mesh.metadata = {}
+        mesh.metadata["name"] = name
+        mesh.visual.face_colors = np.asarray(rgba(colors[layer]), dtype=np.uint8)
+        materials[name] = (label, colors[layer] + "FF")
+        meshes.append(mesh)
 
     if base_mesh is not None:
-        try:
-            base_mesh.metadata = base_mesh.metadata or {}
-        except Exception:
-            base_mesh.metadata = {}
-        base_mesh.metadata["name"] = "Base_Bone" if landscape_style else "Base_White"
-        base_mesh.visual.face_colors = MESH_COLORS[
-            "base_bone" if landscape_style else "base"
-        ]
-        meshes.append(base_mesh)
+        color_mesh(
+            base_mesh,
+            "Base_Bone" if landscape_style else "Base_White",
+            "Base",
+            "base",
+        )
 
     if route_mesh is not None:
-        try:
-            route_mesh.metadata = route_mesh.metadata or {}
-        except Exception:
-            route_mesh.metadata = {}
-        route_mesh.metadata["name"] = "Route_Accent"
-        route_mesh.visual.face_colors = MESH_COLORS["route"]
-        meshes.append(route_mesh)
+        color_mesh(route_mesh, "Route_Accent", "Route", "route")
 
     if roads_mesh is not None:
-        try:
-            roads_mesh.metadata = roads_mesh.metadata or {}
-        except Exception:
-            roads_mesh.metadata = {}
-        roads_mesh.metadata["name"] = "Roads_Black"
-        roads_mesh.visual.face_colors = MESH_COLORS["roads"]
-        meshes.append(roads_mesh)
+        color_mesh(roads_mesh, "Roads_Black", "Roads", "roads")
 
     if buildings_mesh is not None:
-        try:
-            buildings_mesh.metadata = buildings_mesh.metadata or {}
-        except Exception:
-            buildings_mesh.metadata = {}
-        buildings_mesh.metadata["name"] = "Buildings_Verification"
-        buildings_mesh.visual.face_colors = MESH_COLORS["buildings"]
-        meshes.append(buildings_mesh)
+        color_mesh(
+            buildings_mesh, "Buildings_Verification", "Buildings", "buildings"
+        )
 
     if water_mesh is not None:
-        try:
-            water_mesh.metadata = water_mesh.metadata or {}
-        except Exception:
-            water_mesh.metadata = {}
-        water_mesh.metadata["name"] = "Water_Blue" if landscape_style else "Water_Gray"
-        water_mesh.visual.face_colors = MESH_COLORS[
-            "water_blue" if landscape_style else "water"
-        ]
-        meshes.append(water_mesh)
+        color_mesh(
+            water_mesh,
+            "Water_Blue" if landscape_style else "Water_Gray",
+            "Water",
+            "water",
+        )
 
     if landscape_mesh is not None:
-        try:
-            landscape_mesh.metadata = landscape_mesh.metadata or {}
-        except Exception:
-            landscape_mesh.metadata = {}
-        landscape_mesh.metadata["name"] = "Terrain_Green"
-        landscape_mesh.visual.face_colors = MESH_COLORS["landscape"]
-        meshes.append(landscape_mesh)
+        color_mesh(landscape_mesh, "Terrain_Green", "Landscape", "landscape")
 
     audit_printability(
         {
@@ -557,4 +527,4 @@ def export_3mf(
         output_path,
         file_type="3mf",
     )
-    _apply_3mf_materials(output_path)
+    _apply_3mf_materials(output_path, materials)

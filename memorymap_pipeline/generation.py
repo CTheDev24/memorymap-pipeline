@@ -763,6 +763,8 @@ def generate_memory_map(
         water_mesh,
         landscape_mesh=landscape_mesh,
         style_profile=style_profile,
+        color_preset=config.get("color_preset"),
+        layer_colors=config.get("layer_colors"),
     )
     stats = {
         "route_points": len(request.route.points),

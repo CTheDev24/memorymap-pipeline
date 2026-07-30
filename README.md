@@ -299,6 +299,10 @@ reserve 6 mm between the route extents and the displayed print frame. **Zoom in*
 **Zoom out** adjust geographic coverage around the current frame center; **Reset frame to
 route** restores the centered 6 mm fit. In Terrain mode, enabling Water exports the gray
 water as its own mesh body, and the Layers panel shows this as a dedicated indicator.
+The Layer colors panel offers Urban Classic and Landscape Classic collections. Each base,
+route, road, building, water, and landscape swatch can also be changed independently; an
+individual edit switches the collection to Custom and updates both the live preview and
+the material color embedded in the generated 3MF.
 
 ### Generated 3D preview
 

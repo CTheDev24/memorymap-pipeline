@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
+from ..palettes import LAYER_KEYS, default_preset, resolve_palette
 from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN
 from .viewer_support import placeholder_html, viewer_url
 from .worker import GenerationWorker
@@ -27,6 +28,7 @@ try:
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
+        QColorDialog,
         QComboBox,
         QDoubleSpinBox,
         QFileDialog,
@@ -92,6 +94,9 @@ class MemoryMapWindow(QMainWindow):
         self.current_frame: dict | None = None
         self.generation_thread: QThread | None = None
         self.generation_worker: GenerationWorker | None = None
+        self.color_preset_name = default_preset(STYLE_PROFILE_URBAN)
+        self.layer_colors = resolve_palette(STYLE_PROFILE_URBAN)
+        self.color_buttons: dict[str, QPushButton] = {}
         self.bridge = MapBridge(self)
         self.bridge.frame_changed.connect(self._remember_frame)
         self._build_ui()
@@ -115,6 +120,7 @@ class MemoryMapWindow(QMainWindow):
         self.map_view.page().setWebChannel(self.channel)
         self.map_view.setHtml(self._map_html(), QUrl("https://localhost/"))
         self.preview_view = QWebEngineView()
+        self.preview_view.loadFinished.connect(self._apply_palette_to_preview)
         self.preview_view.settings().setAttribute(
             QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls,
             True,
@@ -190,6 +196,24 @@ class MemoryMapWindow(QMainWindow):
         style_form.addRow("Surface skin", self.surface_skin_thickness)
         style_form.addRow("Minimum waterway width", self.minimum_waterway_width)
         outer.addWidget(style_box)
+
+        palette_box = QGroupBox("Layer colors")
+        palette_form = QFormLayout(palette_box)
+        self.color_preset = QComboBox()
+        self.color_preset.addItem("Urban Classic", "urban-classic")
+        self.color_preset.addItem("Landscape Classic", "landscape-classic")
+        self.color_preset.addItem("Custom", None)
+        self.color_preset.currentIndexChanged.connect(self._palette_preset_changed)
+        palette_form.addRow("Collection", self.color_preset)
+        for layer in LAYER_KEYS:
+            button = QPushButton()
+            button.clicked.connect(
+                lambda _checked=False, selected=layer: self._choose_layer_color(selected)
+            )
+            self.color_buttons[layer] = button
+            palette_form.addRow(layer.title(), button)
+        outer.addWidget(palette_box)
+        self._refresh_color_buttons()
 
         layers = QGroupBox("Layers")
         layer_layout = QVBoxLayout(layers)
@@ -428,6 +452,54 @@ class MemoryMapWindow(QMainWindow):
         )
         self.surface_skin_thickness.setEnabled(landscape)
         self.minimum_waterway_width.setEnabled(landscape)
+        if hasattr(self, "color_preset") and self.color_preset.currentData() is not None:
+            preset = default_preset(self.style_profile.currentData())
+            index = self.color_preset.findData(preset)
+            if index >= 0:
+                self.color_preset.setCurrentIndex(index)
+
+    @Slot(int)
+    def _palette_preset_changed(self, _index: int = -1) -> None:
+        preset = self.color_preset.currentData()
+        if preset is None:
+            return
+        self.color_preset_name = preset
+        self.layer_colors = resolve_palette(
+            self.style_profile.currentData(), preset
+        )
+        self._refresh_color_buttons()
+        self._apply_palette_to_preview()
+
+    def _refresh_color_buttons(self) -> None:
+        for layer, button in self.color_buttons.items():
+            color = self.layer_colors[layer]
+            foreground = "#000000" if sum(int(color[i:i + 2], 16) for i in (1, 3, 5)) > 400 else "#FFFFFF"
+            button.setText(color)
+            button.setStyleSheet(
+                f"QPushButton {{ background: {color}; color: {foreground}; }}"
+            )
+
+    @Slot()
+    def _choose_layer_color(self, layer: str) -> None:
+        selected = QColorDialog.getColor(
+            parent=self, title=f"Choose {layer.title()} color"
+        )
+        if not selected.isValid():
+            return
+        self.layer_colors[layer] = selected.name().upper()
+        custom_index = self.color_preset.count() - 1
+        self.color_preset.blockSignals(True)
+        self.color_preset.setCurrentIndex(custom_index)
+        self.color_preset.blockSignals(False)
+        self._refresh_color_buttons()
+        self._apply_palette_to_preview()
+
+    @Slot(bool)
+    def _apply_palette_to_preview(self, _loaded: bool = True) -> None:
+        if not hasattr(self, "preview_view"):
+            return
+        script = f"window.setLayerColors && window.setLayerColors({json.dumps(self.layer_colors)});"
+        self.preview_view.page().runJavaScript(script)
 
     def _generation_config_payload(self) -> dict:
         return {
@@ -439,6 +511,16 @@ class MemoryMapWindow(QMainWindow):
             "style_profile": self.style_profile.currentData(),
             "surface_skin_thickness_mm": self.surface_skin_thickness.value(),
             "minimum_waterway_width_mm": self.minimum_waterway_width.value(),
+            "color_preset": getattr(
+                self, "color_preset_name", default_preset(self.style_profile.currentData())
+            ),
+            "layer_colors": dict(
+                getattr(
+                    self,
+                    "layer_colors",
+                    resolve_palette(self.style_profile.currentData()),
+                )
+            ),
             "flat_border_enabled": bool(
                 getattr(self, "flat_border", None)
                 and self.flat_border.isChecked()
