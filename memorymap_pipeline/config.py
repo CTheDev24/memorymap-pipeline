@@ -31,6 +31,13 @@ DEFAULT_CONFIG = {
     "terrain_grid_max_dimension": 512,
     "style_profile": "urban",
     # Landscape surfaces follow the Map2Model-style bone substrate plus skins.
+    # The denser landscape grid retains print-scale drainage and ridge detail.
+    "landscape_terrain_target_cell_size_mm": 0.4,
+    "landscape_terrain_grid_max_samples": 240_000,
+    "landscape_terrain_grid_max_dimension": 640,
+    # Rugged landscape maps still use at least this fraction of the selected
+    # maximum relief; otherwise a requested 12 mm can silently become ~9 mm.
+    "landscape_minimum_relief_ratio": 0.75,
     "surface_skin_thickness_mm": 0.4,
     "landscape_water_visible_thickness_mm": 0.4,
     "minimum_waterway_width_mm": 0.8,

@@ -357,6 +357,7 @@ def prepare_water_bodies(
     geometries: list[BaseGeometry],
     surface: TerrainSurface,
     recess_mm: float = 0.4,
+    surface_offset_mm: float = 0.0,
     minimum_height_mm: float = -0.8,
     shoreline_tolerance_mm: float = 0.1,
     margin_mm: float = 0.0,
@@ -387,7 +388,10 @@ def prepare_water_bodies(
             continue
         coordinates = np.asarray(part.exterior.coords, dtype=float)
         boundary_heights = surface.sample(coordinates[:, 0], coordinates[:, 1])
-        level = max(minimum_height_mm, float(np.min(boundary_heights)) - recess_mm)
+        level = max(
+            minimum_height_mm,
+            float(np.min(boundary_heights)) + surface_offset_mm - recess_mm,
+        )
         bodies.append(WaterBody(part, level))
     return bodies
 

@@ -131,6 +131,78 @@ def landscape_surface_region(
     return region.buffer(0)
 
 
+def recess_terrain_surface(
+    surface: TerrainSurface,
+    region: BaseGeometry,
+    depth_mm: float,
+) -> TerrainSurface:
+    """Lower terrain-grid vertices beneath a rasterized surface region.
+
+    Reusing the DEM topology keeps the resulting base watertight even where
+    thousands of narrow stream polygons meet. Every vertex touched by a
+    selected water triangle is lowered, leaving a printable support shelf for
+    the conformal water skin. Boundary vertices shared with land remain at the
+    original height so adjacent surface skins stay supported.
+    """
+    if depth_mm < 0:
+        raise ValueError("Terrain recess depth cannot be negative")
+    clipped = region.intersection(
+        box(0.0, 0.0, surface.width_mm, surface.height_mm)
+    )
+    if depth_mm == 0 or clipped.is_empty:
+        return surface
+
+    rows, columns = surface.heights_mm.shape
+    xs = np.linspace(0.0, surface.width_mm, columns)
+    ys = np.linspace(surface.height_mm, 0.0, rows)
+    grid = np.asarray([(x, y) for y in ys for x in xs], dtype=float)
+    cell_rows = np.repeat(np.arange(rows - 1, dtype=int), columns - 1)
+    cell_columns = np.tile(np.arange(columns - 1, dtype=int), rows - 1)
+    first = cell_rows * columns + cell_columns
+    second = first + 1
+    third = first + columns
+    fourth = third + 1
+    triangles = np.empty((len(first) * 2, 3), dtype=int)
+    triangles[0::2] = np.column_stack((first, third, second))
+    triangles[1::2] = np.column_stack((second, third, fourth))
+    centers = grid[triangles].mean(axis=1)
+    selected = triangles[
+        np.asarray(
+            contains_xy(
+                clipped.buffer(1e-9),
+                centers[:, 0],
+                centers[:, 1],
+            ),
+            dtype=bool,
+        )
+    ]
+    if len(selected) == 0:
+        return surface
+
+    # Keep vertices shared with land triangles at the original height. This
+    # leaves a one-triangle transition inside the channel, supports adjacent
+    # green islands, and avoids turning the material boundary into a crack.
+    all_incidence = np.bincount(
+        triangles.reshape(-1),
+        minlength=len(grid),
+    )
+    water_incidence = np.bincount(
+        selected.reshape(-1),
+        minlength=len(grid),
+    )
+    interior = (water_incidence > 0) & (water_incidence == all_incidence)
+    if not np.any(interior):
+        return surface
+    heights = surface.heights_mm.reshape(-1).copy()
+    heights[interior] -= depth_mm
+    return TerrainSurface(
+        heights.reshape(surface.heights_mm.shape),
+        surface.width_mm,
+        surface.height_mm,
+        surface.analysis,
+    )
+
+
 def _oriented_boundary_edges(triangles: np.ndarray) -> np.ndarray:
     """Return oriented edges used by exactly one triangle."""
     oriented = np.concatenate(
@@ -229,6 +301,7 @@ def build_conformal_surface_skin(
     *,
     visible_thickness_mm: float = 0.4,
     embed_depth_mm: float = 0.2,
+    surface_offset_mm: float = 0.0,
     clip_region: BaseGeometry | None = None,
     flat_margin_mm: float = 0.0,
 ) -> Trimesh | None:
@@ -308,10 +381,16 @@ def build_conformal_surface_skin(
     selected_grid = expanded_grid[used_indices]
     selected_heights = expanded_heights[used_indices]
     top = np.column_stack(
-        (selected_grid, selected_heights + visible_thickness_mm)
+        (
+            selected_grid,
+            selected_heights + visible_thickness_mm + surface_offset_mm,
+        )
     )
     bottom = np.column_stack(
-        (selected_grid, selected_heights - embed_depth_mm)
+        (
+            selected_grid,
+            selected_heights - embed_depth_mm + surface_offset_mm,
+        )
     )
     layer_size = len(selected_grid)
     bottom_faces = local_triangles[:, [0, 2, 1]] + layer_size

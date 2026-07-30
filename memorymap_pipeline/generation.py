@@ -31,6 +31,7 @@ from .surface_layers import (
     build_conformal_surface_skin,
     download_exposed_land_polygons,
     landscape_surface_region,
+    recess_terrain_surface,
 )
 from .terrain import (
     ElevationGrid,
@@ -259,6 +260,9 @@ def generate_memory_map(
     if style_profile not in {"urban", "landscape"}:
         raise ValueError(f"Unsupported style profile: {style_profile}")
     landscape_style = style_profile == "landscape"
+    surface_skin_thickness_mm = float(
+        config.get("surface_skin_thickness_mm", 0.4)
+    )
     water_mesh_thickness_mm = float(config.get("water_mesh_thickness_mm", 0.6))
     water_support_overlap_mm = float(config.get("water_support_overlap_mm", 0.4))
     if landscape_style:
@@ -296,16 +300,39 @@ def generate_memory_map(
     water_bodies = []
     water_geometries: list[Any] = []
     linear_water_geometries: list[Any] = []
+    linear_water_region = None
     if request.include_base and bool(config.get("terrain_enabled", False)):
+        terrain_target_cell_size_mm = float(
+            config.get(
+                "landscape_terrain_target_cell_size_mm"
+                if landscape_style
+                else "terrain_target_cell_size_mm",
+                0.4 if landscape_style else 0.55,
+            )
+        )
+        terrain_grid_max_samples = int(
+            config.get(
+                "landscape_terrain_grid_max_samples"
+                if landscape_style
+                else "terrain_grid_max_samples",
+                240_000 if landscape_style else 180_000,
+            )
+        )
+        terrain_grid_max_dimension = int(
+            config.get(
+                "landscape_terrain_grid_max_dimension"
+                if landscape_style
+                else "terrain_grid_max_dimension",
+                640 if landscape_style else 512,
+            )
+        )
         terrain_grid_spec = terrain_grid_for_print(
             frame.print_width_mm,
             frame.print_height_mm,
             override=config.get("terrain_grid_size"),
-            target_cell_size_mm=float(
-                config.get("terrain_target_cell_size_mm", 0.55)
-            ),
-            maximum_samples=int(config.get("terrain_grid_max_samples", 180_000)),
-            maximum_dimension=int(config.get("terrain_grid_max_dimension", 512)),
+            target_cell_size_mm=terrain_target_cell_size_mm,
+            maximum_samples=terrain_grid_max_samples,
+            maximum_dimension=terrain_grid_max_dimension,
         )
         grid_size = terrain_grid_spec.shape
         elevation_grid = request.elevation_grid
@@ -371,13 +398,21 @@ def generate_memory_map(
             frame,
             terrain_grid_spec.shape,
         )
+        maximum_relief_mm = float(config.get("terrain_max_relief_mm", 3.0))
+        minimum_relief_mm = float(config.get("terrain_min_relief_mm", 1.5))
+        if landscape_style:
+            minimum_relief_mm = max(
+                minimum_relief_mm,
+                maximum_relief_mm
+                * float(config.get("landscape_minimum_relief_ratio", 0.75)),
+            )
         terrain_surface = terrain_surface_from_grid(
             elevation_grid,
             frame.print_width_mm,
             frame.print_height_mm,
             math.hypot(frame.coverage_width_m, frame.coverage_height_m),
-            float(config.get("terrain_max_relief_mm", 3.0)),
-            float(config.get("terrain_min_relief_mm", 1.5)),
+            maximum_relief_mm,
+            minimum_relief_mm,
             float(config.get("terrain_detail_gamma", 0.75)),
         )
         if bool(config.get("water_enabled", False)):
@@ -427,6 +462,9 @@ def generate_memory_map(
                     water_polygons,
                     terrain_surface,
                     float(config.get("water_recess_mm", 0.4)),
+                    surface_offset_mm=(
+                        surface_skin_thickness_mm if landscape_style else 0.0
+                    ),
                     minimum_height_mm=-request.base_thickness_mm
                     + float(config.get("water_base_skin_mm", 0.4))
                     + water_mesh_thickness_mm,
@@ -440,14 +478,31 @@ def generate_memory_map(
                     water_mesh_thickness_mm,
                 )
             if linear_water_geometries:
-                linear_region = unary_union(linear_water_geometries).buffer(0)
+                linear_water_region = (
+                    unary_union(linear_water_geometries)
+                    .buffer(0)
+                    .intersection(printable)
+                )
+                if water_bodies:
+                    linear_water_region = linear_water_region.difference(
+                        unary_union([body.geometry for body in water_bodies])
+                    ).buffer(0)
+                linear_visible_mm = (
+                    landscape_water_visible_mm
+                    if landscape_style
+                    else surface_skin_thickness_mm
+                )
+                linear_surface_offset_mm = (
+                    surface_skin_thickness_mm
+                    - float(config.get("water_recess_mm", 0.4))
+                    - linear_visible_mm
+                )
                 linear_water_mesh = build_conformal_surface_skin(
                     terrain_surface,
-                    linear_region,
-                    visible_thickness_mm=float(
-                        config.get("surface_skin_thickness_mm", 0.4)
-                    ),
-                    embed_depth_mm=float(config.get("feature_embed_depth", 0.2)),
+                    linear_water_region,
+                    visible_thickness_mm=linear_visible_mm,
+                    embed_depth_mm=water_mesh_thickness_mm - linear_visible_mm,
+                    surface_offset_mm=linear_surface_offset_mm,
                     clip_region=printable,
                     flat_margin_mm=frame.margin_mm,
                 )
@@ -459,9 +514,25 @@ def generate_memory_map(
                     )
             if not water_geometries:
                 warnings.append("Water is enabled but no water polygons were supplied.")
+        base_terrain_surface = terrain_surface
+        if linear_water_region is not None and not linear_water_region.is_empty:
+            conformal_support_offset_mm = (
+                surface_skin_thickness_mm
+                - float(config.get("water_recess_mm", 0.4))
+                - (
+                    landscape_water_visible_mm
+                    if landscape_style
+                    else surface_skin_thickness_mm
+                )
+            )
+            base_terrain_surface = recess_terrain_surface(
+                terrain_surface,
+                linear_water_region,
+                max(0.0, -conformal_support_offset_mm),
+            )
         base_mesh = (
             build_terrain_mesh_with_water(
-                terrain_surface,
+                base_terrain_surface,
                 request.base_thickness_mm,
                 water_bodies,
                 water_mesh_thickness_mm,
@@ -470,7 +541,7 @@ def generate_memory_map(
             )
             if water_bodies
             else build_terrain_mesh(
-                terrain_surface,
+                base_terrain_surface,
                 request.base_thickness_mm,
                 flat_margin_mm=frame.margin_mm,
             )
@@ -500,9 +571,7 @@ def generate_memory_map(
             landscape_mesh = build_conformal_surface_skin(
                 terrain_surface,
                 green_region,
-                visible_thickness_mm=float(
-                    config.get("surface_skin_thickness_mm", 0.4)
-                ),
+                visible_thickness_mm=surface_skin_thickness_mm,
                 embed_depth_mm=float(config.get("feature_embed_depth", 0.2)),
                 clip_region=printable,
                 flat_margin_mm=frame.margin_mm,

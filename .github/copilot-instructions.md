@@ -33,6 +33,11 @@ This repository is a Python desktop application that converts GPX routes and Ope
   cells in finished print space rather than a fixed square raster.
 - Preserve the print aspect ratio and enforce `terrain_grid_max_samples` (180,000 by
   default) and `terrain_grid_max_dimension` (512 by default) before mesh construction.
+- Landscape mode uses a separate 0.4 mm target capped at 240,000 samples and 640 samples
+  per axis. Keep Urban defaults unchanged when refining Landscape output.
+- Rugged Landscape relief retains at least 75% of the selected maximum. The user-selected
+  value is a meaningful quality control, not a value that may fall to the global 1.5 mm
+  minimum.
 - Keep integer and `(rows, columns)` terrain grid overrides working for fixtures,
   diagnostics, and reproducible tests.
 - The structural trim is optional and defaults off in the desktop UI. When enabled,
@@ -56,6 +61,9 @@ This repository is a Python desktop application that converts GPX routes and Ope
   and mapped `river`, `stream`, `canal`, `drain`, and `ditch` lines.
 - Linear waterways are buffered to class-specific print widths and must be at least
   `minimum_waterway_width_mm` (0.8 mm by default).
+- Measure the configured recess from the finished green surface, not the bare DEM.
+  Terrain-following waterways must use raster-aligned recessed support; cutting their
+  dense vector junctions directly into the terrain shell can create non-manifold edges.
 - Current exposed-land behavior is based on OSM polygon tags. It is not a global
   vegetation/land-cover classifier.
 - DEM flow accumulation and DEM-derived drainage channels are future work. Do not

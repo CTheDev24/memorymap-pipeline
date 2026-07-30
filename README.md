@@ -149,6 +149,8 @@ print dimensions rather than using one fixed square raster. The default 240 x 19
 resolves to approximately 0.55 mm cells. The 180,000-sample and 512-cell dimension limits
 bound terrain mesh complexity. An integer still requests an explicit square grid, while a
 two-value `(rows, columns)` override is available to fixtures and programmatic clients.
+Landscape mode uses a denser 0.4 mm target capped at 240,000 samples and 640 samples per
+axis; Urban mode retains the lighter defaults.
 
 Each frame receives a flatness rating from 0 (rugged) to 5 (very flat), based on its
 robust elevation range relative to the frame diagonal. Very flat areas receive the full
@@ -158,6 +160,8 @@ their visible heights. Elevations outside the robust 5th-to-95th-percentile rang
 softly compressed into the relief tails rather than hard-clipped, preserving contours
 through unusually low and high areas without allowing one DEM outlier to dominate the
 entire print.
+Landscape mode retains at least 75% of the selected maximum relief, so a rugged coastal
+map no longer reduces a 12 mm selection to the previous roughly 9 mm result.
 USGS TIFF values outside the physically plausible -12,000 to 12,000 metre range are
 treated as undeclared no-data sentinels and locally interpolated from valid neighbours.
 This prevents isolated terrain needles from propagating into routes, water, and landscape
@@ -192,8 +196,10 @@ shell. The user-facing skin thickness defaults to 0.4 mm.
 
 Water polygons are part of the same multipart model and use the same gray material as
 buildings in Urban mode and the blue material in Landscape mode. Water starts 0.4 mm below
-the local terrain surface and embeds into supported terrain, while the structural base
-remains underneath. When Water is enabled, desktop generation downloads OSM areas tagged
+the finished green terrain surface and embeds into supported terrain, while the structural
+base remains underneath. Terrain-following waterways use a raster-aligned recessed support
+field so dense stream junctions remain watertight instead of forming vector-cut non-manifold
+edges. When Water is enabled, desktop generation downloads OSM areas tagged
 `natural=water`, marine `water=*`/`place=*` values such as `ocean` and `sea`,
 `waterway=riverbank`, or reservoir/basin land use. It also retrieves
 oriented `natural=coastline` ways in the same request and fills the ocean side within

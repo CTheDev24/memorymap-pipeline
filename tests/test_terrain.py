@@ -738,6 +738,26 @@ def test_water_is_recessed_and_exported_as_gray_assembly_part(tmp_path: Path) ->
     assert palettes[water_object.attrib["pid"]][int(water_object.attrib["pindex"])] == "#808080FF"
 
 
+def test_landscape_water_level_is_measured_from_finished_green_surface() -> None:
+    surface = terrain_surface_from_grid(
+        _grid([[20.0, 20.0], [20.0, 20.0]]),
+        width_mm=100.0,
+        height_mm=80.0,
+        horizontal_span_m=10_000.0,
+    )
+    lake = box(20.0, 20.0, 80.0, 60.0)
+    body = prepare_water_bodies(
+        [lake],
+        surface,
+        recess_mm=0.4,
+        surface_offset_mm=0.4,
+    )[0]
+
+    terrain_height = float(surface.sample(20.0, 20.0))
+    assert body.level_mm == pytest.approx(terrain_height)
+    assert terrain_height + 0.4 - body.level_mm == pytest.approx(0.4)
+
+
 def test_generation_service_drapes_route_and_exports_recessed_water(tmp_path: Path) -> None:
     route = load_route_from_gpx(Path(__file__).parent / "fixtures" / "frame_route.gpx")
     frame = MapFrame(
