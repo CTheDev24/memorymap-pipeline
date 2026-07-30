@@ -247,6 +247,10 @@ def test_min_building_height_floor():
     assert extrusions[1] == pytest.approx(max_print_mm)
 
 
+def test_default_urban_building_height_floor_is_visibly_raised():
+    assert DEFAULT_CONFIG["min_building_height_mm"] == pytest.approx(1.2)
+
+
 # ---------------------------------------------------------------------------
 # Clip / omit threshold
 # ---------------------------------------------------------------------------

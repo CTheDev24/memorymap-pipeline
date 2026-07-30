@@ -125,8 +125,8 @@ DEFAULT_CONFIG = {
     "building_vertical_exaggeration": 1.0,
     # prevent unsupported min_height volumes in support-free map prints
     "extend_elevated_building_parts_to_ground": True,
-    # minimum extrusion so 1-storey buildings remain visible
-    "min_building_height_mm": 0.4,
+    # minimum visible extrusion so dense urban footprints read as buildings
+    "min_building_height_mm": 1.2,
     # fallback real-world height when OSM height/levels tags are absent (metres, ~2 storeys)
     "building_default_height_m": 6.0,
     # metres per floor when deriving height from building:levels

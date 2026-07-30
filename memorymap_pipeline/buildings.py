@@ -631,7 +631,7 @@ def download_and_build_buildings(
     z_offset: float = 0.0,
     embed_depth_mm: float = 0.0,
     max_print_height_mm: float = 25.0,
-    min_building_height_mm: float = 0.4,
+    min_building_height_mm: float = 1.2,
     building_default_height_m: float = 6.0,
     building_levels_to_m: float = 3.0,
     building_max_real_height_m: float = 400.0,

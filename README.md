@@ -36,6 +36,7 @@ Notes:
 - Route faces are locally refined to a 2.4 mm maximum edge before terrain draping, preventing
   long triangulation diagonals from becoming thin fins near bends or converging segments.
 - Building heights follow the physical map scale by default; only unusually tall outliers are adaptively compressed to the GUI maximum (25 mm by default, 31.75 mm hard limit).
+- Buildings retain at least 1.2 mm of visible height by default, keeping dense urban footprints legible as structures instead of nearly flat surface patches.
 - Urban water solids are 0.6 mm thick: 0.4 mm is embedded into structural support and
   0.2 mm remains exclusively visible. A minimum 0.4 mm base-material bottom skin prevents
   water from appearing on the underside. Landscape surface dimensions are described below.
