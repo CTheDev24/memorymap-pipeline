@@ -27,6 +27,19 @@ def _normalize_highway_value(highway):
     return highway
 
 
+def _normalized_tag_values(value: object) -> set[str]:
+    if isinstance(value, (list, tuple, set)):
+        return {
+            str(item).strip().lower()
+            for item in value
+            if str(item).strip()
+        }
+    if value is None:
+        return set()
+    normalized = str(value).strip().lower()
+    return {normalized} if normalized else set()
+
+
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.openstreetmap.fr/api/interpreter",
@@ -156,6 +169,8 @@ def download_and_build_roads(
     radius_m: float | None = None,
     roads_file: str | None = None,
     terrain_smoothing_types: Iterable[str] = (),
+    excluded_service_types: Iterable[str] = (),
+    excluded_access: Iterable[str] = (),
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download OSM drivable roads within bbox (lat_min, lat_max, lon_min, lon_max), buffer them
     using widths from road_widths (mm). ``road_height_mm`` is the visible height above
@@ -209,6 +224,12 @@ def download_and_build_roads(
     smoothing_corridors = []
     smoothing_corridor_keys = set()
     smoothing_types = set(terrain_smoothing_types)
+    blocked_service_types = {
+        str(value).strip().lower() for value in excluded_service_types
+    }
+    blocked_access = {
+        str(value).strip().lower() for value in excluded_access
+    }
 
     # Create clipping boundary to keep roads within map bounds
     clip_box = geom.box(
@@ -221,6 +242,14 @@ def download_and_build_roads(
             continue
         hw_norm = _normalize_highway_value(hw)
         if hw_norm not in road_types:
+            continue
+        if (
+            hw_norm == "service"
+            and _normalized_tag_values(row.get("service"))
+            & blocked_service_types
+        ):
+            continue
+        if _normalized_tag_values(row.get("access")) & blocked_access:
             continue
 
         geom_obj = row.get("geometry")

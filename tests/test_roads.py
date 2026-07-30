@@ -72,6 +72,115 @@ def test_major_highways_mark_their_mesh_for_terrain_smoothing(tmp_path) -> None:
     )
 
 
+def test_parking_and_private_access_roads_are_filtered_but_public_alleys_remain(
+    tmp_path,
+) -> None:
+    roads_file = tmp_path / "urban-roads.geojson"
+    roads_file.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"highway": "residential"},
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": [
+                                [-95.371, 29.7597],
+                                [-95.369, 29.7597],
+                            ],
+                        },
+                    },
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "highway": "service",
+                            "service": "parking_aisle",
+                        },
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": [
+                                [-95.371, 29.7600],
+                                [-95.369, 29.7600],
+                            ],
+                        },
+                    },
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "highway": "residential",
+                            "access": "private",
+                        },
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": [
+                                [-95.371, 29.7603],
+                                [-95.369, 29.7603],
+                            ],
+                        },
+                    },
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "highway": "service",
+                            "service": "alley",
+                        },
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": [
+                                [-95.371, 29.7606],
+                                [-95.369, 29.7606],
+                            ],
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    frame = MapFrame(
+        center_lat=29.76015,
+        center_lon=-95.370,
+        coverage_width_m=300.0,
+        coverage_height_m=180.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+
+    roads, mesh = download_and_build_roads(
+        bbox=None,
+        center_lat=frame.center_lat,
+        center_lon=frame.center_lon,
+        transform={"map_frame": frame},
+        road_types=["residential", "service"],
+        road_widths={"residential": 1.1, "service": 0.8},
+        road_height_mm=0.8,
+        map_width_mm=frame.print_width_mm,
+        map_height_mm=frame.print_height_mm,
+        margin_mm=frame.margin_mm,
+        roads_file=str(roads_file),
+        excluded_service_types=["parking_aisle", "driveway"],
+        excluded_access=["private", "no"],
+    )
+
+    assert roads is not None
+    assert mesh is not None
+
+    def mapped_point(latitude: float) -> Point:
+        coordinate = frame.transform_lonlat(
+            np.asarray([latitude]),
+            np.asarray([-95.370]),
+        )[0]
+        return Point(float(coordinate[0]), float(coordinate[1]))
+
+    assert roads.covers(mapped_point(29.7597))
+    assert not roads.covers(mapped_point(29.7600))
+    assert not roads.covers(mapped_point(29.7603))
+    assert roads.covers(mapped_point(29.7606))
+
+
 def test_road_layer_keeps_valid_parts_when_one_polygon_extrusion_fails(
     tmp_path, monkeypatch
 ) -> None:

@@ -26,7 +26,7 @@ Notes:
   component parts: `Base_White` (white), `Route_Accent` (orange), `Roads_Black`
   (black), and `Buildings_Verification` (gray). Compatible slicers import the model as
   one multipart object and read the assignments from standard 3MF base materials.
-- Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`. When terrain is enabled, motorways and trunks retain one elevation across each cross-section and use classification-specific smoothing only along travel. Their undersides remain embedded in the original relief; minor streets continue following terrain directly.
+- Road widths, available highway types, and road height are configurable in `memorymap_pipeline/config.py` or via a JSON config passed with `--config`. Parking aisles, driveways, drive-throughs, emergency access, and private roads are omitted by default; pedestrian and trail classes can be restored through `road_types` when wanted. When terrain is enabled, motorways and trunks retain one elevation across each cross-section and use classification-specific smoothing only along travel. Their undersides remain embedded in the original relief; minor streets continue following terrain directly.
 - Major-road face refinement is bounded to five conforming passes so dense city networks
   remain watertight without allowing refinement complexity to abort map generation.
 - Route, road, and building heights are visible heights measured above the base plate.
@@ -336,7 +336,9 @@ All building bodies and roofs remain in the gray `Buildings_Verification` compon
 colored multipart 3MF. Bodies are anchored at the lowest sampled terrain elevation across
 their footprint instead of a single centroid. In the default support-free printability mode,
 otherwise unsupported `min_height` volumes extend to terrain; this can be disabled with
-`extend_elevated_building_parts_to_ground=false`. Roof bottoms overlap their body by the
+`extend_elevated_building_parts_to_ground=false`. Elevated parts that overlap a lower building
+mass retain their mapped `min_height`, preserving supported open crowns and rooftop canopies
+instead of filling their open sides down to the terrain. Roof bottoms overlap their body by the
 configured embed depth, without lowering the visible eave or peak. `roof:orientation=along|across`
 is honored for supported roof shapes. `roof:direction` and more specialized roof shapes are not
 yet modeled; supported roofs otherwise align to the footprint's minimum rotated rectangle.

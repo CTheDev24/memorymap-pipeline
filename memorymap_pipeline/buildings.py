@@ -8,6 +8,7 @@ import numpy as np
 import shapely.geometry as geom
 import shapely.ops as ops
 from shapely.ops import triangulate
+from shapely.strtree import STRtree
 from trimesh import Trimesh
 
 from .building_classification import BuildingClass, classify_building, preset_for
@@ -567,6 +568,57 @@ def _stadium_recipe_for_landmark(
         ),
     )
 
+
+def _supported_elevated_elements(
+    elements: list[
+        tuple[
+            geom.base.BaseGeometry,
+            BuildingDimensions,
+            bool,
+            LandmarkDefinition | None,
+        ]
+    ],
+) -> set[int]:
+    """Find elevated parts with a footprint and height support path to ground."""
+    footprints = [element[0] for element in elements]
+    tree = STRtree(footprints)
+    supported = {
+        index
+        for index, (_poly, dimensions, _is_part, _landmark) in enumerate(elements)
+        if dimensions.min_height_m <= 1e-9
+    }
+    pending = {
+        index
+        for index, (_poly, dimensions, _is_part, _landmark) in enumerate(elements)
+        if dimensions.min_height_m > 1e-9
+    }
+    while pending:
+        newly_supported: set[int] = set()
+        for index in pending:
+            footprint, dimensions, _is_part, _landmark = elements[index]
+            for candidate in tree.query(footprint, predicate="intersects"):
+                support_index = int(candidate)
+                if support_index == index or support_index not in supported:
+                    continue
+                support_footprint, support_dimensions, _part, _landmark = elements[
+                    support_index
+                ]
+                if (
+                    support_dimensions.total_height_m
+                    < dimensions.min_height_m - 0.5
+                ):
+                    continue
+                if footprint.intersection(support_footprint).area <= 1e-8:
+                    continue
+                newly_supported.add(index)
+                break
+        if not newly_supported:
+            break
+        supported.update(newly_supported)
+        pending.difference_update(newly_supported)
+    return supported
+
+
 def download_and_build_buildings(
     bbox: tuple[float, float, float, float] | None,
     center_lat: float,
@@ -846,6 +898,8 @@ def download_and_build_buildings(
                 resolved.append((remainder, dims, is_part, landmark))
         elements = resolved
 
+    supported_elevated = _supported_elevated_elements(elements)
+
     # Preserve geographic scale for ordinary buildings and compress only tall outliers.
     all_real_heights = [dims.total_height_m for _, dims, _, _ in elements]
     if building_scale_mm_per_m is None:
@@ -896,7 +950,7 @@ def download_and_build_buildings(
     # Extrude each building individually then concatenate into one mesh
     meshes = []
     surface_z = z_offset + embed_depth_mm
-    for poly, dimensions, _is_part, landmark in elements:
+    for element_index, (poly, dimensions, _is_part, landmark) in enumerate(elements):
         parts: list[geom.Polygon] = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
         parts.sort(key=lambda candidate: candidate.area, reverse=True)
         for part_index, part in enumerate(parts):
@@ -947,7 +1001,10 @@ def download_and_build_buildings(
                         preset_for(dimensions.building_class).max_visual_height_mm,
                     )
                     if dimensions.min_height_m > 0.0
-                    and not extend_elevated_parts_to_ground
+                    and (
+                        not extend_elevated_parts_to_ground
+                        or element_index in supported_elevated
+                    )
                     else 0.0
                 )
                 eave_mm = max(

@@ -642,6 +642,10 @@ def generate_memory_map(
             radius_m=radius,
             roads_file=str(request.roads_file) if request.roads_file else None,
             terrain_smoothing_types=config.get("road_terrain_smoothing_types", ()),
+            excluded_service_types=config.get(
+                "excluded_road_service_types", ()
+            ),
+            excluded_access=config.get("excluded_road_access", ()),
             )
         finally:
             logging.getLogger().removeHandler(collector)
