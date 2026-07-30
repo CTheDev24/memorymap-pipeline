@@ -15,6 +15,7 @@ from pathlib import Path
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
 from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN
+from .viewer_support import placeholder_html, viewer_url
 from .worker import GenerationWorker
 
 
@@ -39,11 +40,13 @@ try:
         QPushButton,
         QRadioButton,
         QSplitter,
+        QTabWidget,
         QTextEdit,
         QVBoxLayout,
         QWidget,
     )
     from PySide6.QtWebChannel import QWebChannel
+    from PySide6.QtWebEngineCore import QWebEngineSettings
     from PySide6.QtWebEngineWidgets import QWebEngineView
 except ImportError as exc:  # pragma: no cover - depends on optional desktop extras
     if exc.name and exc.name.startswith("PySide6"):
@@ -84,6 +87,7 @@ class MemoryMapWindow(QMainWindow):
         self.gpx_path: Path | None = None
         self.route: Route | None = None
         self.result_path: Path | None = None
+        self.preview_path: Path | None = None
         self.default_frame: dict | None = None
         self.current_frame: dict | None = None
         self.generation_thread: QThread | None = None
@@ -104,12 +108,21 @@ class MemoryMapWindow(QMainWindow):
         layout.addLayout(toolbar)
 
         split = QSplitter()
+        self.view_tabs = QTabWidget()
         self.map_view = QWebEngineView()
         self.channel = QWebChannel(self.map_view.page())
         self.channel.registerObject("memoryMap", self.bridge)
         self.map_view.page().setWebChannel(self.channel)
         self.map_view.setHtml(self._map_html(), QUrl("https://localhost/"))
-        split.addWidget(self.map_view)
+        self.preview_view = QWebEngineView()
+        self.preview_view.settings().setAttribute(
+            QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls,
+            True,
+        )
+        self.preview_view.setHtml(placeholder_html())
+        self.view_tabs.addTab(self.map_view, "Map")
+        self.preview_tab_index = self.view_tabs.addTab(self.preview_view, "3D Preview")
+        split.addWidget(self.view_tabs)
         split.addWidget(self._controls())
         split.setSizes([880, 340])
         layout.addWidget(split, 1)
@@ -479,10 +492,30 @@ class MemoryMapWindow(QMainWindow):
         self.progress.setValue(max(0, min(100, value)))
         if message: self.warnings.append(message)
 
-    @Slot(str)
-    def set_result(self, path: str) -> None:
-        self.result_path = Path(path); self.save.setEnabled(self.result_path.is_file())
+    @Slot(str, str)
+    def set_result(self, path: str, preview_path: str = "") -> None:
+        self.result_path = Path(path)
+        self.save.setEnabled(self.result_path.is_file())
         self.progress.setValue(100)
+        self.preview_path = Path(preview_path) if preview_path else None
+        if self.preview_path is None:
+            self.preview_view.setHtml(
+                placeholder_html(
+                    "3D preview was unavailable, but the generated 3MF can still be saved."
+                )
+            )
+            return
+        try:
+            self.preview_view.load(QUrl(viewer_url(self.preview_path)))
+            self.view_tabs.setCurrentIndex(self.preview_tab_index)
+        except (OSError, ValueError) as exc:
+            self.preview_path = None
+            self.preview_view.setHtml(
+                placeholder_html(
+                    "3D preview could not be opened. The generated 3MF is still available."
+                )
+            )
+            self.add_warning(f"3D preview could not be opened: {exc}")
 
     @Slot(str)
     def add_warning(self, message: str) -> None:

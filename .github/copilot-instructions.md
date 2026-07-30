@@ -5,6 +5,17 @@ Apply these instructions to the Memory Map Engine repository.
 ## Project Scope
 This repository is a Python desktop application that converts GPX routes and OpenStreetMap data into Bambu Lab-ready 3MF files. It includes route generation, roads, buildings, a desktop GUI, an API, and automated tests.
 
+## Desktop 3D Preview
+- The desktop application includes an embedded, locally bundled 3D geometry preview for
+  generated component meshes. It must work without a localhost server or CDN.
+- The preview reflects the generated geometry, layer separation, and assigned colors, but
+  it is not a slicer and must not be described as a layer, toolpath, support, purge, or
+  print-time preview.
+- Preview-only simplification may improve interactivity, but must never modify the meshes
+  passed to 3MF export.
+- Keep viewer assets under the Python package and preserve their setuptools package-data
+  and PyInstaller collection whenever asset files are added, moved, or renamed.
+
 ## Current Map Styles
 - `urban` is the established production profile. It retains a white base, gray
   buildings/water, black roads, and an orange route.
