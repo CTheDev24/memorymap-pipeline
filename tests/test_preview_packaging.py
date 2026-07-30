@@ -50,3 +50,14 @@ def test_pyinstaller_collects_package_data_and_qt_webengine() -> None:
     assert 'collect_data_files("memorymap_pipeline")' in spec
     assert '"PySide6.QtWebEngineCore"' in spec
     assert '"PySide6.QtWebEngineWidgets"' in spec
+
+
+def test_desktop_workflow_labels_and_checks_preview_artifact() -> None:
+    workflow = (
+        PROJECT_ROOT / ".github" / "workflows" / "build-desktop.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "MemoryMap-Windows-Preview-${{ github.sha }}" in workflow
+    assert r"memorymap_pipeline\.desktop\.preview" in workflow
+    assert r"memorymap_pipeline[\\/]desktop[\\/]viewer[\\/]index\.html" in workflow
+    assert r"PySide6[\\/]QtWebEngineWidgets\.(pyd|dll)" in workflow

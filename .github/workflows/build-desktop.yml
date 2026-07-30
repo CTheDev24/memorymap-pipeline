@@ -63,6 +63,17 @@ jobs:
           if ($archive -notmatch "osmnx-[^\\/]+\.dist-info[\\/]METADATA") {
             throw "The executable is missing OSMnx package metadata."
           }
+          $previewEntries = @(
+            "memorymap_pipeline\.desktop\.preview",
+            "memorymap_pipeline\.desktop\.viewer_support",
+            "memorymap_pipeline[\\/]desktop[\\/]viewer[\\/]index\.html",
+            "PySide6[\\/]QtWebEngineWidgets\.(pyd|dll)"
+          )
+          foreach ($entry in $previewEntries) {
+            if ($archive -notmatch $entry) {
+              throw "The executable is missing a required 3D preview component: $entry"
+            }
+          }
 
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash *MemoryMap.exe" | Set-Content -Encoding ascii "dist/MemoryMap.exe.sha256"
@@ -71,7 +82,7 @@ jobs:
       - name: Upload Windows executable
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: MemoryMap-Windows-${{ github.sha }}
+          name: MemoryMap-Windows-Preview-${{ github.sha }}
           path: |
             dist/MemoryMap.exe
             dist/MemoryMap.exe.sha256
