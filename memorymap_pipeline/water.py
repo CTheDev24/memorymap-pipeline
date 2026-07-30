@@ -15,7 +15,7 @@ from trimesh.creation import triangulate_polygon
 from trimesh.util import concatenate
 
 from .buildings import _transform_shapely_polygon
-from .mesh import route_mesh_from_polygon
+from .mesh import route_mesh_from_polygon, split_overconnected_vertex_fans
 from .projection import apply_transform, project_lonlat_array
 from .terrain import TerrainSurface, terrain_mesh_axes, terrain_mesh_heights
 
@@ -599,6 +599,7 @@ def build_terrain_mesh_with_water(
                 )
     mesh = Trimesh(np.asarray(vertices), np.asarray(faces), process=True)
     mesh.remove_unreferenced_vertices()
+    mesh = split_overconnected_vertex_fans(mesh)
     # The terrain partition is assembled from independently triangulated land,
     # water-support, bottom, and wall regions. Their local winding can disagree
     # even when every edge is closed, which slicers interpret as internal voids

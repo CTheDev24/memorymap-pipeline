@@ -2,7 +2,7 @@ import numpy as np
 from trimesh.creation import box
 from trimesh.util import concatenate
 
-from memorymap_pipeline.mesh import build_base_plate
+from memorymap_pipeline.mesh import build_base_plate, split_overconnected_vertex_fans
 from memorymap_pipeline.printability import audit_printability
 
 
@@ -61,6 +61,23 @@ def test_over_connected_edges_are_rejected() -> None:
     assert not report.printable
     assert any(issue.code == "non_manifold" for issue in report.issues)
     assert np.count_nonzero(np.bincount(combined.edges_unique_inverse) > 2) > 0
+
+
+def test_coincident_closed_shell_edges_are_split_into_manifold_fans() -> None:
+    first = _solid((10.0, 10.0, 2.0), (0.0, 0.0, 0.0))
+    second = _solid((10.0, 10.0, 2.0), (10.0, 10.0, 0.0))
+    combined = concatenate((first, second))
+    combined.merge_vertices()
+
+    before = np.bincount(combined.edges_unique_inverse)
+    repaired = split_overconnected_vertex_fans(combined)
+    after = np.bincount(repaired.edges_unique_inverse)
+
+    assert np.count_nonzero(before > 2) == 1
+    assert np.count_nonzero(after == 1) == 0
+    assert np.count_nonzero(after > 2) == 0
+    assert repaired.is_watertight
+    assert repaired.is_winding_consistent
 
 
 def test_inconsistent_face_winding_is_rejected() -> None:

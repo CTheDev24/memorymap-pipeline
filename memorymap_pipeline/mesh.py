@@ -53,6 +53,82 @@ def embedded_feature_dimensions(
     return visible_height_mm + effective_embed, -effective_embed, effective_embed
 
 
+def split_overconnected_vertex_fans(mesh: Trimesh) -> Trimesh:
+    """Separate coincident triangle fans around over-connected edges.
+
+    Independently triangulated terrain partitions can meet exactly along a
+    coastline edge after welding. The surface is closed, but sharing vertex
+    indices makes that contact non-manifold. Duplicate only affected vertices
+    for each locally disconnected fan, preserving every coordinate.
+    """
+    edge_counts = np.bincount(mesh.edges_unique_inverse)
+    overconnected = np.flatnonzero(edge_counts > 2)
+    if len(overconnected) == 0:
+        return mesh
+
+    original_faces = np.asarray(mesh.faces, dtype=int)
+    faces = original_faces.copy()
+    vertices = np.asarray(mesh.vertices, dtype=float).tolist()
+    affected_vertices = np.unique(mesh.edges_unique[overconnected])
+
+    edge_faces: dict[int, list[int]] = {}
+    for occurrence, edge_id in enumerate(mesh.edges_unique_inverse):
+        edge_faces.setdefault(int(edge_id), []).append(
+            int(mesh.edges_face[occurrence])
+        )
+
+    vertex_edges: dict[int, list[int]] = {
+        int(vertex): [] for vertex in affected_vertices
+    }
+    for edge_id, edge in enumerate(mesh.edges_unique):
+        for vertex in edge:
+            vertex_id = int(vertex)
+            if vertex_id in vertex_edges:
+                vertex_edges[vertex_id].append(edge_id)
+
+    for vertex in affected_vertices:
+        vertex_id = int(vertex)
+        incident = np.flatnonzero(np.any(original_faces == vertex_id, axis=1))
+        parent = {int(face): int(face) for face in incident}
+
+        def find(face: int) -> int:
+            while parent[face] != face:
+                parent[face] = parent[parent[face]]
+                face = parent[face]
+            return face
+
+        def union(first: int, second: int) -> None:
+            first_root = find(first)
+            second_root = find(second)
+            if first_root != second_root:
+                parent[second_root] = first_root
+
+        for edge_id in vertex_edges[vertex_id]:
+            adjacent = edge_faces[edge_id]
+            if len(adjacent) == 2:
+                union(adjacent[0], adjacent[1])
+
+        fans: dict[int, list[int]] = {}
+        for face in incident:
+            face_id = int(face)
+            fans.setdefault(find(face_id), []).append(face_id)
+        ordered_fans = sorted(fans.values(), key=lambda fan: min(fan))
+        for fan in ordered_fans[1:]:
+            replacement = len(vertices)
+            vertices.append(np.asarray(mesh.vertices[vertex_id], dtype=float).tolist())
+            for face_id in fan:
+                faces[face_id, faces[face_id] == vertex_id] = replacement
+
+    repaired = Trimesh(
+        vertices=np.asarray(vertices, dtype=float),
+        faces=faces,
+        process=False,
+    )
+    repaired.remove_unreferenced_vertices()
+    repaired.fix_normals(multibody=True)
+    return repaired
+
+
 def build_route_mesh(points: np.ndarray, route_width_mm: float, height_mm: float) -> Trimesh:
     if len(points) < 2:
         raise ValueError("At least two points are required to form a route")
