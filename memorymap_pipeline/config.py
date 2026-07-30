@@ -104,7 +104,7 @@ DEFAULT_CONFIG = {
         "track": 0.7,
     },
     # which highway types to keep by default
-    "road_types": ["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link", "residential", "living_street", "unclassified", "service"],
+    "road_types": ["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link", "residential", "living_street", "unclassified", "service", "cycleway"],
     # Suppress parking circulation and private access while retaining public alleys.
     "excluded_road_service_types": [
         "parking_aisle",

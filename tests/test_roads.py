@@ -6,8 +6,14 @@ import numpy as np
 from shapely.geometry import Point, box
 from trimesh import Trimesh
 
+from memorymap_pipeline.config import DEFAULT_CONFIG
 from memorymap_pipeline.map_frame import MapFrame
 from memorymap_pipeline.roads import _extrude_road_polygon, download_and_build_roads
+
+
+def test_urban_defaults_keep_cycleways_but_not_access_tracks() -> None:
+    assert "cycleway" in DEFAULT_CONFIG["road_types"]
+    assert "track" not in DEFAULT_CONFIG["road_types"]
 
 
 def test_major_highways_mark_their_mesh_for_terrain_smoothing(tmp_path) -> None:
