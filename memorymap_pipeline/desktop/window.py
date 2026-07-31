@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
-from ..palettes import LAYER_KEYS, default_preset, resolve_palette
+from ..palettes import LAYER_KEYS, PALETTE_PRESETS, default_preset, resolve_palette
 from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN
 from .viewer_support import placeholder_html, viewer_url
 from .worker import GenerationWorker
@@ -200,8 +200,21 @@ class MemoryMapWindow(QMainWindow):
         palette_box = QGroupBox("Layer colors")
         palette_form = QFormLayout(palette_box)
         self.color_preset = QComboBox()
-        self.color_preset.addItem("Urban Classic", "urban-classic")
-        self.color_preset.addItem("Landscape Classic", "landscape-classic")
+        preset_labels = {
+            "urban-classic": "Urban Classic",
+            "landscape-classic": "Landscape Classic",
+            "heritage": "Heritage",
+            "gallery-concrete": "Gallery Concrete",
+            "nocturne": "Nocturne",
+            "ridgeline-sage": "Ridgeline Sage",
+            "desert-archive": "Desert Archive",
+            "coastal-limestone": "Coastal Limestone",
+            "deco-after-dark": "Deco After Dark",
+            "meridian-atlas": "Meridian Atlas",
+            "vector-lab": "Vector Lab",
+        }
+        for preset in PALETTE_PRESETS:
+            self.color_preset.addItem(preset_labels[preset], preset)
         self.color_preset.addItem("Custom", None)
         self.color_preset.currentIndexChanged.connect(self._palette_preset_changed)
         palette_form.addRow("Collection", self.color_preset)
