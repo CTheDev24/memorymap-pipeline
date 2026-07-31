@@ -27,7 +27,6 @@ from memorymap_pipeline.terrain import (
     elevation_grid_for_frame,
     terrain_grid_for_print,
     terrain_surface_from_grid,
-    raise_route_over_roads,
 )
 from memorymap_pipeline.terrain_providers import (
     TerrariumProvider,
@@ -351,37 +350,36 @@ def test_route_top_uses_one_elevation_across_its_exact_width() -> None:
     assert len(draped.split(only_watertight=False)) == 1
 
 
-def test_route_bridges_over_crossing_road_with_limited_profile_slope() -> None:
+def test_route_raises_its_underside_when_bridging_a_short_valley() -> None:
+    class ValleySurface:
+        @staticmethod
+        def sample(x_mm, y_mm):
+            x = np.asarray(x_mm, dtype=float)
+            return np.where((x >= 45.0) & (x <= 55.0), 0.0, 2.0)
+
     centerline = LineString([(10.0, 50.0), (90.0, 50.0)])
     width = 1.2
     region = centerline.buffer(width / 2.0, cap_style=2, join_style=1)
     route = refine_mesh_edges(route_mesh_from_polygon(region, 2.0, -0.2), 1.0)
-    crossing = box(48.0, 40.0, 52.0, 60.0)
-    roads = route_mesh_from_polygon(crossing, 3.0, -0.2)
-
-    raised = raise_route_over_roads(
+    draped = drape_route_mesh(
         route,
-        roads,
         centerline,
-        region,
-        clearance_mm=0.35,
-        maximum_profile_slope=0.3,
-        transition_distance_mm=1.5,
+        ValleySurface(),
+        route_width_mm=width,
+        visible_height_mm=2.0,
+        smoothing_distance_mm=0.0,
+        maximum_profile_slope=0.1,
     )
 
-    upward = raised.faces[raised.face_normals[:, 2] > 0.5]
-    top_indices = np.unique(upward.ravel())
-    stations = np.array(
-        [centerline.project(Point(*raised.vertices[i, :2])) for i in top_indices]
-    )
-    heights = raised.vertices[top_indices, 2]
-    at_crossing = np.abs(stations - 40.0) <= 1.5
-    assert np.max(heights[at_crossing]) >= 3.15 - 1e-6
-    order = np.argsort(stations)
-    station_steps = np.diff(stations[order])
-    height_steps = np.abs(np.diff(heights[order]))
-    assert np.all(height_steps <= 0.3 * station_steps + 1e-7)
-    assert raised.is_watertight
+    valley = np.isclose(route.vertices[:, 0], 50.0, atol=0.51)
+    bottom = valley & np.isclose(route.vertices[:, 2], -0.2)
+    top = valley & np.isclose(route.vertices[:, 2], 1.8)
+    assert np.min(draped.vertices[bottom, 2]) > 1.0
+    assert np.min(draped.vertices[top, 2]) > 3.0
+    assert np.mean(draped.vertices[top, 2]) - np.mean(
+        draped.vertices[bottom, 2]
+    ) == pytest.approx(2.2)
+    assert draped.is_watertight
 
 
 def test_major_road_has_flat_cross_sections_and_directional_smoothing() -> None:
