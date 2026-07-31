@@ -105,14 +105,10 @@ DEFAULT_CONFIG = {
     },
     # which highway types to keep by default
     "road_types": ["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link", "residential", "living_street", "unclassified", "service", "cycleway"],
-    # Suppress parking circulation and private access while retaining public alleys.
-    "excluded_road_service_types": [
-        "parking_aisle",
-        "driveway",
-        "drive-through",
-        "emergency_access",
-    ],
-    "excluded_road_access": ["private", "no"],
+    # Suppress only parking-lot circulation. Driveways, restricted access,
+    # and other service links can be structurally important to urban road meshes.
+    "excluded_road_service_types": ["parking_aisle"],
+    "excluded_road_access": [],
     # "all" keeps complete OSM tags available; road_types controls output.
     "road_network_type": "all",
     # debug plotting for roads

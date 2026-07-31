@@ -51,6 +51,7 @@ OVERPASS_TIMEOUT = 60
 
 _ROAD_EXTRUSION_MAX_SPLIT_DEPTH = 8
 _ROAD_EXTRUSION_MIN_AREA_MM2 = 0.01
+_ROAD_EXTRUSION_SIMPLIFY_MM = 0.002
 
 
 def _polygon_parts(shape) -> list[geom.Polygon]:
@@ -119,6 +120,25 @@ def _extrude_road_polygon(
             )
         ]
     except Exception as exc:
+        simplified = polygon.simplify(
+            _ROAD_EXTRUSION_SIMPLIFY_MM,
+            preserve_topology=True,
+        )
+        if (
+            not simplified.is_empty
+            and isinstance(simplified, geom.Polygon)
+            and len(simplified.exterior.coords) < len(polygon.exterior.coords)
+        ):
+            try:
+                return [
+                    route_mesh_from_polygon(
+                        simplified,
+                        height_mm=height_mm,
+                        z_offset=z_offset,
+                    )
+                ]
+            except Exception:
+                pass
         if (
             split_depth >= _ROAD_EXTRUSION_MAX_SPLIT_DEPTH
             or polygon.area < 2.0 * _ROAD_EXTRUSION_MIN_AREA_MM2

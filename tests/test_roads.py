@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 import numpy as np
-from shapely.geometry import Point, box
+from shapely.geometry import LineString, Point, box
 from trimesh import Trimesh
 
 from memorymap_pipeline.config import DEFAULT_CONFIG
@@ -14,6 +14,8 @@ from memorymap_pipeline.roads import _extrude_road_polygon, download_and_build_r
 def test_urban_defaults_keep_cycleways_but_not_access_tracks() -> None:
     assert "cycleway" in DEFAULT_CONFIG["road_types"]
     assert "track" not in DEFAULT_CONFIG["road_types"]
+    assert DEFAULT_CONFIG["excluded_road_service_types"] == ["parking_aisle"]
+    assert DEFAULT_CONFIG["excluded_road_access"] == []
 
 
 def test_major_highways_mark_their_mesh_for_terrain_smoothing(tmp_path) -> None:
@@ -78,7 +80,7 @@ def test_major_highways_mark_their_mesh_for_terrain_smoothing(tmp_path) -> None:
     )
 
 
-def test_parking_and_private_access_roads_are_filtered_but_public_alleys_remain(
+def test_only_parking_aisles_are_filtered_from_urban_service_roads(
     tmp_path,
 ) -> None:
     roads_file = tmp_path / "urban-roads.geojson"
@@ -167,8 +169,8 @@ def test_parking_and_private_access_roads_are_filtered_but_public_alleys_remain(
         map_height_mm=frame.print_height_mm,
         margin_mm=frame.margin_mm,
         roads_file=str(roads_file),
-        excluded_service_types=["parking_aisle", "driveway"],
-        excluded_access=["private", "no"],
+        excluded_service_types=DEFAULT_CONFIG["excluded_road_service_types"],
+        excluded_access=DEFAULT_CONFIG["excluded_road_access"],
     )
 
     assert roads is not None
@@ -183,7 +185,7 @@ def test_parking_and_private_access_roads_are_filtered_but_public_alleys_remain(
 
     assert roads.covers(mapped_point(29.7597))
     assert not roads.covers(mapped_point(29.7600))
-    assert not roads.covers(mapped_point(29.7603))
+    assert roads.covers(mapped_point(29.7603))
     assert roads.covers(mapped_point(29.7606))
 
 
@@ -289,7 +291,47 @@ def test_road_layer_keeps_valid_parts_when_one_polygon_extrusion_fails(
 
     assert calls["count"] >= 2
     assert mesh is not None
-    assert len(mesh.faces) > 0
+
+
+def test_dense_road_polygon_is_simplified_before_spatial_subdivision(monkeypatch):
+    x = np.linspace(0.0, 100.0, 3_000)
+    centerline = LineString(
+        np.column_stack((x, 20.0 + 4.0 * np.sin(x) + 0.001 * np.sin(x * 50.0)))
+    )
+    polygon = centerline.buffer(0.8, resolution=8)
+    original_vertices = len(polygon.exterior.coords)
+    attempted_vertices = []
+
+    def accept_only_simplified(candidate, height_mm, z_offset=0.0):
+        attempted_vertices.append(len(candidate.exterior.coords))
+        if len(candidate.exterior.coords) >= original_vertices:
+            raise ValueError("synthetic dense-boundary failure")
+        return Trimesh(
+            vertices=np.array(
+                [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                dtype=float,
+            ),
+            faces=np.array(
+                [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]],
+                dtype=int,
+            ),
+            process=True,
+        )
+
+    monkeypatch.setattr(
+        "memorymap_pipeline.roads.route_mesh_from_polygon",
+        accept_only_simplified,
+    )
+
+    meshes = _extrude_road_polygon(
+        polygon,
+        height_mm=0.8,
+        z_offset=-0.2,
+    )
+
+    assert len(meshes) == 1
+    assert attempted_vertices[0] == original_vertices
+    assert attempted_vertices[1] < original_vertices
 
 
 def test_large_connected_road_polygon_is_subdivided_after_extrusion_failure(
