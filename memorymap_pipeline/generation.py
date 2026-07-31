@@ -39,6 +39,7 @@ from .terrain import (
     drape_mesh,
     drape_road_mesh,
     drape_route_mesh,
+    raise_route_over_roads,
     elevation_grid_for_frame,
     terrain_grid_for_print,
     terrain_mesh_heights,
@@ -646,7 +647,6 @@ def generate_memory_map(
                 "excluded_road_service_types", ()
             ),
             excluded_access=config.get("excluded_road_access", ()),
-            priority_region=route_polygon if route_mesh is not None else None,
             )
         finally:
             logging.getLogger().removeHandler(collector)
@@ -695,6 +695,20 @@ def generate_memory_map(
                         config.get("road_terrain_min_visible_height_mm", 0.4)
                     ),
                 )
+        if route_mesh is not None and roads_mesh is not None:
+            route_mesh = raise_route_over_roads(
+                route_mesh,
+                roads_mesh,
+                LineString(scaled),
+                route_polygon,
+                clearance_mm=float(config.get("route_road_clearance_mm", 0.35)),
+                maximum_profile_slope=float(
+                    config.get("route_profile_max_slope", 0.3)
+                ),
+                transition_distance_mm=float(
+                    config.get("route_road_transition_distance_mm", 1.5)
+                ),
+            )
     progress(55, "Road mesh complete")
 
     unioned_buildings = None

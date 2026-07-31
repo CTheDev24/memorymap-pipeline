@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Mapping, Protocol
 
 import numpy as np
+import shapely
 from shapely import contains_xy
 from shapely.geometry import LineString, Point
 from shapely.geometry.base import BaseGeometry
@@ -626,6 +627,7 @@ def drape_route_mesh(
     route_width_mm: float,
     visible_height_mm: float,
     smoothing_distance_mm: float = 1.5,
+    maximum_profile_slope: float = 0.3,
 ) -> Trimesh:
     """Drape a constant-width route with one terrain height per cross-section.
 
@@ -640,6 +642,8 @@ def drape_route_mesh(
         raise ValueError("Route width and visible height must be positive")
     if smoothing_distance_mm < 0.0:
         raise ValueError("Route smoothing distance cannot be negative")
+    if maximum_profile_slope <= 0.0:
+        raise ValueError("Route maximum profile slope must be positive")
 
     result = mesh.copy()
     sample = getattr(surface, "sample", surface)
@@ -680,8 +684,125 @@ def drape_route_mesh(
 
     # Smoothing may raise neighboring valleys but never reduces the requested visible
     # height over the highest terrain sample in the current cross-section.
-    top_heights = np.maximum(profile_support, local_support) + visible_height_mm
+    top_heights = _slope_limited_upper_profile(
+        stations,
+        np.maximum(profile_support, local_support) + visible_height_mm,
+        maximum_profile_slope,
+    )
     result.vertices[top_indices, 2] = top_heights
+    return result
+
+
+def _slope_limited_upper_profile(
+    stations: np.ndarray,
+    required_heights: np.ndarray,
+    maximum_slope: float,
+) -> np.ndarray:
+    """Raise valleys until adjacent route samples obey a bidirectional slope limit."""
+    if len(stations) < 2:
+        return np.asarray(required_heights, dtype=float).copy()
+    order = np.argsort(stations, kind="stable")
+    sorted_stations = np.asarray(stations, dtype=float)[order]
+    profile = np.asarray(required_heights, dtype=float)[order].copy()
+    for index in range(1, len(profile)):
+        distance = sorted_stations[index] - sorted_stations[index - 1]
+        profile[index] = max(
+            profile[index], profile[index - 1] - maximum_slope * distance
+        )
+    for index in range(len(profile) - 2, -1, -1):
+        distance = sorted_stations[index + 1] - sorted_stations[index]
+        profile[index] = max(
+            profile[index], profile[index + 1] - maximum_slope * distance
+        )
+    result = np.empty_like(profile)
+    result[order] = profile
+    return result
+
+
+def raise_route_over_roads(
+    route_mesh: Trimesh,
+    roads_mesh: Trimesh,
+    centerline: LineString,
+    route_region: BaseGeometry,
+    *,
+    clearance_mm: float = 0.35,
+    maximum_profile_slope: float = 0.3,
+    transition_distance_mm: float = 1.5,
+) -> Trimesh:
+    """Keep a route visibly above crossing roads, with short printable transitions."""
+    if clearance_mm < 0.0 or maximum_profile_slope <= 0.0:
+        raise ValueError("Route clearance must be nonnegative and slope positive")
+    result = route_mesh.copy()
+    route_top = float(np.max(result.vertices[:, 2]))
+    top_indices = np.flatnonzero(np.isclose(result.vertices[:, 2], route_top, atol=1e-7))
+    # A draped route does not have one global top Z, so select its upward-facing
+    # surface vertices as well as the highest cap vertices.
+    upward_faces = result.faces[result.face_normals[:, 2] > 0.5]
+    if len(upward_faces):
+        top_indices = np.unique(upward_faces.ravel())
+    if not len(top_indices):
+        return result
+    triangles = roads_mesh.vertices[roads_mesh.faces]
+    bounds = route_region.bounds
+    candidate = (
+        (np.max(triangles[:, :, 0], axis=1) >= bounds[0])
+        & (np.min(triangles[:, :, 0], axis=1) <= bounds[2])
+        & (np.max(triangles[:, :, 1], axis=1) >= bounds[1])
+        & (np.min(triangles[:, :, 1], axis=1) <= bounds[3])
+        & (roads_mesh.face_normals[:, 2] > 0.25)
+    )
+    samples: list[tuple[float, float, float]] = []
+    candidate_indices = np.flatnonzero(candidate)
+    # Work in bounded vectorized batches. Dense urban maps can contain hundreds of
+    # thousands of road triangles, and constructing them one-by-one is prohibitively
+    # slow during the final generation pass.
+    for start in range(0, len(candidate_indices), 50_000):
+        indices = candidate_indices[start : start + 50_000]
+        footprints = shapely.polygons(triangles[indices, :, :2])
+        overlapping = shapely.intersects(footprints, route_region)
+        if not np.any(overlapping):
+            continue
+        indices = indices[overlapping]
+        overlaps = shapely.intersection(footprints[overlapping], route_region)
+        nonempty = shapely.area(overlaps) > 1e-10
+        if not np.any(nonempty):
+            continue
+        indices = indices[nonempty]
+        points = shapely.point_on_surface(overlaps[nonempty])
+        heights = np.max(triangles[indices, :, 2], axis=1)
+        samples.extend(
+            zip(
+                shapely.get_x(points),
+                shapely.get_y(points),
+                heights,
+                strict=True,
+            )
+        )
+    if not samples:
+        return result
+    road_vertices = np.asarray(samples, dtype=float)
+    road_stations = np.array(
+        [centerline.project(Point(x, y)) for x, y in road_vertices[:, :2]], dtype=float
+    )
+    order = np.argsort(road_stations)
+    road_stations = road_stations[order]
+    road_heights = road_vertices[order, 2]
+    stations = np.array(
+        [centerline.project(Point(*result.vertices[i, :2])) for i in top_indices],
+        dtype=float,
+    )
+    required = result.vertices[top_indices, 2].copy()
+    window = max(float(transition_distance_mm), 1e-6)
+    for index, station in enumerate(stations):
+        left = np.searchsorted(road_stations, station - window, side="left")
+        right = np.searchsorted(road_stations, station + window, side="right")
+        if right > left:
+            required[index] = max(
+                required[index], float(np.max(road_heights[left:right])) + clearance_mm
+            )
+    result.vertices[top_indices, 2] = _slope_limited_upper_profile(
+        stations, required, maximum_profile_slope
+    )
     return result
 
 

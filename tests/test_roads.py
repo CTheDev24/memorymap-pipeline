@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 import numpy as np
-import pytest
 from shapely.geometry import LineString, Point, box
 from trimesh import Trimesh
 
@@ -335,7 +334,7 @@ def test_dense_road_polygon_is_simplified_before_spatial_subdivision(monkeypatch
     assert attempted_vertices[1] < original_vertices
 
 
-def test_route_priority_removes_overlapping_road_material(tmp_path) -> None:
+def test_roads_remain_continuous_beneath_route_crossings(tmp_path) -> None:
     roads_file = tmp_path / "crossing-road.geojson"
     roads_file.write_text(
         json.dumps(
@@ -367,8 +366,6 @@ def test_route_priority_removes_overlapping_road_material(tmp_path) -> None:
         print_height_mm=90.0,
         margin_mm=5.0,
     )
-    route_priority = box(58.0, 5.0, 62.0, 85.0)
-
     roads, mesh = download_and_build_roads(
         bbox=None,
         center_lat=frame.center_lat,
@@ -381,11 +378,11 @@ def test_route_priority_removes_overlapping_road_material(tmp_path) -> None:
         map_height_mm=frame.print_height_mm,
         margin_mm=frame.margin_mm,
         roads_file=str(roads_file),
-        priority_region=route_priority,
     )
 
     assert roads is not None
-    assert roads.intersection(route_priority).area == pytest.approx(0.0)
+    route_crossing = box(58.0, 5.0, 62.0, 85.0)
+    assert roads.intersection(route_crossing).area > 0.0
     assert mesh is not None and mesh.is_watertight
 
 
