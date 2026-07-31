@@ -193,7 +193,7 @@ def test_offline_parts_fixture_generates_embedded_colored_layer(tmp_path: Path) 
     )
     assert result.buildings_mesh is not None
     assert result.buildings_mesh.bounds[0, 2] == pytest.approx(-0.2)
-    assert 0.0 < result.buildings_mesh.bounds[1, 2] <= 25.0
+    assert 0.0 < result.buildings_mesh.bounds[1, 2] <= 30.0
     assert result.output_path.exists()
     with zipfile.ZipFile(result.output_path) as archive:
         model_name = next(name for name in archive.namelist() if name.endswith(".model"))

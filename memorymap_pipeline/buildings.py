@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 import numpy as np
@@ -35,6 +35,10 @@ class BuildingDimensions:
     roof_shape: str
     roof_orientation: str
     building_class: BuildingClass = BuildingClass.UNKNOWN
+    height_source: str = "fallback"
+    building_type: str = "yes"
+    levels: float | None = None
+    footprint_area_m2: float = 0.0
 
     @property
     def eave_height_m(self) -> float:
@@ -67,9 +71,7 @@ def _building_dimensions(
     building_class = classify_building(tags)
     preset = preset_for(building_class)
     class_level_height_m = (
-        preset.floor_height_m
-        if building_class is not BuildingClass.UNKNOWN
-        else levels_to_m
+        preset.floor_height_m if building_class is not BuildingClass.UNKNOWN else levels_to_m
     )
     class_default_height_m = (
         preset.fallback_height_m
@@ -86,9 +88,7 @@ def _building_dimensions(
         roof_height = (roof_levels or 0.0) * class_level_height_m
     explicit_height = _number_m(tags.get("height"))
     levels = _number_m(tags.get("building:levels"))
-    levels_height = (
-        levels * class_level_height_m + roof_height if levels is not None else None
-    )
+    levels_height = levels * class_level_height_m + roof_height if levels is not None else None
     is_building_part = "building:part" in tags
     explicit_height_is_plausible = (
         explicit_height is not None
@@ -99,16 +99,18 @@ def _building_dimensions(
             or explicit_height >= levels * MIN_PLAUSIBLE_LEVEL_HEIGHT_M
         )
     )
+    height_source = "fallback"
     if explicit_height_is_plausible:
         total_height = explicit_height
+        height_source = "height"
     elif levels_height is not None and levels_height <= max_height_m:
         total_height = levels_height
+        height_source = "levels"
     elif building_class is not BuildingClass.UNKNOWN:
         total_height = min(class_default_height_m + roof_height, max_height_m)
+        height_source = "class"
     else:
-        total_height = _extract_real_height_m(
-            tags, default_height_m, levels_to_m, max_height_m
-        )
+        total_height = _extract_real_height_m(tags, default_height_m, levels_to_m, max_height_m)
     total_height = min(max(total_height, min_height + 0.01), max_height_m)
     roof_height = min(roof_height, total_height - min_height)
     shape = str(tags.get("roof:shape", "flat")).strip().lower()
@@ -121,6 +123,10 @@ def _building_dimensions(
     orientation = str(tags.get("roof:orientation", "along")).strip().lower()
     if orientation not in {"along", "across"}:
         orientation = "along"
+    building_type_value = tags.get("building", "yes")
+    if isinstance(building_type_value, (list, tuple)):
+        building_type_value = building_type_value[0] if building_type_value else "yes"
+    building_type = str(building_type_value).strip().lower()
     return BuildingDimensions(
         min_height,
         total_height,
@@ -128,6 +134,9 @@ def _building_dimensions(
         shape,
         orientation,
         building_class,
+        height_source,
+        building_type,
+        levels,
     )
 
 
@@ -448,6 +457,7 @@ def _configure_overpass(osmnx: object, endpoint: str) -> None:
     if hasattr(settings, "requests_timeout"):
         settings.requests_timeout = OVERPASS_TIMEOUT
 
+
 def _overpass_geometry(element: dict) -> geom.base.BaseGeometry | None:
     """Build polygon geometry from an Overpass way or multipolygon relation."""
 
@@ -500,9 +510,7 @@ def _adaptive_height_mapper(
     maximum_real = max(real_heights_m)
     maximum_raw = maximum_real * scale_mm_per_m
     if maximum_raw <= max_height_mm:
-        return lambda height_m: max(
-            min_height_mm, min(max_height_mm, height_m * scale_mm_per_m)
-        )
+        return lambda height_m: max(min_height_mm, min(max_height_mm, height_m * scale_mm_per_m))
 
     knee_real = float(np.percentile(real_heights_m, 95))
     if knee_real >= maximum_real:
@@ -521,6 +529,105 @@ def _adaptive_height_mapper(
             fraction = (height_m - knee_real) / (maximum_real - knee_real)
             visible = knee_raw + fraction * (max_height_mm - knee_raw)
         return max(min_height_mm, min(max_height_mm, visible))
+
+    return mapped
+
+
+_ACCESSORY_BUILDING_TYPES = frozenset({"carport", "garage", "garages", "kiosk", "shed"})
+_SMALL_RESIDENTIAL_TYPES = frozenset(
+    {"bungalow", "cabin", "detached", "house", "semidetached_house"}
+)
+
+
+def _tiered_building_height_mapper(
+    dimensions: list[BuildingDimensions],
+    max_height_mm: float,
+) -> Callable[[BuildingDimensions, float, float], float]:
+    """Create architectural-relief heights with readable low-rise massing.
+
+    The lowest level uses 1.2/1.6/2.0 mm subtiers. Mid-rise buildings map
+    continuously from 3–9 mm and high-rises from 9 mm to the configured ceiling.
+    """
+    if max_height_mm <= 0.0:
+        raise ValueError("Maximum building height must be positive")
+
+    def storey_signal(item: BuildingDimensions, real_height_m: float) -> float:
+        if item.height_source == "levels" and item.levels is not None:
+            return item.levels
+        if item.height_source == "height":
+            return real_height_m / 3.0
+        if item.height_source == "class":
+            return preset_for(item.building_class).fallback_levels
+        return real_height_m / 3.0
+
+    high_rises = sorted(
+        storey_signal(item, item.total_height_m)
+        for item in dimensions
+        if item.height_source in {"height", "levels"}
+        and storey_signal(item, item.total_height_m) >= 9.0
+    )
+    high_reference = float(np.percentile(high_rises, 99)) if high_rises else 9.0
+    high_reference = max(high_reference, 9.01)
+
+    def low_rise(item: BuildingDimensions, footprint_area_m2: float) -> float:
+        if item.building_type in _ACCESSORY_BUILDING_TYPES:
+            return 1.2
+        if (
+            item.building_class is BuildingClass.RESIDENTIAL
+            and item.building_type in _SMALL_RESIDENTIAL_TYPES
+            and footprint_area_m2 <= 180.0
+        ):
+            return 1.6
+        if item.building_class is BuildingClass.UNKNOWN:
+            if footprint_area_m2 <= 40.0:
+                return 1.2
+            if footprint_area_m2 <= 120.0:
+                return 1.6
+        return 2.0
+
+    def mapped(
+        item: BuildingDimensions,
+        real_height_m: float,
+        footprint_area_m2: float,
+    ) -> float:
+        low = low_rise(item, footprint_area_m2)
+        if item.building_type in _ACCESSORY_BUILDING_TYPES:
+            return min(low, max_height_mm)
+        storeys = storey_signal(item, real_height_m)
+        if item.height_source == "levels" and item.levels is not None:
+            if item.levels <= 1.0:
+                return min(low, max_height_mm)
+            if item.levels <= 2.0:
+                return min(2.8, max_height_mm)
+            if item.levels <= 8.0:
+                fraction = (item.levels - 3.0) / 5.0
+                return min(3.0 + fraction * 6.0, max_height_mm)
+        confident_height = item.height_source in {"height", "levels"}
+        inferred_tall_class = item.building_class in {
+            BuildingClass.COMMERCIAL_OFFICE,
+            BuildingClass.CIVIC_INSTITUTIONAL,
+            BuildingClass.LANDMARK,
+            BuildingClass.PARKING,
+            BuildingClass.RELIGIOUS,
+            BuildingClass.STADIUM_ARENA,
+        }
+        if storeys <= 2.0 or not (confident_height or inferred_tall_class):
+            if confident_height and storeys > 1.0:
+                fraction = min(1.0, storeys - 1.0)
+                return min(low + fraction * (2.8 - low), max_height_mm)
+            return min(low, max_height_mm)
+        if storeys < 3.0:
+            return min(2.8 + (storeys - 2.0) * 0.2, max_height_mm)
+        if storeys <= 8.0:
+            fraction = (storeys - 3.0) / 5.0
+            return min(3.0 + fraction * 6.0, max_height_mm)
+        fraction = min(
+            1.0,
+            max(0.0, (storeys - 9.0) / (high_reference - 9.0)),
+        )
+        high_ceiling = max(9.0, max_height_mm)
+        visible = 9.0 + (fraction**0.72) * (high_ceiling - 9.0)
+        return min(visible, max_height_mm)
 
     return mapped
 
@@ -560,12 +667,8 @@ def _stadium_recipe_for_landmark(
         roof_support_width_mm=float(metadata.get("roof_support_width_mm", 1.2)),
         support_overlap_mm=float(metadata.get("support_overlap_mm", 0.15)),
         closed_roof_band_count=int(metadata.get("closed_roof_band_count", 3)),
-        closed_roof_band_width_mm=float(
-            metadata.get("closed_roof_band_width_mm", 1.2)
-        ),
-        closed_roof_band_height_mm=float(
-            metadata.get("closed_roof_band_height_mm", 0.48)
-        ),
+        closed_roof_band_width_mm=float(metadata.get("closed_roof_band_width_mm", 1.2)),
+        closed_roof_band_height_mm=float(metadata.get("closed_roof_band_height_mm", 0.48)),
     )
 
 
@@ -600,13 +703,8 @@ def _supported_elevated_elements(
                 support_index = int(candidate)
                 if support_index == index or support_index not in supported:
                     continue
-                support_footprint, support_dimensions, _part, _landmark = elements[
-                    support_index
-                ]
-                if (
-                    support_dimensions.total_height_m
-                    < dimensions.min_height_m - 0.5
-                ):
+                support_footprint, support_dimensions, _part, _landmark = elements[support_index]
+                if support_dimensions.total_height_m < dimensions.min_height_m - 0.5:
                     continue
                 if footprint.intersection(support_footprint).area <= 1e-8:
                     continue
@@ -630,7 +728,7 @@ def download_and_build_buildings(
     debug: bool = False,
     z_offset: float = 0.0,
     embed_depth_mm: float = 0.0,
-    max_print_height_mm: float = 25.0,
+    max_print_height_mm: float = 30.0,
     min_building_height_mm: float = 1.2,
     building_default_height_m: float = 6.0,
     building_levels_to_m: float = 3.0,
@@ -686,9 +784,9 @@ def download_and_build_buildings(
 
                 if radius_m is not None:
                     try:
-                        features_from_point = getattr(
-                            ox, "features_from_point", None
-                        ) or getattr(ox, "geometries_from_point")
+                        features_from_point = getattr(ox, "features_from_point", None) or getattr(
+                            ox, "geometries_from_point"
+                        )
                         gdf = features_from_point(
                             (center_lat, center_lon),
                             tags={"building": True, "building:part": True},
@@ -715,9 +813,9 @@ def download_and_build_buildings(
                 else:
                     lat_min, lat_max, lon_min, lon_max = bbox
                     try:
-                        features_from_bbox = getattr(
-                            ox, "features_from_bbox", None
-                        ) or getattr(ox, "geometries_from_bbox")
+                        features_from_bbox = getattr(ox, "features_from_bbox", None) or getattr(
+                            ox, "geometries_from_bbox"
+                        )
                         if hasattr(ox, "features_from_bbox"):
                             gdf = features_from_bbox(
                                 (lon_min, lat_min, lon_max, lat_max),
@@ -725,7 +823,10 @@ def download_and_build_buildings(
                             )
                         else:
                             gdf = features_from_bbox(
-                                lat_max, lat_min, lon_max, lon_min,
+                                lat_max,
+                                lat_min,
+                                lon_max,
+                                lon_min,
                                 tags={"building": True, "building:part": True},
                             )
                         cols = list(gdf.columns)
@@ -800,6 +901,15 @@ def download_and_build_buildings(
 
     # Margin-inset plate boundary used for clip/omit decisions
     plate_box = geom.box(margin_mm, margin_mm, map_width_mm - margin_mm, map_height_mm - margin_mm)
+    frame = transform.get("map_frame")
+    horizontal_scale_mm_per_m = (
+        min(
+            frame.printable_width_mm / frame.coverage_width_m,
+            frame.printable_height_mm / frame.coverage_height_m,
+        )
+        if frame is not None
+        else float(transform.get("scale", 1.0))
+    )
 
     # Transform each polygon to mm coords, extract its height, clip, and filter
     elements: list[
@@ -856,6 +966,10 @@ def download_and_build_buildings(
             original_area = tp.area
             if original_area <= 0.0:
                 continue
+            element_dimensions = replace(
+                dimensions,
+                footprint_area_m2=(original_area / max(horizontal_scale_mm_per_m**2, 1e-12)),
+            )
 
             # Clip to margin-inset plate boundary
             try:
@@ -879,15 +993,13 @@ def download_and_build_buildings(
                 continue
 
             elements.append(
-                (clipped, dimensions, "building:part" in effective_tags, landmark)
+                (clipped, element_dimensions, "building:part" in effective_tags, landmark)
             )
 
     if not elements:
         return None, None
 
-    part_union = ops.unary_union(
-        [poly for poly, _dims, is_part, _landmark in elements if is_part]
-    )
+    part_union = ops.unary_union([poly for poly, _dims, is_part, _landmark in elements if is_part])
     if not part_union.is_empty:
         resolved: list[
             tuple[geom.base.BaseGeometry, BuildingDimensions, bool, LandmarkDefinition | None]
@@ -900,7 +1012,8 @@ def download_and_build_buildings(
 
     supported_elevated = _supported_elevated_elements(elements)
 
-    # Preserve geographic scale for ordinary buildings and compress only tall outliers.
+    # Architectural relief uses explicit low/mid/high visual tiers. Horizontal map
+    # scale remains useful for recovering each footprint's real-world area.
     all_real_heights = [dims.total_height_m for _, dims, _, _ in elements]
     if building_scale_mm_per_m is None:
         frame = transform.get("map_frame")
@@ -911,24 +1024,25 @@ def download_and_build_buildings(
             )
         else:
             building_scale_mm_per_m = float(transform.get("scale", 1.0))
-    map_height = _adaptive_height_mapper(
-        all_real_heights,
-        building_scale_mm_per_m,
-        max_print_height_mm,
-        min_building_height_mm,
+    tier_height = _tiered_building_height_mapper(
+        [dims for _, dims, _, _ in elements], max_print_height_mm
     )
 
-    def classified_height(dimensions: BuildingDimensions, real_height_m: float) -> float:
-        """Apply global map scale, then the class's printable visual envelope."""
+    def real_area_m2(polygon: geom.base.BaseGeometry) -> float:
+        return polygon.area / max(horizontal_scale_mm_per_m**2, 1e-12)
+
+    def classified_height(
+        dimensions: BuildingDimensions,
+        real_height_m: float,
+        footprint_area_m2: float,
+    ) -> float:
+        """Apply tiered massing while preserving roof and elevated-part proportions."""
         preset = preset_for(dimensions.building_class)
-        visible = min(map_height(real_height_m), preset.max_visual_height_mm)
-        if real_height_m > 0.0:
-            visible = max(
-                visible,
-                min_building_height_mm,
-                preset.min_printable_height_mm,
-            )
-        return visible
+        total_visible = tier_height(dimensions, dimensions.total_height_m, footprint_area_m2)
+        if dimensions.height_source not in {"height", "levels"}:
+            total_visible = min(total_visible, preset.max_visual_height_mm)
+        fraction = np.clip(real_height_m / max(dimensions.total_height_m, 1e-9), 0.0, 1.0)
+        return float(total_visible * fraction)
 
     logging.info(
         "Buildings: %d footprints | real heights %.1f–%.1f m | "
@@ -938,12 +1052,12 @@ def download_and_build_buildings(
         max(all_real_heights),
         building_scale_mm_per_m,
         min(
-            classified_height(dims, dims.total_height_m)
-            for _, dims, _, _ in elements
+            classified_height(dims, dims.total_height_m, dims.footprint_area_m2)
+            for poly, dims, _, _ in elements
         ),
         max(
-            classified_height(dims, dims.total_height_m)
-            for _, dims, _, _ in elements
+            classified_height(dims, dims.total_height_m, dims.footprint_area_m2)
+            for poly, dims, _, _ in elements
         ),
     )
 
@@ -957,6 +1071,7 @@ def download_and_build_buildings(
             if part.is_empty:
                 continue
             try:
+                footprint_area_m2 = dimensions.footprint_area_m2 or real_area_m2(part)
                 terrain_z = 0.0
                 if terrain_height_at is not None:
                     sample_coordinates = list(part.exterior.coords)
@@ -966,15 +1081,10 @@ def download_and_build_buildings(
                         (part.centroid.coords[0], part.representative_point().coords[0])
                     )
                     samples = np.asarray(sample_coordinates, dtype=float)
-                    terrain_z = float(
-                        np.min(terrain_height_at(samples[:, 0], samples[:, 1]))
-                    )
+                    terrain_z = float(np.min(terrain_height_at(samples[:, 0], samples[:, 1])))
 
                 landmark_recipe = _stadium_recipe_for_landmark(landmark)
-                if (
-                    part_index == 0
-                    and dimensions.building_class is BuildingClass.STADIUM_ARENA
-                ):
+                if part_index == 0 and dimensions.building_class is BuildingClass.STADIUM_ARENA:
                     try:
                         stadium = build_stadium_mesh(
                             part,
@@ -996,20 +1106,28 @@ def download_and_build_buildings(
                             exc,
                         )
                 bottom_mm = (
-                    min(
-                        map_height(dimensions.min_height_m),
-                        preset_for(dimensions.building_class).max_visual_height_mm,
+                    classified_height(
+                        dimensions,
+                        dimensions.min_height_m,
+                        footprint_area_m2,
                     )
                     if dimensions.min_height_m > 0.0
-                    and (
-                        not extend_elevated_parts_to_ground
-                        or element_index in supported_elevated
-                    )
+                    and (not extend_elevated_parts_to_ground or element_index in supported_elevated)
                     else 0.0
                 )
-                eave_mm = max(
-                    bottom_mm + min_building_height_mm,
-                    classified_height(dimensions, dimensions.eave_height_m),
+                total_mm = classified_height(
+                    dimensions,
+                    dimensions.total_height_m,
+                    footprint_area_m2,
+                )
+                minimum_body_mm = min(0.6, total_mm)
+                bottom_mm = min(bottom_mm, max(0.0, total_mm - minimum_body_mm))
+                eave_mm = min(
+                    total_mm,
+                    max(
+                        bottom_mm + minimum_body_mm,
+                        classified_height(dimensions, dimensions.eave_height_m, footprint_area_m2),
+                    ),
                 )
                 effective_embed = (
                     embed_depth_mm if bottom_mm <= 1e-9 else min(embed_depth_mm, bottom_mm)
@@ -1026,7 +1144,7 @@ def download_and_build_buildings(
                     eave_z=surface_z + terrain_z + eave_mm,
                     roof_height_mm=max(
                         0.0,
-                        classified_height(dimensions, dimensions.total_height_m) - eave_mm,
+                        total_mm - eave_mm,
                     ),
                     shape=dimensions.roof_shape,
                     orientation=dimensions.roof_orientation,

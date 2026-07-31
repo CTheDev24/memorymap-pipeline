@@ -278,7 +278,7 @@ class MemoryMapWindow(QMainWindow):
         terrain_form = QFormLayout(terrain_box)
         self.terrain_relief = self._spin(3.0, 0.5, 12.0)
         self.water_recess = self._spin(0.4, 0.1, 3.0)
-        self.building_max_height = self._spin(25.0, 1.0, 31.75)
+        self.building_max_height = self._spin(30.0, 9.0, 31.75)
         self.terrain_relief.setEnabled(False)
         self.water_recess.setEnabled(False)
         terrain_form.addRow("Maximum relief", self.terrain_relief)

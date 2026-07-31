@@ -135,8 +135,8 @@ DEFAULT_CONFIG = {
     # radius (meters) to query OSM around route center when fetching roads
     "road_query_radius_m": 1000,
     # building footprint generation
-    # adaptive hard cap for visible building height (user-adjustable up to 1.25 inches)
-    "max_print_height_mm": 25.0,
+    # architectural-relief ceiling (user-adjustable up to 1.25 inches)
+    "max_print_height_mm": 30.0,
     "building_vertical_exaggeration": 1.0,
     # prevent unsupported min_height volumes in support-free map prints
     "extend_elevated_building_parts_to_ground": True,
