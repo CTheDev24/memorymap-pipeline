@@ -401,23 +401,46 @@ def build_vector_water_mesh(
     thickness_mm: float = 0.6,
 ) -> Trimesh | None:
     """Build water solids with 0.2 mm exposed above their embedded support."""
+    mesh, _printable_bodies = build_printable_vector_water_mesh(
+        water_bodies,
+        thickness_mm,
+    )
+    return mesh
+
+
+def build_printable_vector_water_mesh(
+    water_bodies: list[WaterBody],
+    thickness_mm: float = 0.6,
+) -> tuple[Trimesh | None, list[WaterBody]]:
+    """Build water solids and return only bodies safe to recess into terrain.
+
+    A malformed or sub-resolution polygon can fail extrusion even after ordinary
+    topology repair. It must not remain in the terrain partition when its matching
+    water body is omitted, because independently triangulating that invalid cavity
+    can leave open seams in the structural base.
+    """
     if thickness_mm <= 0:
         raise ValueError("Water mesh thickness must be positive")
     meshes = []
+    printable_bodies = []
     for body in water_bodies:
         try:
-            meshes.append(
-                route_mesh_from_polygon(
-                    body.geometry,
-                    height_mm=thickness_mm,
-                    z_offset=body.level_mm - thickness_mm,
-                )
+            mesh = route_mesh_from_polygon(
+                body.geometry,
+                height_mm=thickness_mm,
+                z_offset=body.level_mm - thickness_mm,
             )
         except Exception as exc:
             logging.warning("Skipping invalid water polygon during extrusion: %s", exc)
+            continue
+        meshes.append(mesh)
+        printable_bodies.append(body)
     if not meshes:
-        return None
-    return meshes[0] if len(meshes) == 1 else concatenate(meshes)
+        return None, []
+    return (
+        meshes[0] if len(meshes) == 1 else concatenate(meshes),
+        printable_bodies,
+    )
 
 
 def _polygon_parts(geometry: BaseGeometry) -> list[Polygon]:

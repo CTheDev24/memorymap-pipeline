@@ -47,8 +47,8 @@ from .terrain import (
 from .terrain_providers import TerrariumProvider, Usgs3depProvider
 from .water import (
     WaterFeature,
+    build_printable_vector_water_mesh,
     build_terrain_mesh_with_water,
-    build_vector_water_mesh,
     download_water_polygons,
     prepare_water_bodies,
 )
@@ -473,7 +473,7 @@ def generate_memory_map(
                     ),
                     margin_mm=frame.margin_mm,
                 )
-                water_mesh = build_vector_water_mesh(
+                water_mesh, water_bodies = build_printable_vector_water_mesh(
                     water_bodies,
                     water_mesh_thickness_mm,
                 )

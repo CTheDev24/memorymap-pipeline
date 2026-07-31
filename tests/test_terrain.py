@@ -12,7 +12,7 @@ from shapely.geometry import LineString, Point, box
 from shapely.ops import unary_union
 from trimesh import Trimesh
 
-from memorymap_pipeline import generation
+from memorymap_pipeline import generation, water as water_module
 from memorymap_pipeline.config import load_config
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
 from memorymap_pipeline.map_frame import MapFrame
@@ -39,6 +39,7 @@ from memorymap_pipeline.water import (
     WaterFeature,
     _infer_coastal_water_regions,
     build_terrain_mesh_with_water,
+    build_printable_vector_water_mesh,
     build_vector_water_mesh,
     download_water_polygons,
     prepare_water_bodies,
@@ -736,6 +737,36 @@ def test_water_is_recessed_and_exported_as_gray_assembly_part(tmp_path: Path) ->
     }
     water_object = by_name["Water_Gray"]
     assert palettes[water_object.attrib["pid"]][int(water_object.attrib["pindex"])] == "#808080FF"
+
+
+def test_unprintable_water_body_is_not_recessed_into_terrain(monkeypatch) -> None:
+    surface = terrain_surface_from_grid(
+        _grid([[20.0, 20.0], [20.0, 20.0]]),
+        width_mm=100.0,
+        height_mm=80.0,
+        horizontal_span_m=10_000.0,
+    )
+    bodies = prepare_water_bodies(
+        [box(10.0, 10.0, 30.0, 30.0), box(60.0, 10.0, 80.0, 30.0)],
+        surface,
+    )
+    rejected = max(bodies, key=lambda body: body.geometry.bounds[0])
+    original = water_module.route_mesh_from_polygon
+
+    def selective_extrusion(polygon, height_mm, z_offset=0.0):
+        if polygon.equals(rejected.geometry):
+            raise ValueError("synthetic non-watertight polygon")
+        return original(polygon, height_mm, z_offset)
+
+    monkeypatch.setattr(water_module, "route_mesh_from_polygon", selective_extrusion)
+
+    water_mesh, printable = build_printable_vector_water_mesh(bodies)
+    terrain = build_terrain_mesh_with_water(surface, 1.0, printable)
+
+    assert water_mesh is not None and water_mesh.is_watertight
+    assert len(printable) == 1
+    assert rejected not in printable
+    assert terrain.is_watertight
 
 
 def test_landscape_water_level_is_measured_from_finished_green_surface() -> None:
