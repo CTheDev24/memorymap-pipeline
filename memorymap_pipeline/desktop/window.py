@@ -24,7 +24,7 @@ ROUTE_FRAME_PADDING_MM = 6.0
 FRAME_ZOOM_FACTOR = 1.1
 
 try:
-    from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
+    from PySide6.QtCore import QObject, QThread, QUrl, Qt, Signal, Slot
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -41,6 +41,7 @@ try:
         QProgressBar,
         QPushButton,
         QRadioButton,
+        QScrollArea,
         QSplitter,
         QTabWidget,
         QTextEdit,
@@ -129,7 +130,14 @@ class MemoryMapWindow(QMainWindow):
         self.view_tabs.addTab(self.map_view, "Map")
         self.preview_tab_index = self.view_tabs.addTab(self.preview_view, "3D Preview")
         split.addWidget(self.view_tabs)
-        split.addWidget(self._controls())
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        controls_scroll.setMinimumWidth(320)
+        controls_scroll.setWidget(self._controls())
+        split.addWidget(controls_scroll)
         split.setSizes([880, 340])
         layout.addWidget(split, 1)
         self.setCentralWidget(root)
@@ -272,6 +280,7 @@ class MemoryMapWindow(QMainWindow):
         outer.addWidget(self.generate); outer.addWidget(self.save)
         self.progress = QProgressBar(); self.progress.setRange(0, 100)
         self.warnings = QTextEdit(); self.warnings.setReadOnly(True)
+        self.warnings.setMinimumHeight(140)
         self.warnings.setPlaceholderText("Generation warnings and status appear here.")
         outer.addWidget(self.progress); outer.addWidget(self.warnings, 1)
         self._style_changed()
