@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import numpy as np
+import pytest
 from shapely.geometry import LineString, Point, box
 from trimesh import Trimesh
 
@@ -332,6 +333,60 @@ def test_dense_road_polygon_is_simplified_before_spatial_subdivision(monkeypatch
     assert len(meshes) == 1
     assert attempted_vertices[0] == original_vertices
     assert attempted_vertices[1] < original_vertices
+
+
+def test_route_priority_removes_overlapping_road_material(tmp_path) -> None:
+    roads_file = tmp_path / "crossing-road.geojson"
+    roads_file.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"highway": "primary"},
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": [
+                                [-95.371, 29.760],
+                                [-95.369, 29.760],
+                            ],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    frame = MapFrame(
+        center_lat=29.760,
+        center_lon=-95.370,
+        coverage_width_m=300.0,
+        coverage_height_m=200.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+    route_priority = box(58.0, 5.0, 62.0, 85.0)
+
+    roads, mesh = download_and_build_roads(
+        bbox=None,
+        center_lat=frame.center_lat,
+        center_lon=frame.center_lon,
+        transform={"map_frame": frame},
+        road_types=["primary"],
+        road_widths={"primary": 2.0},
+        road_height_mm=0.8,
+        map_width_mm=frame.print_width_mm,
+        map_height_mm=frame.print_height_mm,
+        margin_mm=frame.margin_mm,
+        roads_file=str(roads_file),
+        priority_region=route_priority,
+    )
+
+    assert roads is not None
+    assert roads.intersection(route_priority).area == pytest.approx(0.0)
+    assert mesh is not None and mesh.is_watertight
 
 
 def test_large_connected_road_polygon_is_subdivided_after_extrusion_failure(

@@ -646,6 +646,7 @@ def generate_memory_map(
                 "excluded_road_service_types", ()
             ),
             excluded_access=config.get("excluded_road_access", ()),
+            priority_region=route_polygon if route_mesh is not None else None,
             )
         finally:
             logging.getLogger().removeHandler(collector)

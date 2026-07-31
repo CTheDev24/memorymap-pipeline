@@ -191,6 +191,7 @@ def download_and_build_roads(
     terrain_smoothing_types: Iterable[str] = (),
     excluded_service_types: Iterable[str] = (),
     excluded_access: Iterable[str] = (),
+    priority_region: geom.base.BaseGeometry | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download OSM drivable roads within bbox (lat_min, lat_max, lon_min, lon_max), buffer them
     using widths from road_widths (mm). ``road_height_mm`` is the visible height above
@@ -329,6 +330,11 @@ def download_and_build_roads(
     topology_weld_mm = 0.01
     unioned = unioned.buffer(topology_weld_mm).buffer(-topology_weld_mm)
     unioned = unioned.intersection(clip_box)
+    if priority_region is not None and not priority_region.is_empty:
+        # The highlighted route is the visual and material authority at crossings.
+        # Removing its footprint from the road body avoids ambiguous overlapping
+        # 3MF volumes and prevents terrain-profiled roads from covering the route.
+        unioned = unioned.difference(priority_region).buffer(0)
     if not unioned.is_valid:
         unioned, ok, explanation = repair_polygon(unioned)
 
