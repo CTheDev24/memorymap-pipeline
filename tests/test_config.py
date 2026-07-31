@@ -1,0 +1,27 @@
+import pytest
+
+from memorymap_pipeline.config import route_slope_for_layer_height
+
+
+@pytest.mark.parametrize(
+    ("layer_height", "expected_slope"),
+    [
+        (0.08, 0.16),
+        (0.12, 0.24),
+        (0.16, 0.30),
+        (0.20, 0.35),
+        (0.24, 0.40),
+        (0.28, 0.45),
+    ],
+)
+def test_route_slope_matches_layer_height(layer_height, expected_slope):
+    assert route_slope_for_layer_height(layer_height) == pytest.approx(expected_slope)
+
+
+def test_route_slope_uses_nearest_supported_layer_height():
+    assert route_slope_for_layer_height(0.17) == pytest.approx(0.30)
+
+
+def test_route_slope_rejects_nonpositive_layer_height():
+    with pytest.raises(ValueError, match="positive"):
+        route_slope_for_layer_height(0.0)

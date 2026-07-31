@@ -689,15 +689,23 @@ def drape_route_mesh(
         required_top,
         maximum_profile_slope,
     )
-    bridge_lift = np.maximum(top_heights - required_top, 0.0)
     unique_stations, inverse = np.unique(stations, return_inverse=True)
-    unique_lift = np.zeros(len(unique_stations), dtype=float)
-    np.maximum.at(unique_lift, inverse, bridge_lift)
+    unique_top = np.full(len(unique_stations), -np.inf, dtype=float)
+    np.maximum.at(unique_top, inverse, top_heights)
     all_stations = np.array(
         [centerline.project(Point(px, py)) for px, py in result.vertices[:, :2]],
         dtype=float,
     )
-    result.vertices[:, 2] += np.interp(all_stations, unique_stations, unique_lift)
+    profile_top = np.interp(all_stations, unique_stations, unique_top)
+    bottom_z = float(np.min(original_z))
+    solid_thickness = top_z - bottom_z
+    layer_fraction = np.clip((original_z - bottom_z) / solid_thickness, 0.0, 1.0)
+    # Preserve one constant printable thickness across the entire route. This anchors
+    # high terrain with the embedded underside and bridges the lower side of sharp
+    # cross-slopes instead of stretching the wall down by several millimeters.
+    result.vertices[:, 2] = profile_top - solid_thickness + (
+        layer_fraction * solid_thickness
+    )
     result.vertices[top_indices, 2] = top_heights
     return result
 

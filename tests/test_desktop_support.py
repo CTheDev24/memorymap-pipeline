@@ -20,6 +20,7 @@ def test_project_json_and_file_round_trip(tmp_path):
         gpx_path="sample.gpx",
         include_buildings=False,
         route_width_mm=1.5,
+        route_layer_height_mm=0.20,
         style_profile="landscape",
         surface_skin_thickness_mm=0.6,
         minimum_waterway_width_mm=1.0,
@@ -33,6 +34,7 @@ def test_project_json_and_file_round_trip(tmp_path):
     assert DesktopProject.load(path) == expected
     assert expected.to_dict()["flat_border_enabled"] is True
     assert expected.to_dict()["style"]["layer_colors"]["route"] == "#AA5500"
+    assert expected.to_dict()["route"]["layer_height_mm"] == pytest.approx(0.20)
 
 
 def test_project_rejects_unknown_version_and_invalid_dimensions():
@@ -56,6 +58,7 @@ def test_project_loads_legacy_version_one_without_style_settings():
     assert restored.flat_border_enabled is False
     assert restored.surface_skin_thickness_mm == pytest.approx(0.4)
     assert restored.minimum_waterway_width_mm == pytest.approx(0.8)
+    assert restored.route_layer_height_mm == pytest.approx(0.16)
 
 
 def test_project_rejects_unknown_style_profile():

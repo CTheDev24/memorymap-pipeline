@@ -343,8 +343,14 @@ def test_route_top_uses_one_elevation_across_its_exact_width() -> None:
         assert draped.vertices[endpoint_top, 2] == pytest.approx(
             expected_support + 2.0
         )
-        # The underside still follows the cross-slope and remains embedded in terrain.
-        assert np.ptp(draped.vertices[endpoint_bottom, 2]) > 0.0
+        # The solid keeps one thickness across the route instead of stretching its
+        # low side down the cross-slope into an oversized wall.
+        assert np.ptp(draped.vertices[endpoint_bottom, 2]) == pytest.approx(
+            0.0, abs=1e-7
+        )
+        assert np.mean(draped.vertices[endpoint_top, 2]) - np.mean(
+            draped.vertices[endpoint_bottom, 2]
+        ) == pytest.approx(2.2)
     assert draped.is_watertight
     assert draped.is_winding_consistent
     assert len(draped.split(only_watertight=False)) == 1
@@ -378,7 +384,7 @@ def test_route_raises_its_underside_when_bridging_a_short_valley() -> None:
     assert np.min(draped.vertices[top, 2]) > 3.0
     assert np.mean(draped.vertices[top, 2]) - np.mean(
         draped.vertices[bottom, 2]
-    ) == pytest.approx(2.2)
+    ) == pytest.approx(2.0)
     assert draped.is_watertight
 
 

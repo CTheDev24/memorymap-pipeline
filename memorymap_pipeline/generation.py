@@ -15,7 +15,7 @@ from shapely.ops import unary_union
 from trimesh.util import concatenate
 
 from .buildings import download_and_build_buildings
-from .config import DEFAULT_CONFIG
+from .config import DEFAULT_CONFIG, route_slope_for_layer_height
 from .geometry import buffered_polygon_from_points, repair_polygon
 from .gpx_loader import Route
 from .map_frame import MapFrame
@@ -614,7 +614,12 @@ def generate_memory_map(
                     config.get("route_terrain_smoothing_distance_mm", 1.5)
                 ),
                 maximum_profile_slope=float(
-                    config.get("route_profile_max_slope", 0.12)
+                    config.get(
+                        "route_profile_max_slope",
+                        route_slope_for_layer_height(
+                            float(config.get("route_layer_height_mm", 0.16))
+                        ),
+                    )
                 ),
             )
         if route_mesh is None:

@@ -12,6 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from ..config import ROUTE_LAYER_HEIGHT_SLOPES, route_slope_for_layer_height
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
 from ..palettes import LAYER_KEYS, PALETTE_PRESETS, default_preset, resolve_palette
@@ -166,11 +167,24 @@ class MemoryMapWindow(QMainWindow):
         self.flat_border.toggled.connect(self._border_toggled)
         self.margin.setEnabled(False)
         self.route_width = self._spin(1.2, .1, 20)
+        self.route_layer_height = QComboBox()
+        for layer_height, slope in ROUTE_LAYER_HEIGHT_SLOPES.items():
+            self.route_layer_height.addItem(
+                f"{layer_height:.2f} mm  ({slope:.0%} slope)", layer_height
+            )
+        self.route_layer_height.setCurrentIndex(
+            self.route_layer_height.findData(0.16)
+        )
+        self.route_layer_height.setToolTip(
+            "Select the slicer layer height used for the route. MemoryMap chooses "
+            "a matching maximum elevation slope to limit visible stair-stepping."
+        )
         form.addRow("Width (mm)", self.print_width)
         form.addRow("Height (mm)", self.print_height)
         form.addRow("Border", self.flat_border)
         form.addRow("Margin (mm)", self.margin)
         form.addRow("Route width (mm)", self.route_width)
+        form.addRow("Route layer height", self.route_layer_height)
         reset = QPushButton("Reset frame to route")
         reset.clicked.connect(self.reset_frame)
         form.addRow(reset)
@@ -524,12 +538,17 @@ class MemoryMapWindow(QMainWindow):
         self.preview_view.page().runJavaScript(script)
 
     def _generation_config_payload(self) -> dict:
+        route_layer_height = float(self.route_layer_height.currentData())
         return {
             "terrain_enabled": self.terrain_layer.isChecked(),
             "water_enabled": self.water_layer.isChecked(),
             "terrain_max_relief_mm": self.terrain_relief.value(),
             "water_recess_mm": self.water_recess.value(),
             "max_print_height_mm": self.building_max_height.value(),
+            "route_layer_height_mm": route_layer_height,
+            "route_profile_max_slope": route_slope_for_layer_height(
+                route_layer_height
+            ),
             "style_profile": self.style_profile.currentData(),
             "surface_skin_thickness_mm": self.surface_skin_thickness.value(),
             "minimum_waterway_width_mm": self.minimum_waterway_width.value(),

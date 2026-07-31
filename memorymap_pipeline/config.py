@@ -6,6 +6,24 @@ from pathlib import Path
 from typing import Any
 
 
+ROUTE_LAYER_HEIGHT_SLOPES = {
+    0.08: 0.16,
+    0.12: 0.24,
+    0.16: 0.30,
+    0.20: 0.35,
+    0.24: 0.40,
+    0.28: 0.45,
+}
+
+
+def route_slope_for_layer_height(layer_height_mm: float) -> float:
+    """Return the tested route profile slope nearest a slicer's layer height."""
+    if layer_height_mm <= 0.0:
+        raise ValueError("Layer height must be positive")
+    selected = min(ROUTE_LAYER_HEIGHT_SLOPES, key=lambda value: abs(value - layer_height_mm))
+    return ROUTE_LAYER_HEIGHT_SLOPES[selected]
+
+
 DEFAULT_CONFIG = {
     "portrait": {"map_width": 190.0, "map_height": 240.0},
     "landscape": {"map_width": 240.0, "map_height": 190.0},
@@ -13,7 +31,7 @@ DEFAULT_CONFIG = {
     "route_width": 1.2,
     # Route tops share one elevation across their width and smooth only along travel.
     "route_terrain_smoothing_distance_mm": 1.5,
-    "route_profile_max_slope": 0.12,
+    "route_layer_height_mm": 0.16,
     "route_mesh_max_edge_mm": 2.4,
     "base_thickness": 1.6,
     # overlap raised features into the base; feature heights remain visible heights

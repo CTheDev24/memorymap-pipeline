@@ -29,6 +29,7 @@ class DesktopProject:
     water_recess_mm: float = 0.4
     route_width_mm: float = 1.2
     route_height_mm: float = 2.0
+    route_layer_height_mm: float = 0.16
     style_profile: str = STYLE_PROFILE_URBAN
     surface_skin_thickness_mm: float = 0.4
     minimum_waterway_width_mm: float = 0.8
@@ -44,6 +45,7 @@ class DesktopProject:
         if min(
             self.route_width_mm,
             self.route_height_mm,
+            self.route_layer_height_mm,
             self.terrain_relief_mm,
             self.water_recess_mm,
             self.surface_skin_thickness_mm,
@@ -64,7 +66,11 @@ class DesktopProject:
                 "terrain": self.include_terrain,
                 "water": self.include_water,
             },
-            "route": {"width_mm": self.route_width_mm, "height_mm": self.route_height_mm},
+            "route": {
+                "width_mm": self.route_width_mm,
+                "height_mm": self.route_height_mm,
+                "layer_height_mm": self.route_layer_height_mm,
+            },
             "style": {
                 "profile": self.style_profile,
                 "surface_skin_thickness_mm": self.surface_skin_thickness_mm,
@@ -104,6 +110,7 @@ class DesktopProject:
                 water_recess_mm=float(terrain.get("water_recess_mm", 0.4)),
                 route_width_mm=float(route.get("width_mm", 1.2)),
                 route_height_mm=float(route.get("height_mm", 2.0)),
+                route_layer_height_mm=float(route.get("layer_height_mm", 0.16)),
                 style_profile=str(style.get("profile", STYLE_PROFILE_URBAN)),
                 surface_skin_thickness_mm=float(
                     style.get("surface_skin_thickness_mm", 0.4)
