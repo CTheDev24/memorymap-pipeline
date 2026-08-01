@@ -27,6 +27,8 @@ WATER_TAGS = {
     "place": ["sea", "ocean", "bay"],
 }
 
+COASTLINE_TAGS = {"natural": "coastline"}
+
 LINEAR_WATERWAY_WIDTHS_MM = {
     "river": 1.6,
     "canal": 1.2,
@@ -86,23 +88,39 @@ def download_water_polygons(
             fetch_bbox = getattr(ox, "features_from_bbox", None) or getattr(
                 ox, "geometries_from_bbox", None
             )
-            if radius_m is not None and fetch_point is not None:
-                data = fetch_point(
-                    (center_lat, center_lon), tags=WATER_TAGS, dist=radius_m
-                )
-            elif fetch_bbox is not None:
-                lat_min, lat_max, lon_min, lon_max = bbox
+            lat_min, lat_max, lon_min, lon_max = bbox
 
+            def query_bbox(tags):
+                if fetch_bbox is None:
+                    raise RuntimeError("Installed OSMnx does not expose a bounding-box feature query API")
                 try:
-                    data = fetch_bbox(
-                        (lon_min, lat_min, lon_max, lat_max), tags=WATER_TAGS
+                    return fetch_bbox(
+                        (lon_min, lat_min, lon_max, lat_max), tags=tags
                     )
                 except TypeError:
-                    data = fetch_bbox(
-                        lat_max, lat_min, lon_max, lon_min, tags=WATER_TAGS
+                    return fetch_bbox(
+                        lat_max, lat_min, lon_max, lon_min, tags=tags
                     )
-            else:
-                raise RuntimeError("Installed OSMnx does not expose a feature query API")
+
+            try:
+                if radius_m is not None and fetch_point is not None:
+                    data = fetch_point(
+                        (center_lat, center_lon), tags=WATER_TAGS, dist=radius_m
+                    )
+                elif fetch_bbox is not None:
+                    data = query_bbox(WATER_TAGS)
+                else:
+                    raise RuntimeError("Installed OSMnx does not expose a feature query API")
+            except Exception as exc:
+                # Large coastal frames can exceed Overpass limits when every inland
+                # water tag is requested together.  A coastline-only bbox query is
+                # dramatically smaller and is sufficient to reconstruct the ocean.
+                if fetch_bbox is None:
+                    raise
+                logging.warning(
+                    "Full water query failed; retrying coastline only: %s", exc
+                )
+                data = query_bbox(COASTLINE_TAGS)
     except Exception as exc:
         logging.warning("Failed to load water polygons and coastlines: %s", exc)
         return []
@@ -620,7 +638,11 @@ def build_terrain_mesh_with_water(
                     -base_thickness_mm,
                     reverse=True,
                 )
-    mesh = Trimesh(np.asarray(vertices), np.asarray(faces), process=True)
+    # GEOS operations performed independently for the top, bottom, cavity wall,
+    # and outer wall can differ below floating-point precision at a clipped coast.
+    # Snap at a sub-micron print-space scale so those intended shared edges weld.
+    snapped_vertices = np.round(np.asarray(vertices, dtype=float), decimals=7)
+    mesh = Trimesh(snapped_vertices, np.asarray(faces), process=True)
     mesh.remove_unreferenced_vertices()
     mesh = split_overconnected_vertex_fans(mesh)
     # The terrain partition is assembled from independently triangulated land,

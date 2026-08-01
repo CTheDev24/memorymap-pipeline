@@ -1237,6 +1237,50 @@ def test_water_loader_fills_ocean_from_oriented_osm_coastline(monkeypatch) -> No
     assert not ocean.contains(Point(80.0, 40.0))
 
 
+def test_water_loader_retries_large_failed_query_with_coastline_bbox(monkeypatch) -> None:
+    import geopandas as gpd
+    import osmnx as ox
+
+    frame = MapFrame(
+        center_lat=36.4,
+        center_lon=-121.86,
+        coverage_width_m=44_000.0,
+        coverage_height_m=35_000.0,
+        print_width_mm=240.0,
+        print_height_mm=190.0,
+        margin_mm=0.0,
+    )
+    coastline = gpd.GeoDataFrame(
+        {"natural": ["coastline"]},
+        geometry=[LineString([(-121.86, 36.2), (-121.86, 36.6)])],
+        crs="EPSG:4326",
+    )
+    bbox_calls = []
+
+    def failed_point_query(*_args, **_kwargs):
+        raise RuntimeError("synthetic Overpass timeout")
+
+    def coastline_bbox_query(*_args, **kwargs):
+        bbox_calls.append(kwargs["tags"])
+        return coastline
+
+    monkeypatch.setattr(ox, "features_from_point", failed_point_query)
+    monkeypatch.setattr(ox, "features_from_bbox", coastline_bbox_query)
+
+    polygons = download_water_polygons(
+        bbox=(36.2, 36.6, -122.1, -121.6),
+        center_lat=frame.center_lat,
+        center_lon=frame.center_lon,
+        transform={"map_frame": frame},
+        map_width_mm=frame.print_width_mm,
+        map_height_mm=frame.print_height_mm,
+        radius_m=28_000.0,
+    )
+
+    assert bbox_calls == [{"natural": "coastline"}]
+    assert polygons
+
+
 def test_water_layer_keeps_valid_parts_when_one_polygon_extrusion_fails(monkeypatch) -> None:
     bodies = [
         SimpleNamespace(geometry=box(0.0, 0.0, 10.0, 10.0), level_mm=0.0),
