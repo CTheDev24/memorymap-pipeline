@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import zipfile
 from pathlib import Path
@@ -459,7 +460,7 @@ def export_3mf(
 ) -> None:
     from trimesh.exchange.export import export_mesh
 
-    from .printability import audit_printability
+    from .printability import audit_printability, remove_small_floating_components
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -470,6 +471,25 @@ def export_3mf(
     landscape_style = style_profile == "landscape"
     colors = resolve_palette(style_profile, color_preset, layer_colors)
     materials: dict[str, tuple[str, str]] = {}
+
+    if buildings_mesh is not None and base_mesh is not None:
+        buildings_mesh, removed_shells = remove_small_floating_components(
+            {
+                "base": base_mesh,
+                "route": route_mesh,
+                "roads": roads_mesh,
+                "buildings": buildings_mesh,
+                "water": water_mesh,
+                "landscape": landscape_mesh,
+            },
+            "buildings",
+            maximum_faces=12,
+        )
+        if removed_shells:
+            logging.warning(
+                "Removed %d tiny unsupported building shell(s) before export",
+                removed_shells,
+            )
 
     def color_mesh(mesh: Trimesh, name: str, label: str, layer: str) -> None:
         try:

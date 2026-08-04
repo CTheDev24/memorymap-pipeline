@@ -3,7 +3,10 @@ from trimesh.creation import box
 from trimesh.util import concatenate
 
 from memorymap_pipeline.mesh import build_base_plate, split_overconnected_vertex_fans
-from memorymap_pipeline.printability import audit_printability
+from memorymap_pipeline.printability import (
+    audit_printability,
+    remove_small_floating_components,
+)
 
 
 def _solid(extents, translation):
@@ -48,6 +51,41 @@ def test_roof_can_reach_base_through_supported_body() -> None:
     report = audit_printability({"base": base, "buildings": buildings})
 
     assert report.printable
+
+
+def test_only_tiny_proven_floating_building_shells_are_removed() -> None:
+    base = build_base_plate(40.0, 30.0, 1.6)
+    grounded = _solid((4.0, 4.0, 2.2), (10.0, 10.0, 0.9))
+    supported_roof = _solid((4.0, 4.0, 0.4), (10.0, 10.0, 2.1))
+    tiny_floating = _solid((1.0, 1.0, 0.4), (25.0, 10.0, 3.0))
+    buildings = concatenate((grounded, supported_roof, tiny_floating))
+
+    cleaned, removed = remove_small_floating_components(
+        {"base": base, "buildings": buildings},
+        "buildings",
+        maximum_faces=12,
+    )
+
+    assert removed == 1
+    assert cleaned is not None
+    assert audit_printability({"base": base, "buildings": cleaned}).printable
+    assert cleaned.bounds[1, 0] < 25.0
+
+
+def test_large_floating_building_shell_remains_a_validation_error() -> None:
+    base = build_base_plate(40.0, 30.0, 1.6)
+    floating = _solid((4.0, 4.0, 1.0), (20.0, 15.0, 4.0))
+    floating = floating.subdivide()
+
+    cleaned, removed = remove_small_floating_components(
+        {"base": base, "buildings": floating},
+        "buildings",
+        maximum_faces=12,
+    )
+
+    assert removed == 0
+    assert cleaned is floating
+    assert not audit_printability({"base": base, "buildings": cleaned}).printable
 
 
 def test_over_connected_edges_are_rejected() -> None:
