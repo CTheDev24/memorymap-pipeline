@@ -542,14 +542,25 @@ _SMALL_RESIDENTIAL_TYPES = frozenset(
 def _tiered_building_height_mapper(
     dimensions: list[BuildingDimensions],
     max_height_mm: float,
+    map_scale_mm_per_m: float | None = None,
+    reference_scale_mm_per_m: float = 0.04,
 ) -> Callable[[BuildingDimensions, float, float], float]:
-    """Create architectural-relief heights with readable low-rise massing.
+    """Create scale-aware architectural relief with readable low-rise massing.
 
     The lowest level uses 1.2/1.6/2.0 mm subtiers. Mid-rise buildings map
     continuously from 3–9 mm and high-rises from 9 mm to the configured ceiling.
     """
     if max_height_mm <= 0.0:
         raise ValueError("Maximum building height must be positive")
+    if reference_scale_mm_per_m <= 0.0:
+        raise ValueError("Building height reference scale must be positive")
+
+    scale_factor = 1.0
+    if map_scale_mm_per_m is not None and map_scale_mm_per_m > 0.0:
+        scale_factor = float(
+            np.clip(np.sqrt(map_scale_mm_per_m / reference_scale_mm_per_m), 0.45, 1.0)
+        )
+    scaled_ceiling = max(1.2, max_height_mm * scale_factor)
 
     def storey_signal(item: BuildingDimensions, real_height_m: float) -> float:
         if item.height_source == "levels" and item.levels is not None:
@@ -590,18 +601,18 @@ def _tiered_building_height_mapper(
         real_height_m: float,
         footprint_area_m2: float,
     ) -> float:
-        low = low_rise(item, footprint_area_m2)
+        low = max(1.2, low_rise(item, footprint_area_m2) * scale_factor)
         if item.building_type in _ACCESSORY_BUILDING_TYPES:
-            return min(low, max_height_mm)
+            return min(low, scaled_ceiling)
         storeys = storey_signal(item, real_height_m)
         if item.height_source == "levels" and item.levels is not None:
             if item.levels <= 1.0:
-                return min(low, max_height_mm)
+                return min(low, scaled_ceiling)
             if item.levels <= 2.0:
-                return min(2.8, max_height_mm)
+                return min(max(1.2, 2.8 * scale_factor), scaled_ceiling)
             if item.levels <= 8.0:
                 fraction = (item.levels - 3.0) / 5.0
-                return min(3.0 + fraction * 6.0, max_height_mm)
+                return min(max(1.2, (3.0 + fraction * 6.0) * scale_factor), scaled_ceiling)
         confident_height = item.height_source in {"height", "levels"}
         inferred_tall_class = item.building_class in {
             BuildingClass.COMMERCIAL_OFFICE,
@@ -614,20 +625,22 @@ def _tiered_building_height_mapper(
         if storeys <= 2.0 or not (confident_height or inferred_tall_class):
             if confident_height and storeys > 1.0:
                 fraction = min(1.0, storeys - 1.0)
-                return min(low + fraction * (2.8 - low), max_height_mm)
-            return min(low, max_height_mm)
+                target = max(1.2, 2.8 * scale_factor)
+                return min(low + fraction * (target - low), scaled_ceiling)
+            return min(low, scaled_ceiling)
         if storeys < 3.0:
-            return min(2.8 + (storeys - 2.0) * 0.2, max_height_mm)
+            return min(max(1.2, (2.8 + (storeys - 2.0) * 0.2) * scale_factor), scaled_ceiling)
         if storeys <= 8.0:
             fraction = (storeys - 3.0) / 5.0
-            return min(3.0 + fraction * 6.0, max_height_mm)
+            return min(max(1.2, (3.0 + fraction * 6.0) * scale_factor), scaled_ceiling)
         fraction = min(
             1.0,
             max(0.0, (storeys - 9.0) / (high_reference - 9.0)),
         )
-        high_ceiling = max(9.0, max_height_mm)
-        visible = 9.0 + (fraction**0.72) * (high_ceiling - 9.0)
-        return min(visible, max_height_mm)
+        high_floor = max(1.2, 9.0 * scale_factor)
+        high_ceiling = max(high_floor, scaled_ceiling)
+        visible = high_floor + (fraction**0.72) * (high_ceiling - high_floor)
+        return min(visible, scaled_ceiling)
 
     return mapped
 
@@ -1025,7 +1038,9 @@ def download_and_build_buildings(
         else:
             building_scale_mm_per_m = float(transform.get("scale", 1.0))
     tier_height = _tiered_building_height_mapper(
-        [dims for _, dims, _, _ in elements], max_print_height_mm
+        [dims for _, dims, _, _ in elements],
+        max_print_height_mm,
+        map_scale_mm_per_m=building_scale_mm_per_m,
     )
 
     def real_area_m2(polygon: geom.base.BaseGeometry) -> float:

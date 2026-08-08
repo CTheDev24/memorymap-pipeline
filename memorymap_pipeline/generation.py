@@ -234,6 +234,101 @@ def _mesh_stats(mesh: Any | None) -> dict[str, int] | None:
     return {"vertices": int(len(mesh.vertices)), "faces": int(len(mesh.faces))}
 
 
+def _mesh_edge_defects(mesh: Any) -> tuple[int, int]:
+    """Return open and over-connected edge counts for an assembled mesh."""
+    edge_counts = np.bincount(mesh.edges_unique_inverse)
+    return (
+        int(np.count_nonzero(edge_counts == 1)),
+        int(np.count_nonzero(edge_counts > 2)),
+    )
+
+
+def _continuous_water_support_surface(
+    surface: Any,
+    water_bodies: list[Any],
+    water_mesh_thickness_mm: float,
+    support_overlap_mm: float,
+) -> Any:
+    """Flatten a continuous height field beneath vector water bodies.
+
+    This is the topology-safe fallback for a coastal partition that cannot be
+    welded manifoldly. It preserves the intended water/body overlap without
+    allowing DEM terrain (especially interpolated offshore values) to punch
+    through a flat ocean surface.
+    """
+    heights = np.asarray(surface.heights_mm, dtype=float).copy()
+    rows, columns = heights.shape
+    xs = np.linspace(0.0, surface.width_mm, columns)
+    ys = np.linspace(surface.height_mm, 0.0, rows)
+    x_grid, y_grid = np.meshgrid(xs, ys)
+    for body in water_bodies:
+        support_level = (
+            float(body.level_mm) - water_mesh_thickness_mm + support_overlap_mm
+        )
+        region = body.geometry.buffer(1e-7)
+        heights[contains_xy(region, x_grid, y_grid)] = support_level
+    return replace(surface, heights_mm=heights)
+
+
+def _restore_hydroflattened_land(
+    surface: Any,
+    water_geometries: list[Any],
+) -> tuple[Any, int]:
+    """Inpaint an exact DEM water plateau where it falls outside mapped water."""
+    valid_water = [geometry for geometry in water_geometries if not geometry.is_empty]
+    if not valid_water:
+        return surface, 0
+    water_region = unary_union(valid_water).buffer(1e-7)
+    heights = np.asarray(surface.heights_mm, dtype=float)
+    rows, columns = heights.shape
+    xs = np.linspace(0.0, surface.width_mm, columns)
+    ys = np.linspace(surface.height_mm, 0.0, rows)
+    x_grid, y_grid = np.meshgrid(xs, ys)
+    water_mask = np.asarray(contains_xy(water_region, x_grid, y_grid), dtype=bool)
+    if np.count_nonzero(water_mask) < max(16, heights.size // 200):
+        return surface, 0
+
+    rounded = np.round(heights[water_mask], decimals=9)
+    levels, counts = np.unique(rounded, return_counts=True)
+    plateau_level = float(levels[int(np.argmax(counts))])
+    if int(np.max(counts)) < max(16, len(rounded) // 20):
+        return surface, 0
+    repair = np.isclose(heights, plateau_level, atol=5e-9, rtol=0.0) & ~water_mask
+    repair_count = int(np.count_nonzero(repair))
+    if repair_count < max(16, heights.size // 2000):
+        return surface, 0
+
+    repaired = heights.copy()
+    known = ~repair & ~water_mask
+    remaining = repair.copy()
+    for _ in range(rows + columns):
+        if not np.any(remaining):
+            break
+        totals = np.zeros_like(repaired)
+        neighbour_counts = np.zeros_like(repaired, dtype=np.int16)
+        for row_offset, column_offset in ((-1, 0), (0, -1), (0, 1), (1, 0)):
+            source_rows = slice(max(0, -row_offset), rows - max(0, row_offset))
+            source_columns = slice(max(0, -column_offset), columns - max(0, column_offset))
+            target_rows = slice(max(0, row_offset), rows - max(0, -row_offset))
+            target_columns = slice(max(0, column_offset), columns - max(0, -column_offset))
+            neighbour_known = known[source_rows, source_columns]
+            totals[target_rows, target_columns] += np.where(
+                neighbour_known, repaired[source_rows, source_columns], 0.0
+            )
+            neighbour_counts[target_rows, target_columns] += neighbour_known
+        fillable = remaining & (neighbour_counts > 0)
+        if not np.any(fillable):
+            break
+        repaired[fillable] = totals[fillable] / neighbour_counts[fillable]
+        known[fillable] = True
+        remaining[fillable] = False
+
+    filled_count = repair_count - int(np.count_nonzero(remaining))
+    if filled_count == 0:
+        return surface, 0
+    return replace(surface, heights_mm=repaired), filled_count
+
+
 def generate_memory_map(
     request: GenerationRequest,
     progress_callback: ProgressCallback | None = None,
@@ -457,6 +552,15 @@ def generate_memory_map(
             else:
                 water_polygons = list(water_polygons)
                 water_geometries = list(water_polygons)
+            if landscape_style and water_geometries:
+                terrain_surface, restored_land_samples = _restore_hydroflattened_land(
+                    terrain_surface, water_geometries
+                )
+                if restored_land_samples:
+                    warnings.append(
+                        "Restored terrain relief for "
+                        f"{restored_land_samples:,} hydro-flattened coastal land samples."
+                    )
             if water_polygons:
                 water_bodies = prepare_water_bodies(
                     water_polygons,
@@ -530,8 +634,8 @@ def generate_memory_map(
                 linear_water_region,
                 max(0.0, -conformal_support_offset_mm),
             )
-        base_mesh = (
-            build_terrain_mesh_with_water(
+        if water_bodies:
+            base_mesh = build_terrain_mesh_with_water(
                 base_terrain_surface,
                 request.base_thickness_mm,
                 water_bodies,
@@ -539,13 +643,32 @@ def generate_memory_map(
                 water_support_overlap_mm,
                 flat_margin_mm=frame.margin_mm,
             )
-            if water_bodies
-            else build_terrain_mesh(
+            open_edges, overconnected_edges = _mesh_edge_defects(base_mesh)
+            if open_edges or overconnected_edges:
+                logging.info(
+                    "Detailed water recess produced a non-manifold structural base "
+                    "(%d open and %d over-connected edges); using continuous terrain "
+                    "support instead.",
+                    open_edges,
+                    overconnected_edges,
+                )
+                continuous_support_surface = _continuous_water_support_surface(
+                    base_terrain_surface,
+                    water_bodies,
+                    water_mesh_thickness_mm,
+                    water_support_overlap_mm,
+                )
+                base_mesh = build_terrain_mesh(
+                    continuous_support_surface,
+                    request.base_thickness_mm,
+                    flat_margin_mm=frame.margin_mm,
+                )
+        else:
+            base_mesh = build_terrain_mesh(
                 base_terrain_surface,
                 request.base_thickness_mm,
                 flat_margin_mm=frame.margin_mm,
             )
-        )
         if landscape_style:
             exposed_land = (
                 download_exposed_land_polygons(
@@ -561,6 +684,11 @@ def generate_memory_map(
                 if bool(config.get("exposed_land_enabled", True))
                 else []
             )
+            if bool(config.get("exposed_land_enabled", True)) and not exposed_land:
+                warnings.append(
+                    "No mapped beach, sand, rock, or other exposed-land polygons "
+                    "were returned; the landscape surface remains green in those areas."
+                )
             green_region = landscape_surface_region(
                 frame.print_width_mm,
                 frame.print_height_mm,

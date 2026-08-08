@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import requests
 from PIL import Image
-from shapely.geometry import LineString, Point, box
+from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 from trimesh import Trimesh
 
@@ -19,6 +19,7 @@ from memorymap_pipeline.map_frame import MapFrame
 from memorymap_pipeline.mesh import export_3mf, refine_mesh_edges, route_mesh_from_polygon
 from memorymap_pipeline.terrain import (
     ElevationGrid,
+    TerrainSurface,
     analyze_terrain,
     build_terrain_mesh,
     drape_mesh,
@@ -777,6 +778,37 @@ def test_water_is_recessed_and_exported_as_gray_assembly_part(tmp_path: Path) ->
     assert palettes[water_object.attrib["pid"]][int(water_object.attrib["pindex"])] == "#808080FF"
 
 
+def test_jagged_coastline_partition_keeps_structural_base_manifold() -> None:
+    surface = terrain_surface_from_grid(
+        _grid(np.arange(64, dtype=float).reshape(8, 8)),
+        width_mm=240.0,
+        height_mm=190.0,
+        horizontal_span_m=35_000.0,
+    )
+    coastline = LineString(
+        [
+            (35.0, -10.0),
+            (41.00000004, 18.0),
+            (39.99999996, 42.0),
+            (72.0, 61.00000003),
+            (70.0, 94.99999997),
+            (108.00000004, 123.0),
+            (105.99999996, 151.0),
+            (132.0, 200.0),
+        ]
+    )
+    ocean = box(-20.0, -20.0, 260.0, 210.0).difference(
+        Polygon([(x, y) for x, y in coastline.coords] + [(260.0, 210.0), (260.0, -20.0)])
+    )
+    bodies = prepare_water_bodies([ocean], surface, shoreline_tolerance_mm=0.1)
+    terrain = build_terrain_mesh_with_water(surface, 1.6, bodies)
+    edge_counts = np.bincount(terrain.edges_unique_inverse)
+
+    assert np.count_nonzero(edge_counts == 1) == 0
+    assert np.count_nonzero(edge_counts > 2) == 0
+    assert terrain.is_watertight
+
+
 def test_unprintable_water_body_is_not_recessed_into_terrain(monkeypatch) -> None:
     surface = terrain_surface_from_grid(
         _grid([[20.0, 20.0], [20.0, 20.0]]),
@@ -867,6 +899,89 @@ def test_generation_service_drapes_route_and_exports_recessed_water(tmp_path: Pa
     assert result.buildings_mesh.bounds[0, 2] > -0.2
     assert result.water_mesh.bounds[1, 2] - result.water_mesh.bounds[0, 2] == pytest.approx(0.6)
     assert result.water_mesh.bounds[0, 2] >= -0.6 - 1e-9
+
+
+def test_generation_replaces_coastal_base_with_exactly_twelve_open_edges(
+    monkeypatch, tmp_path: Path
+) -> None:
+    route = load_route_from_gpx(Path(__file__).parent / "fixtures" / "frame_route.gpx")
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+    broken_parts = []
+    for offset in (5.0, 25.0, 45.0, 65.0):
+        part = route_mesh_from_polygon(box(offset, 5.0, offset + 10.0, 15.0), 2.0)
+        part.update_faces(np.arange(len(part.faces)) != 0)
+        part.remove_unreferenced_vertices()
+        broken_parts.append(part)
+    from trimesh.util import concatenate
+
+    broken = concatenate(broken_parts)
+    edge_counts = np.bincount(broken.edges_unique_inverse)
+    assert np.count_nonzero(edge_counts == 1) == 12
+    monkeypatch.setattr(generation, "build_terrain_mesh_with_water", lambda *_a, **_k: broken)
+
+    result = generation.generate_memory_map(
+        generation.GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=tmp_path / "coastal-fallback.3mf",
+            include_route=False,
+            include_roads=False,
+            include_buildings=False,
+            config={"terrain_enabled": True, "water_enabled": True},
+            elevation_grid=_grid(
+                [[30.0, 30.3, 30.6], [29.8, 30.1, 30.4], [29.5, 29.8, 30.1]]
+            ),
+            water_polygons=[box(25.0, 20.0, 75.0, 60.0)],
+        )
+    )
+
+    repaired_counts = np.bincount(result.base_mesh.edges_unique_inverse)
+    assert np.count_nonzero(repaired_counts == 1) == 0
+    assert np.count_nonzero(repaired_counts > 2) == 0
+    assert result.base_mesh.is_watertight
+    assert result.water_mesh is not None
+    vertices = result.base_mesh.vertices
+    safely_inside_water = np.asarray(
+        [box(27.0, 22.0, 73.0, 58.0).contains(Point(x, y)) for x, y in vertices[:, :2]]
+    )
+    water_support = vertices[
+        safely_inside_water & (vertices[:, 2] > result.base_mesh.bounds[0, 2] + 1e-8),
+        2,
+    ]
+    assert len(water_support) > 0
+    assert water_support == pytest.approx(result.water_mesh.bounds[1, 2] - 0.2)
+    assert water_support.max() < result.water_mesh.bounds[1, 2]
+    assert not any("non-manifold structural base" in warning for warning in result.warnings)
+
+
+def test_hydroflattened_water_level_is_restored_only_on_mapped_land() -> None:
+    heights = np.tile(np.arange(10, dtype=float), (10, 1))
+    heights[:, :6] = 0.0
+    surface = TerrainSurface(
+        heights_mm=heights,
+        width_mm=90.0,
+        height_mm=90.0,
+        analysis=analyze_terrain(
+            np.asarray([[0.0, 10.0], [0.0, 10.0]]), 100.0
+        ),
+    )
+
+    restored, count = generation._restore_hydroflattened_land(
+        surface, [box(0.0, 0.0, 39.9, 90.0)]
+    )
+
+    assert count == 20
+    assert restored.heights_mm[:, :4] == pytest.approx(0.0)
+    assert np.all(restored.heights_mm[:, 4:6] > 0.0)
+    assert restored.heights_mm[:, 6:] == pytest.approx(surface.heights_mm[:, 6:])
 
 
 def test_landscape_generation_builds_supported_bone_green_blue_layers(

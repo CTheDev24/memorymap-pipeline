@@ -472,23 +472,38 @@ def export_3mf(
     colors = resolve_palette(style_profile, color_preset, layer_colors)
     materials: dict[str, tuple[str, str]] = {}
 
-    if buildings_mesh is not None and base_mesh is not None:
-        buildings_mesh, removed_shells = remove_small_floating_components(
-            {
-                "base": base_mesh,
-                "route": route_mesh,
-                "roads": roads_mesh,
-                "buildings": buildings_mesh,
-                "water": water_mesh,
-                "landscape": landscape_mesh,
-            },
-            "buildings",
-            maximum_faces=12,
-        )
-        if removed_shells:
+    layer_meshes = {
+        "base": base_mesh,
+        "route": route_mesh,
+        "roads": roads_mesh,
+        "buildings": buildings_mesh,
+        "water": water_mesh,
+        "landscape": landscape_mesh,
+    }
+    cleanup_limits = {"buildings": 12, "water": 8, "landscape": 16}
+    removed_shells = {layer: 0 for layer in cleanup_limits}
+    if base_mesh is not None:
+        changed = True
+        while changed:
+            changed = False
+            for layer, maximum_faces in cleanup_limits.items():
+                cleaned, removed = remove_small_floating_components(
+                    layer_meshes,
+                    layer,
+                    maximum_faces=maximum_faces,
+                )
+                layer_meshes[layer] = cleaned
+                removed_shells[layer] += removed
+                changed = changed or bool(removed)
+    buildings_mesh = layer_meshes["buildings"]
+    water_mesh = layer_meshes["water"]
+    landscape_mesh = layer_meshes["landscape"]
+    for layer, removed in removed_shells.items():
+        if removed:
             logging.warning(
-                "Removed %d tiny unsupported building shell(s) before export",
-                removed_shells,
+                "Removed %d tiny unsupported %s shell(s) before export",
+                removed,
+                layer,
             )
 
     def color_mesh(mesh: Trimesh, name: str, label: str, layer: str) -> None:

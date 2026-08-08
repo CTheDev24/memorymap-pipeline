@@ -207,6 +207,9 @@ def test_generation_config_includes_style_profile_and_landscape_dimensions():
     window.water_recess = Value(0.4)
     window.building_max_height = Value(25.0)
     window.style_profile = Combo()
+    window.route_layer_height = type(
+        "LayerHeight", (), {"currentData": lambda self: 0.16}
+    )()
     window.surface_skin_thickness = Value(0.4)
     window.minimum_waterway_width = Value(0.8)
     window.flat_border = Check(False)

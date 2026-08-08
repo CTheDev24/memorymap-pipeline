@@ -1,8 +1,14 @@
 import numpy as np
+from shapely.geometry import Polygon
 from trimesh.creation import box
 from trimesh.util import concatenate
 
-from memorymap_pipeline.mesh import build_base_plate, split_overconnected_vertex_fans
+from memorymap_pipeline.mesh import (
+    build_base_plate,
+    export_3mf,
+    route_mesh_from_polygon,
+    split_overconnected_vertex_fans,
+)
 from memorymap_pipeline.printability import (
     audit_printability,
     remove_small_floating_components,
@@ -86,6 +92,49 @@ def test_large_floating_building_shell_remains_a_validation_error() -> None:
     assert removed == 0
     assert cleaned is floating
     assert not audit_printability({"base": base, "buildings": cleaned}).printable
+
+
+def test_export_removes_tiny_floating_water_and_landscape_shells(tmp_path) -> None:
+    base = build_base_plate(40.0, 30.0, 1.6)
+    supported_water = route_mesh_from_polygon(
+        Polygon([(3.0, 3.0), (12.0, 3.0), (12.0, 8.0), (3.0, 8.0)]),
+        0.6,
+        -0.2,
+    )
+    floating_water = route_mesh_from_polygon(
+        Polygon([(20.0, 3.0), (22.0, 3.0), (21.0, 5.0)]),
+        0.4,
+        3.0,
+    )
+    supported_landscape = route_mesh_from_polygon(
+        Polygon([(3.0, 12.0), (12.0, 12.0), (12.0, 20.0), (3.0, 20.0)]),
+        0.6,
+        -0.2,
+    )
+    floating_landscape = route_mesh_from_polygon(
+        Polygon([(20.0, 12.0), (23.0, 12.0), (24.0, 14.0), (22.0, 16.0), (19.0, 14.0)]),
+        0.4,
+        3.0,
+    )
+    water = concatenate((supported_water, floating_water))
+    landscape = concatenate((supported_landscape, floating_landscape))
+    assert len(floating_water.faces) == 8
+    assert len(floating_landscape.faces) == 16
+    assert not audit_printability(
+        {"base": base, "water": water, "landscape": landscape}
+    ).printable
+
+    output = tmp_path / "cleaned-surface-fragments.3mf"
+    export_3mf(
+        output,
+        base,
+        None,
+        water_mesh=water,
+        landscape_mesh=landscape,
+        style_profile="landscape",
+    )
+
+    assert output.is_file()
 
 
 def test_over_connected_edges_are_rejected() -> None:

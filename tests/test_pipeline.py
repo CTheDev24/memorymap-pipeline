@@ -368,3 +368,23 @@ def test_tiered_building_mapper_hits_level_boundaries(levels, expected_mm):
     )
     mapper = _tiered_building_height_mapper([dimensions], 30.0)
     assert mapper(dimensions, dimensions.total_height_m, 500.0) == pytest.approx(expected_mm)
+
+
+def test_tiered_building_mapper_scales_citywide_heights_with_map_extent():
+    lowrise = _building_dimensions(
+        {"building": "office", "building:levels": "8"}, 6.0, 3.0, 400.0
+    )
+    tower = _building_dimensions(
+        {"building": "apartments", "height": "200"}, 6.0, 3.0, 400.0
+    )
+    neighbourhood = _tiered_building_height_mapper(
+        [lowrise, tower], 30.0, map_scale_mm_per_m=0.04
+    )
+    marathon = _tiered_building_height_mapper(
+        [lowrise, tower], 30.0, map_scale_mm_per_m=0.01
+    )
+
+    assert neighbourhood(lowrise, lowrise.total_height_m, 500.0) == pytest.approx(9.0)
+    assert marathon(lowrise, lowrise.total_height_m, 500.0) == pytest.approx(4.5)
+    assert neighbourhood(tower, tower.total_height_m, 500.0) == pytest.approx(30.0)
+    assert marathon(tower, tower.total_height_m, 500.0) == pytest.approx(15.0)
