@@ -1,9 +1,18 @@
 import numpy as np
+from shapely.geometry import Polygon
 from trimesh.creation import box
 from trimesh.util import concatenate
 
-from memorymap_pipeline.mesh import build_base_plate
-from memorymap_pipeline.printability import audit_printability
+from memorymap_pipeline.mesh import (
+    build_base_plate,
+    export_3mf,
+    route_mesh_from_polygon,
+    split_overconnected_vertex_fans,
+)
+from memorymap_pipeline.printability import (
+    audit_printability,
+    remove_small_floating_components,
+)
 
 
 def _solid(extents, translation):
@@ -50,6 +59,84 @@ def test_roof_can_reach_base_through_supported_body() -> None:
     assert report.printable
 
 
+def test_only_tiny_proven_floating_building_shells_are_removed() -> None:
+    base = build_base_plate(40.0, 30.0, 1.6)
+    grounded = _solid((4.0, 4.0, 2.2), (10.0, 10.0, 0.9))
+    supported_roof = _solid((4.0, 4.0, 0.4), (10.0, 10.0, 2.1))
+    tiny_floating = _solid((1.0, 1.0, 0.4), (25.0, 10.0, 3.0))
+    buildings = concatenate((grounded, supported_roof, tiny_floating))
+
+    cleaned, removed = remove_small_floating_components(
+        {"base": base, "buildings": buildings},
+        "buildings",
+        maximum_faces=12,
+    )
+
+    assert removed == 1
+    assert cleaned is not None
+    assert audit_printability({"base": base, "buildings": cleaned}).printable
+    assert cleaned.bounds[1, 0] < 25.0
+
+
+def test_large_floating_building_shell_remains_a_validation_error() -> None:
+    base = build_base_plate(40.0, 30.0, 1.6)
+    floating = _solid((4.0, 4.0, 1.0), (20.0, 15.0, 4.0))
+    floating = floating.subdivide()
+
+    cleaned, removed = remove_small_floating_components(
+        {"base": base, "buildings": floating},
+        "buildings",
+        maximum_faces=12,
+    )
+
+    assert removed == 0
+    assert cleaned is floating
+    assert not audit_printability({"base": base, "buildings": cleaned}).printable
+
+
+def test_export_removes_tiny_floating_water_and_landscape_shells(tmp_path) -> None:
+    base = build_base_plate(40.0, 30.0, 1.6)
+    supported_water = route_mesh_from_polygon(
+        Polygon([(3.0, 3.0), (12.0, 3.0), (12.0, 8.0), (3.0, 8.0)]),
+        0.6,
+        -0.2,
+    )
+    floating_water = route_mesh_from_polygon(
+        Polygon([(20.0, 3.0), (22.0, 3.0), (21.0, 5.0)]),
+        0.4,
+        3.0,
+    )
+    supported_landscape = route_mesh_from_polygon(
+        Polygon([(3.0, 12.0), (12.0, 12.0), (12.0, 20.0), (3.0, 20.0)]),
+        0.6,
+        -0.2,
+    )
+    floating_landscape = route_mesh_from_polygon(
+        Polygon([(20.0, 12.0), (23.0, 12.0), (24.0, 14.0), (22.0, 16.0), (19.0, 14.0)]),
+        0.4,
+        3.0,
+    )
+    water = concatenate((supported_water, floating_water))
+    landscape = concatenate((supported_landscape, floating_landscape))
+    assert len(floating_water.faces) == 8
+    assert len(floating_landscape.faces) == 16
+    assert not audit_printability(
+        {"base": base, "water": water, "landscape": landscape}
+    ).printable
+
+    output = tmp_path / "cleaned-surface-fragments.3mf"
+    export_3mf(
+        output,
+        base,
+        None,
+        water_mesh=water,
+        landscape_mesh=landscape,
+        style_profile="landscape",
+    )
+
+    assert output.is_file()
+
+
 def test_over_connected_edges_are_rejected() -> None:
     first = _solid((4.0, 4.0, 2.0), (10.0, 10.0, 0.0))
     second = first.copy()
@@ -61,6 +148,23 @@ def test_over_connected_edges_are_rejected() -> None:
     assert not report.printable
     assert any(issue.code == "non_manifold" for issue in report.issues)
     assert np.count_nonzero(np.bincount(combined.edges_unique_inverse) > 2) > 0
+
+
+def test_coincident_closed_shell_edges_are_split_into_manifold_fans() -> None:
+    first = _solid((10.0, 10.0, 2.0), (0.0, 0.0, 0.0))
+    second = _solid((10.0, 10.0, 2.0), (10.0, 10.0, 0.0))
+    combined = concatenate((first, second))
+    combined.merge_vertices()
+
+    before = np.bincount(combined.edges_unique_inverse)
+    repaired = split_overconnected_vertex_fans(combined)
+    after = np.bincount(repaired.edges_unique_inverse)
+
+    assert np.count_nonzero(before > 2) == 1
+    assert np.count_nonzero(after == 1) == 0
+    assert np.count_nonzero(after > 2) == 0
+    assert repaired.is_watertight
+    assert repaired.is_winding_consistent
 
 
 def test_inconsistent_face_winding_is_rejected() -> None:

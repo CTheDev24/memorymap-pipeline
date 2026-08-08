@@ -27,6 +27,19 @@ def _normalize_highway_value(highway):
     return highway
 
 
+def _normalized_tag_values(value: object) -> set[str]:
+    if isinstance(value, (list, tuple, set)):
+        return {
+            str(item).strip().lower()
+            for item in value
+            if str(item).strip()
+        }
+    if value is None:
+        return set()
+    normalized = str(value).strip().lower()
+    return {normalized} if normalized else set()
+
+
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.openstreetmap.fr/api/interpreter",
@@ -35,6 +48,127 @@ OVERPASS_ENDPOINTS = [
 ]
 
 OVERPASS_TIMEOUT = 60
+
+_ROAD_EXTRUSION_MAX_SPLIT_DEPTH = 8
+_ROAD_EXTRUSION_MIN_AREA_MM2 = 0.01
+_ROAD_EXTRUSION_SIMPLIFY_MM = 0.002
+
+
+def _polygon_parts(shape) -> list[geom.Polygon]:
+    if isinstance(shape, geom.Polygon):
+        return [] if shape.is_empty else [shape]
+    if isinstance(shape, geom.MultiPolygon):
+        return [part for part in shape.geoms if not part.is_empty]
+    if hasattr(shape, "geoms"):
+        return [
+            part
+            for child in shape.geoms
+            for part in _polygon_parts(child)
+        ]
+    return []
+
+
+def _bisect_polygon(polygon: geom.Polygon) -> list[geom.Polygon]:
+    """Split a complex polygon without changing its printable footprint."""
+    min_x, min_y, max_x, max_y = polygon.bounds
+    width = max_x - min_x
+    height = max_y - min_y
+    padding = max(width, height, 1.0) + 1.0
+    if width >= height:
+        midpoint = (min_x + max_x) / 2.0
+        cutter = geom.LineString(
+            [(midpoint, min_y - padding), (midpoint, max_y + padding)]
+        )
+    else:
+        midpoint = (min_y + max_y) / 2.0
+        cutter = geom.LineString(
+            [(min_x - padding, midpoint), (max_x + padding, midpoint)]
+        )
+
+    try:
+        pieces = _polygon_parts(ops.split(polygon, cutter))
+    except Exception:
+        return []
+    return [
+        piece
+        for piece in pieces
+        if piece.area >= _ROAD_EXTRUSION_MIN_AREA_MM2
+    ]
+
+
+def _extrude_road_polygon(
+    polygon: geom.Polygon,
+    *,
+    height_mm: float,
+    z_offset: float,
+    split_depth: int = 0,
+) -> list[object]:
+    """Extrude a road polygon, subdividing only when triangulation is invalid.
+
+    Dense urban road buffers often union into one polygon with thousands of
+    vertices and holes.  A triangulation failure in that single polygon used to
+    discard the entire connected street network.  Spatial bisection keeps the
+    same footprint while giving the triangulator smaller, independently
+    watertight solids that slicers can combine as one road object.
+    """
+    try:
+        return [
+            route_mesh_from_polygon(
+                polygon,
+                height_mm=height_mm,
+                z_offset=z_offset,
+            )
+        ]
+    except Exception as exc:
+        simplified = polygon.simplify(
+            _ROAD_EXTRUSION_SIMPLIFY_MM,
+            preserve_topology=True,
+        )
+        if (
+            not simplified.is_empty
+            and isinstance(simplified, geom.Polygon)
+            and len(simplified.exterior.coords) < len(polygon.exterior.coords)
+        ):
+            try:
+                return [
+                    route_mesh_from_polygon(
+                        simplified,
+                        height_mm=height_mm,
+                        z_offset=z_offset,
+                    )
+                ]
+            except Exception:
+                pass
+        if (
+            split_depth >= _ROAD_EXTRUSION_MAX_SPLIT_DEPTH
+            or polygon.area < 2.0 * _ROAD_EXTRUSION_MIN_AREA_MM2
+        ):
+            logging.warning(
+                "Skipping invalid road polygon after %d subdivision levels: %s",
+                split_depth,
+                exc,
+            )
+            return []
+
+        pieces = _bisect_polygon(polygon)
+        if len(pieces) < 2:
+            logging.warning(
+                "Skipping invalid road polygon that could not be subdivided: %s",
+                exc,
+            )
+            return []
+
+        meshes = []
+        for piece in pieces:
+            meshes.extend(
+                _extrude_road_polygon(
+                    piece,
+                    height_mm=height_mm,
+                    z_offset=z_offset,
+                    split_depth=split_depth + 1,
+                )
+            )
+        return meshes
 
 
 def download_and_build_roads(
@@ -55,6 +189,9 @@ def download_and_build_roads(
     radius_m: float | None = None,
     roads_file: str | None = None,
     terrain_smoothing_types: Iterable[str] = (),
+    excluded_service_types: Iterable[str] = (),
+    excluded_access: Iterable[str] = (),
+    priority_region: geom.base.BaseGeometry | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download OSM drivable roads within bbox (lat_min, lat_max, lon_min, lon_max), buffer them
     using widths from road_widths (mm). ``road_height_mm`` is the visible height above
@@ -108,6 +245,12 @@ def download_and_build_roads(
     smoothing_corridors = []
     smoothing_corridor_keys = set()
     smoothing_types = set(terrain_smoothing_types)
+    blocked_service_types = {
+        str(value).strip().lower() for value in excluded_service_types
+    }
+    blocked_access = {
+        str(value).strip().lower() for value in excluded_access
+    }
 
     # Create clipping boundary to keep roads within map bounds
     clip_box = geom.box(
@@ -120,6 +263,14 @@ def download_and_build_roads(
             continue
         hw_norm = _normalize_highway_value(hw)
         if hw_norm not in road_types:
+            continue
+        if (
+            hw_norm == "service"
+            and _normalized_tag_values(row.get("service"))
+            & blocked_service_types
+        ):
+            continue
+        if _normalized_tag_values(row.get("access")) & blocked_access:
             continue
 
         geom_obj = row.get("geometry")
@@ -179,6 +330,10 @@ def download_and_build_roads(
     topology_weld_mm = 0.01
     unioned = unioned.buffer(topology_weld_mm).buffer(-topology_weld_mm)
     unioned = unioned.intersection(clip_box)
+    if priority_region is not None and not priority_region.is_empty:
+        # Keep road material completely outside the highlighted route corridor. A
+        # tiny clearance avoids coplanar preview fragments along the shared boundary.
+        unioned = unioned.difference(priority_region.buffer(0.03)).buffer(0)
     if not unioned.is_valid:
         unioned, ok, explanation = repair_polygon(unioned)
 
@@ -190,10 +345,13 @@ def download_and_build_roads(
             for p in parts:
                 if p.is_empty:
                     continue
-                mesh = route_mesh_from_polygon(
-                    p, height_mm=road_height_mm + embed_depth_mm, z_offset=z_offset
+                meshes.extend(
+                    _extrude_road_polygon(
+                        p,
+                        height_mm=road_height_mm + embed_depth_mm,
+                        z_offset=z_offset,
+                    )
                 )
-                meshes.append(mesh)
     except Exception as exc:  # pragma: no cover - mesh library issues
         logging.warning("Failed creating road meshes: %s", exc)
 

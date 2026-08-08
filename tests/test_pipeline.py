@@ -7,6 +7,8 @@ from shapely.geometry import box
 
 from memorymap_pipeline.buildings import (
     _adaptive_height_mapper,
+    _building_dimensions,
+    _tiered_building_height_mapper,
     _extract_real_height_m,
     _tags_from_gdf_row,
 )
@@ -35,7 +37,9 @@ def test_parse_and_scale_route(tmp_path: Path) -> None:
     route = load_route_from_gpx(gpx_path)
     assert len(route.points) == 3
 
-    projected = project_points(route.points, center_lat=route.points[0].latitude, center_lon=route.points[0].longitude)
+    projected = project_points(
+        route.points, center_lat=route.points[0].latitude, center_lon=route.points[0].longitude
+    )
     scaled = normalize_and_scale_points(projected, width_mm=241.0, height_mm=190.0)
 
     assert scaled.shape == (3, 2)
@@ -115,10 +119,18 @@ def test_cli_overlay_layers_embed_below_base_top(tmp_path: Path, monkeypatch) ->
         captured["height_mm"] = height_mm
         return DummyMesh()
 
-    monkeypatch.setattr("memorymap_pipeline.cli.route_mesh_from_polygon", fake_route_mesh_from_polygon)
-    monkeypatch.setattr("memorymap_pipeline.cli.download_and_build_roads", lambda **kwargs: (None, None))
-    monkeypatch.setattr("memorymap_pipeline.cli.download_and_build_buildings", lambda **kwargs: (None, None))
-    monkeypatch.setattr("memorymap_pipeline.cli.center_meshes_to_base", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "memorymap_pipeline.cli.route_mesh_from_polygon", fake_route_mesh_from_polygon
+    )
+    monkeypatch.setattr(
+        "memorymap_pipeline.cli.download_and_build_roads", lambda **kwargs: (None, None)
+    )
+    monkeypatch.setattr(
+        "memorymap_pipeline.cli.download_and_build_buildings", lambda **kwargs: (None, None)
+    )
+    monkeypatch.setattr(
+        "memorymap_pipeline.cli.center_meshes_to_base", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("memorymap_pipeline.cli.export_3mf", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         sys,
@@ -213,6 +225,7 @@ def test_height_uses_conservative_building_type_estimate():
 # Proportional height scaling
 # ---------------------------------------------------------------------------
 
+
 def test_proportional_scale_tallest_at_max():
     """Tallest building in a scene should print at exactly max_print_height_mm."""
     max_print_mm = 31.75
@@ -247,9 +260,14 @@ def test_min_building_height_floor():
     assert extrusions[1] == pytest.approx(max_print_mm)
 
 
+def test_default_urban_building_height_floor_is_visibly_raised():
+    assert DEFAULT_CONFIG["min_building_height_mm"] == pytest.approx(1.2)
+
+
 # ---------------------------------------------------------------------------
 # Clip / omit threshold
 # ---------------------------------------------------------------------------
+
 
 def _clip_fraction(building_poly, plate_box, clip_threshold: float):
     """Helper replicating the clip/omit logic from buildings.py."""
@@ -296,7 +314,6 @@ def test_building_entirely_outside_omitted():
     assert result is None
 
 
-
 def test_adaptive_height_mapper_preserves_map_scale_for_low_rise_scene():
     mapper = _adaptive_height_mapper([3.0, 6.0, 12.0], 0.2, 25.0, 0.4)
     assert mapper(3.0) == pytest.approx(0.6)
@@ -309,3 +326,65 @@ def test_adaptive_height_mapper_caps_tall_outliers():
     mapper = _adaptive_height_mapper(heights, 0.2, 25.0, 0.4)
     assert mapper(6.0) < mapper(20.0) < mapper(300.0)
     assert mapper(300.0) == pytest.approx(25.0)
+
+
+def test_tiered_building_mapper_preserves_low_rise_subtiers():
+    garage = _building_dimensions({"building": "garage"}, 6.0, 3.0, 400.0)
+    house = _building_dimensions({"building": "house"}, 6.0, 3.0, 400.0)
+    warehouse = _building_dimensions({"building": "warehouse"}, 6.0, 3.0, 400.0)
+    mapper = _tiered_building_height_mapper([garage, house, warehouse], 30.0)
+
+    assert mapper(garage, garage.total_height_m, 40.0) == pytest.approx(1.2)
+    assert mapper(house, house.total_height_m, 120.0) == pytest.approx(1.6)
+    assert mapper(house, house.total_height_m, 240.0) == pytest.approx(2.0)
+    assert mapper(warehouse, warehouse.total_height_m, 2_000.0) == pytest.approx(2.0)
+
+
+def test_tiered_building_mapper_uses_three_continuous_levels():
+    two_storey = _building_dimensions(
+        {"building": "house", "building:levels": "2"}, 6.0, 3.0, 400.0
+    )
+    midrise = _building_dimensions({"building": "office", "height": "20"}, 6.0, 3.0, 400.0)
+    highrise = _building_dimensions({"building": "apartments", "height": "60"}, 6.0, 3.0, 400.0)
+    tower = _building_dimensions({"building": "apartments", "height": "200"}, 6.0, 3.0, 400.0)
+    mapper = _tiered_building_height_mapper([two_storey, midrise, highrise, tower], 30.0)
+
+    assert mapper(two_storey, two_storey.total_height_m, 140.0) == pytest.approx(2.8)
+    assert 3.0 < mapper(midrise, midrise.total_height_m, 500.0) < 9.0
+    assert 9.0 < mapper(highrise, highrise.total_height_m, 800.0) < 30.0
+    assert mapper(tower, tower.total_height_m, 1_000.0) == pytest.approx(30.0)
+
+
+@pytest.mark.parametrize(
+    ("levels", "expected_mm"),
+    [(3, 3.0), (8, 9.0), (9, 9.0)],
+)
+def test_tiered_building_mapper_hits_level_boundaries(levels, expected_mm):
+    dimensions = _building_dimensions(
+        {"building": "office", "building:levels": str(levels)},
+        6.0,
+        3.0,
+        400.0,
+    )
+    mapper = _tiered_building_height_mapper([dimensions], 30.0)
+    assert mapper(dimensions, dimensions.total_height_m, 500.0) == pytest.approx(expected_mm)
+
+
+def test_tiered_building_mapper_scales_citywide_heights_with_map_extent():
+    lowrise = _building_dimensions(
+        {"building": "office", "building:levels": "8"}, 6.0, 3.0, 400.0
+    )
+    tower = _building_dimensions(
+        {"building": "apartments", "height": "200"}, 6.0, 3.0, 400.0
+    )
+    neighbourhood = _tiered_building_height_mapper(
+        [lowrise, tower], 30.0, map_scale_mm_per_m=0.04
+    )
+    marathon = _tiered_building_height_mapper(
+        [lowrise, tower], 30.0, map_scale_mm_per_m=0.01
+    )
+
+    assert neighbourhood(lowrise, lowrise.total_height_m, 500.0) == pytest.approx(9.0)
+    assert marathon(lowrise, lowrise.total_height_m, 500.0) == pytest.approx(4.5)
+    assert neighbourhood(tower, tower.total_height_m, 500.0) == pytest.approx(30.0)
+    assert marathon(tower, tower.total_height_m, 500.0) == pytest.approx(15.0)

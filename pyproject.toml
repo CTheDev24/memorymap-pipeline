@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memorymap-pipeline"
-version = "2.0.0"
+version = "2.1.0"
 description = "Convert GPX tracks and nearby map data into printable 3MF memory maps."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -39,7 +39,13 @@ memorymap-desktop = "memorymap_pipeline.desktop.launcher:main"
 include = ["memorymap_pipeline*"]
 
 [tool.setuptools.package-data]
-memorymap_pipeline = ["data/*.json"]
+memorymap_pipeline = [
+  "data/*.json",
+  "desktop/viewer/*.css",
+  "desktop/viewer/*.html",
+  "desktop/viewer/*.js",
+  "desktop/viewer/*.txt",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

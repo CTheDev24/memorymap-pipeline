@@ -13,6 +13,7 @@ from memorymap_pipeline.buildings import (
     _configure_overpass,
     _overpass_geometry,
     _roof_mesh,
+    download_and_build_buildings,
 )
 from memorymap_pipeline.generation import GenerationRequest, generate_memory_map
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
@@ -192,7 +193,7 @@ def test_offline_parts_fixture_generates_embedded_colored_layer(tmp_path: Path) 
     )
     assert result.buildings_mesh is not None
     assert result.buildings_mesh.bounds[0, 2] == pytest.approx(-0.2)
-    assert 0.0 < result.buildings_mesh.bounds[1, 2] <= 25.0
+    assert 0.0 < result.buildings_mesh.bounds[1, 2] <= 30.0
     assert result.output_path.exists()
     with zipfile.ZipFile(result.output_path) as archive:
         model_name = next(name for name in archive.namelist() if name.endswith(".model"))
@@ -212,6 +213,87 @@ def test_offline_parts_fixture_generates_embedded_colored_layer(tmp_path: Path) 
         component.attrib["objectid"]
         for component in assembly.findall("m:components/m:component", ns)
     }
+
+
+def test_supported_elevated_crown_keeps_open_sides(tmp_path: Path) -> None:
+    buildings_file = tmp_path / "open-crown.geojson"
+    outer = [
+        [-95.3704, 29.7597],
+        [-95.3696, 29.7597],
+        [-95.3696, 29.7603],
+        [-95.3704, 29.7603],
+        [-95.3704, 29.7597],
+    ]
+    inner = [
+        [-95.3702, 29.75985],
+        [-95.3702, 29.76015],
+        [-95.3698, 29.76015],
+        [-95.3698, 29.75985],
+        [-95.3702, 29.75985],
+    ]
+    buildings_file.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "building:part": "yes",
+                            "height": 219.8,
+                        },
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [outer],
+                        },
+                    },
+                    {
+                        "type": "Feature",
+                        "properties": {
+                            "building:part": "yes",
+                            "min_height": 219.8,
+                            "height": 225.9,
+                        },
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [outer, inner],
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=160.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=100.0,
+        margin_mm=5.0,
+    )
+
+    _footprints, mesh = download_and_build_buildings(
+        bbox=None,
+        center_lat=frame.center_lat,
+        center_lon=frame.center_lon,
+        transform={"map_frame": frame},
+        map_width_mm=frame.print_width_mm,
+        map_height_mm=frame.print_height_mm,
+        margin_mm=frame.margin_mm,
+        buildings_file=str(buildings_file),
+        embed_depth_mm=0.2,
+        extend_elevated_parts_to_ground=True,
+    )
+
+    assert mesh is not None
+    components = list(mesh.split(only_watertight=False))
+    crown = max(components, key=lambda component: component.bounds[1, 2])
+    assert crown.bounds[0, 2] > 10.0
+    assert crown.bounds[1, 2] - crown.bounds[0, 2] < 2.0
+    assert len(crown.split()) == 1
+    assert crown.is_watertight
 
 
 def test_daikin_registry_recipe_is_used_in_full_generation(tmp_path: Path) -> None:

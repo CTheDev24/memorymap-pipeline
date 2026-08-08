@@ -26,6 +26,29 @@ from memorymap_pipeline.mesh import build_base_plate, export_3mf, route_mesh_fro
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+def test_optional_border_uses_full_plate_extents_when_disabled() -> None:
+    frame = MapFrame(
+        center_lat=29.76,
+        center_lon=-95.37,
+        coverage_width_m=1_000.0,
+        coverage_height_m=800.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+
+    bordered = generation._frame_for_border(frame, True)
+    borderless = generation._frame_for_border(frame, False)
+
+    assert bordered is frame
+    assert bordered.margin_mm == pytest.approx(5.0)
+    assert borderless.margin_mm == pytest.approx(0.0)
+    assert borderless.coverage_width_m == pytest.approx(frame.coverage_width_m)
+    assert borderless.coverage_height_m == pytest.approx(frame.coverage_height_m)
+    assert borderless.printable_width_mm == pytest.approx(frame.print_width_mm)
+    assert borderless.printable_height_mm == pytest.approx(frame.print_height_mm)
+
+
 def _model_objects(path: Path) -> tuple[set[str], list[tuple[float, float, float]]]:
     with zipfile.ZipFile(path) as archive:
         model_name = next(name for name in archive.namelist() if name.lower().endswith(".model"))
@@ -87,6 +110,52 @@ def test_partial_export_assigns_materials_only_to_present_objects(tmp_path: Path
         "Route_Accent": "#FF6633FF",
     }
     assert _model_assembly(output) == ("MemoryMap", ["Base_White", "Route_Accent"])
+
+
+def test_landscape_export_uses_bone_green_and_blue_material_bodies(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "landscape-layers.3mf"
+    base = build_base_plate(40.0, 30.0, 1.6)
+    green = route_mesh_from_polygon(box(5.0, 5.0, 25.0, 25.0), 0.6, -0.2)
+    water = route_mesh_from_polygon(box(25.0, 5.0, 35.0, 25.0), 0.6, -0.2)
+
+    export_3mf(
+        output,
+        base,
+        None,
+        water_mesh=water,
+        landscape_mesh=green,
+        style_profile="landscape",
+    )
+
+    assert _model_materials(output) == {
+        "Base_Bone": "#D6CBABFF",
+        "Water_Blue": "#3399FFFF",
+        "Terrain_Green": "#4F772DFF",
+    }
+    assert _model_assembly(output) == (
+        "MemoryMap",
+        ["Base_Bone", "Water_Blue", "Terrain_Green"],
+    )
+
+
+def test_export_uses_custom_layer_colors(tmp_path: Path) -> None:
+    output = tmp_path / "custom-colors.3mf"
+    base = build_base_plate(40.0, 30.0, 1.0)
+    route = route_mesh_from_polygon(box(5.0, 5.0, 35.0, 6.0), 2.2, -0.2)
+
+    export_3mf(
+        output,
+        base,
+        route,
+        layer_colors={"base": "#123456", "route": "#ABCDEF"},
+    )
+
+    assert _model_materials(output) == {
+        "Base_White": "#123456FF",
+        "Route_Accent": "#ABCDEFFF",
+    }
 
 
 def test_full_generation_uses_frame_for_every_local_layer(tmp_path):

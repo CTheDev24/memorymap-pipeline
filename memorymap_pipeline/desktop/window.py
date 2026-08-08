@@ -12,8 +12,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+from ..config import ROUTE_LAYER_HEIGHT_SLOPES, route_slope_for_layer_height
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
+from ..palettes import LAYER_KEYS, PALETTE_PRESETS, default_preset, resolve_palette
+from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN
+from .viewer_support import placeholder_html, viewer_url
 from .worker import GenerationWorker
 
 
@@ -21,13 +25,32 @@ ROUTE_FRAME_PADDING_MM = 6.0
 FRAME_ZOOM_FACTOR = 1.1
 
 try:
-    from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
+    from PySide6.QtCore import QObject, QThread, QUrl, Qt, Signal, Slot
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QDoubleSpinBox, QFileDialog, QFormLayout,
-        QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QProgressBar,
-        QPushButton, QRadioButton, QSplitter, QTextEdit, QVBoxLayout, QWidget,
+        QApplication,
+        QCheckBox,
+        QColorDialog,
+        QComboBox,
+        QDoubleSpinBox,
+        QFileDialog,
+        QFormLayout,
+        QGroupBox,
+        QHBoxLayout,
+        QLabel,
+        QMainWindow,
+        QMessageBox,
+        QProgressBar,
+        QPushButton,
+        QRadioButton,
+        QScrollArea,
+        QSplitter,
+        QTabWidget,
+        QTextEdit,
+        QVBoxLayout,
+        QWidget,
     )
     from PySide6.QtWebChannel import QWebChannel
+    from PySide6.QtWebEngineCore import QWebEngineSettings
     from PySide6.QtWebEngineWidgets import QWebEngineView
 except ImportError as exc:  # pragma: no cover - depends on optional desktop extras
     if exc.name and exc.name.startswith("PySide6"):
@@ -68,10 +91,14 @@ class MemoryMapWindow(QMainWindow):
         self.gpx_path: Path | None = None
         self.route: Route | None = None
         self.result_path: Path | None = None
+        self.preview_path: Path | None = None
         self.default_frame: dict | None = None
         self.current_frame: dict | None = None
         self.generation_thread: QThread | None = None
         self.generation_worker: GenerationWorker | None = None
+        self.color_preset_name = default_preset(STYLE_PROFILE_URBAN)
+        self.layer_colors = resolve_palette(STYLE_PROFILE_URBAN)
+        self.color_buttons: dict[str, QPushButton] = {}
         self.bridge = MapBridge(self)
         self.bridge.frame_changed.connect(self._remember_frame)
         self._build_ui()
@@ -88,13 +115,30 @@ class MemoryMapWindow(QMainWindow):
         layout.addLayout(toolbar)
 
         split = QSplitter()
+        self.view_tabs = QTabWidget()
         self.map_view = QWebEngineView()
         self.channel = QWebChannel(self.map_view.page())
         self.channel.registerObject("memoryMap", self.bridge)
         self.map_view.page().setWebChannel(self.channel)
         self.map_view.setHtml(self._map_html(), QUrl("https://localhost/"))
-        split.addWidget(self.map_view)
-        split.addWidget(self._controls())
+        self.preview_view = QWebEngineView()
+        self.preview_view.loadFinished.connect(self._apply_palette_to_preview)
+        self.preview_view.settings().setAttribute(
+            QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls,
+            True,
+        )
+        self.preview_view.setHtml(placeholder_html())
+        self.view_tabs.addTab(self.map_view, "Map")
+        self.preview_tab_index = self.view_tabs.addTab(self.preview_view, "3D Preview")
+        split.addWidget(self.view_tabs)
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        controls_scroll.setMinimumWidth(320)
+        controls_scroll.setWidget(self._controls())
+        split.addWidget(controls_scroll)
         split.setSizes([880, 340])
         layout.addWidget(split, 1)
         self.setCentralWidget(root)
@@ -114,11 +158,33 @@ class MemoryMapWindow(QMainWindow):
         self.print_width = self._spin(240, 10, 1000)
         self.print_height = self._spin(190, 10, 1000)
         self.margin = self._spin(5, 0, 100)
+        self.flat_border = QCheckBox("Flat trim around map")
+        self.flat_border.setChecked(False)
+        self.flat_border.setToolTip(
+            "When enabled, reserves the configured width as a flat perimeter trim "
+            "and clips every map layer inside it."
+        )
+        self.flat_border.toggled.connect(self._border_toggled)
+        self.margin.setEnabled(False)
         self.route_width = self._spin(1.2, .1, 20)
+        self.route_layer_height = QComboBox()
+        for layer_height, slope in ROUTE_LAYER_HEIGHT_SLOPES.items():
+            self.route_layer_height.addItem(
+                f"{layer_height:.2f} mm  ({slope:.0%} slope)", layer_height
+            )
+        self.route_layer_height.setCurrentIndex(
+            self.route_layer_height.findData(0.16)
+        )
+        self.route_layer_height.setToolTip(
+            "Select the slicer layer height used for the route. MemoryMap chooses "
+            "a matching maximum elevation slope to limit visible stair-stepping."
+        )
         form.addRow("Width (mm)", self.print_width)
         form.addRow("Height (mm)", self.print_height)
+        form.addRow("Border", self.flat_border)
         form.addRow("Margin (mm)", self.margin)
         form.addRow("Route width (mm)", self.route_width)
+        form.addRow("Route layer height", self.route_layer_height)
         reset = QPushButton("Reset frame to route")
         reset.clicked.connect(self.reset_frame)
         form.addRow(reset)
@@ -134,6 +200,56 @@ class MemoryMapWindow(QMainWindow):
         form.addRow("Route framing", zoom_row)
         outer.addWidget(print_box)
 
+        style_box = QGroupBox("Map style")
+        style_form = QFormLayout(style_box)
+        self.style_profile = QComboBox()
+        self.style_profile.addItem("Urban", STYLE_PROFILE_URBAN)
+        self.style_profile.addItem("Landscape", STYLE_PROFILE_LANDSCAPE)
+        self.style_profile.currentIndexChanged.connect(self._style_changed)
+        self.surface_skin_thickness = self._spin(0.4, 0.2, 2.0)
+        self.minimum_waterway_width = self._spin(0.8, 0.4, 5.0)
+        self.surface_skin_thickness.setToolTip(
+            "Visible green and blue surface layer thickness for landscape maps."
+        )
+        self.minimum_waterway_width.setToolTip(
+            "Narrower mapped waterways are widened to this printable width."
+        )
+        style_form.addRow("Profile", self.style_profile)
+        style_form.addRow("Surface skin", self.surface_skin_thickness)
+        style_form.addRow("Minimum waterway width", self.minimum_waterway_width)
+        outer.addWidget(style_box)
+
+        palette_box = QGroupBox("Layer colors")
+        palette_form = QFormLayout(palette_box)
+        self.color_preset = QComboBox()
+        preset_labels = {
+            "urban-classic": "Urban Classic",
+            "landscape-classic": "Landscape Classic",
+            "heritage": "Heritage",
+            "gallery-concrete": "Gallery Concrete",
+            "nocturne": "Nocturne",
+            "ridgeline-sage": "Ridgeline Sage",
+            "desert-archive": "Desert Archive",
+            "coastal-limestone": "Coastal Limestone",
+            "deco-after-dark": "Deco After Dark",
+            "meridian-atlas": "Meridian Atlas",
+            "vector-lab": "Vector Lab",
+        }
+        for preset in PALETTE_PRESETS:
+            self.color_preset.addItem(preset_labels[preset], preset)
+        self.color_preset.addItem("Custom", None)
+        self.color_preset.currentIndexChanged.connect(self._palette_preset_changed)
+        palette_form.addRow("Collection", self.color_preset)
+        for layer in LAYER_KEYS:
+            button = QPushButton()
+            button.clicked.connect(
+                lambda _checked=False, selected=layer: self._choose_layer_color(selected)
+            )
+            self.color_buttons[layer] = button
+            palette_form.addRow(layer.title(), button)
+        outer.addWidget(palette_box)
+        self._refresh_color_buttons()
+
         layers = QGroupBox("Layers")
         layer_layout = QVBoxLayout(layers)
         self.route_layer = QCheckBox("Route"); self.route_layer.setChecked(True)
@@ -141,6 +257,9 @@ class MemoryMapWindow(QMainWindow):
         self.buildings_layer = QCheckBox("Buildings"); self.buildings_layer.setChecked(True)
         self.terrain_layer = QCheckBox("Terrain (USGS 3DEP)")
         self.water_layer = QCheckBox("Water (gray, recessed)")
+        self.water_mesh_body_hint = QCheckBox("Export as separate water mesh body")
+        self.water_mesh_body_hint.setChecked(True)
+        self.water_mesh_body_hint.setEnabled(False)
         self.water_layer.setEnabled(False)
         self.terrain_layer.toggled.connect(self._terrain_toggled)
         self.water_layer.toggled.connect(self._water_toggled)
@@ -150,6 +269,7 @@ class MemoryMapWindow(QMainWindow):
             self.buildings_layer,
             self.terrain_layer,
             self.water_layer,
+            self.water_mesh_body_hint,
         ):
             layer_layout.addWidget(control)
         outer.addWidget(layers)
@@ -158,7 +278,7 @@ class MemoryMapWindow(QMainWindow):
         terrain_form = QFormLayout(terrain_box)
         self.terrain_relief = self._spin(3.0, 0.5, 12.0)
         self.water_recess = self._spin(0.4, 0.1, 3.0)
-        self.building_max_height = self._spin(25.0, 1.0, 31.75)
+        self.building_max_height = self._spin(30.0, 9.0, 31.75)
         self.terrain_relief.setEnabled(False)
         self.water_recess.setEnabled(False)
         terrain_form.addRow("Maximum relief", self.terrain_relief)
@@ -174,8 +294,10 @@ class MemoryMapWindow(QMainWindow):
         outer.addWidget(self.generate); outer.addWidget(self.save)
         self.progress = QProgressBar(); self.progress.setRange(0, 100)
         self.warnings = QTextEdit(); self.warnings.setReadOnly(True)
+        self.warnings.setMinimumHeight(140)
         self.warnings.setPlaceholderText("Generation warnings and status appear here.")
         outer.addWidget(self.progress); outer.addWidget(self.warnings, 1)
+        self._style_changed()
         return panel
 
     @staticmethod
@@ -219,7 +341,7 @@ class MemoryMapWindow(QMainWindow):
                 self.route.points,
                 self.print_width.value(),
                 self.print_height.value(),
-                self.margin.value(),
+                MemoryMapWindow._effective_margin(self),
                 route_padding_mm=ROUTE_FRAME_PADDING_MM,
             )
             self.default_frame = {
@@ -250,7 +372,7 @@ class MemoryMapWindow(QMainWindow):
                 self.route.points,
                 width,
                 height,
-                self.margin.value(),
+                MemoryMapWindow._effective_margin(self),
                 route_padding_mm=ROUTE_FRAME_PADDING_MM,
             )
             fitted = {
@@ -312,6 +434,41 @@ class MemoryMapWindow(QMainWindow):
     def zoom_frame_out(self) -> None:
         self._zoom_frame(FRAME_ZOOM_FACTOR)
 
+    def _effective_margin(self) -> float:
+        border = getattr(self, "flat_border", None)
+        if border is not None and not border.isChecked():
+            return 0.0
+        return float(self.margin.value())
+
+    @Slot(bool)
+    def _border_toggled(self, enabled: bool) -> None:
+        self.margin.setEnabled(enabled)
+        if self.route is None:
+            return
+        frame = MapFrame.fit_route(
+            self.route.points,
+            self.print_width.value(),
+            self.print_height.value(),
+            MemoryMapWindow._effective_margin(self),
+            route_padding_mm=ROUTE_FRAME_PADDING_MM,
+        )
+        fitted = {
+            "center_lat": frame.center_lat,
+            "center_lon": frame.center_lon,
+            "coverage_width_m": frame.coverage_width_m,
+            "coverage_height_m": frame.coverage_height_m,
+            "rotation_degrees": frame.rotation_degrees,
+            "print_width_mm": frame.print_width_mm,
+            "print_height_mm": frame.print_height_mm,
+            "margin_mm": frame.margin_mm,
+        }
+        self.default_frame = fitted
+        self.current_frame = fitted.copy()
+        self.map_view.page().runJavaScript(
+            f"window.defaultFrame={json.dumps(self.default_frame)};"
+            f"setFrame({json.dumps(self.current_frame)});"
+        )
+
     @Slot(bool)
     def _terrain_toggled(self, enabled: bool) -> None:
         self.terrain_relief.setEnabled(enabled)
@@ -324,6 +481,93 @@ class MemoryMapWindow(QMainWindow):
     def _water_toggled(self, enabled: bool) -> None:
         self.water_recess.setEnabled(enabled and self.terrain_layer.isChecked())
 
+    @Slot(int)
+    def _style_changed(self, _index: int = -1) -> None:
+        landscape = (
+            self.style_profile.currentData() == STYLE_PROFILE_LANDSCAPE
+        )
+        self.surface_skin_thickness.setEnabled(landscape)
+        self.minimum_waterway_width.setEnabled(landscape)
+        if hasattr(self, "color_preset") and self.color_preset.currentData() is not None:
+            preset = default_preset(self.style_profile.currentData())
+            index = self.color_preset.findData(preset)
+            if index >= 0:
+                self.color_preset.setCurrentIndex(index)
+
+    @Slot(int)
+    def _palette_preset_changed(self, _index: int = -1) -> None:
+        preset = self.color_preset.currentData()
+        if preset is None:
+            return
+        self.color_preset_name = preset
+        self.layer_colors = resolve_palette(
+            self.style_profile.currentData(), preset
+        )
+        self._refresh_color_buttons()
+        self._apply_palette_to_preview()
+
+    def _refresh_color_buttons(self) -> None:
+        for layer, button in self.color_buttons.items():
+            color = self.layer_colors[layer]
+            foreground = "#000000" if sum(int(color[i:i + 2], 16) for i in (1, 3, 5)) > 400 else "#FFFFFF"
+            button.setText(color)
+            button.setStyleSheet(
+                f"QPushButton {{ background: {color}; color: {foreground}; }}"
+            )
+
+    @Slot()
+    def _choose_layer_color(self, layer: str) -> None:
+        selected = QColorDialog.getColor(
+            parent=self, title=f"Choose {layer.title()} color"
+        )
+        if not selected.isValid():
+            return
+        self.layer_colors[layer] = selected.name().upper()
+        custom_index = self.color_preset.count() - 1
+        self.color_preset.blockSignals(True)
+        self.color_preset.setCurrentIndex(custom_index)
+        self.color_preset.blockSignals(False)
+        self._refresh_color_buttons()
+        self._apply_palette_to_preview()
+
+    @Slot(bool)
+    def _apply_palette_to_preview(self, _loaded: bool = True) -> None:
+        if not hasattr(self, "preview_view"):
+            return
+        script = f"window.setLayerColors && window.setLayerColors({json.dumps(self.layer_colors)});"
+        self.preview_view.page().runJavaScript(script)
+
+    def _generation_config_payload(self) -> dict:
+        route_layer_height = float(self.route_layer_height.currentData())
+        return {
+            "terrain_enabled": self.terrain_layer.isChecked(),
+            "water_enabled": self.water_layer.isChecked(),
+            "terrain_max_relief_mm": self.terrain_relief.value(),
+            "water_recess_mm": self.water_recess.value(),
+            "max_print_height_mm": self.building_max_height.value(),
+            "route_layer_height_mm": route_layer_height,
+            "route_profile_max_slope": route_slope_for_layer_height(
+                route_layer_height
+            ),
+            "style_profile": self.style_profile.currentData(),
+            "surface_skin_thickness_mm": self.surface_skin_thickness.value(),
+            "minimum_waterway_width_mm": self.minimum_waterway_width.value(),
+            "color_preset": getattr(
+                self, "color_preset_name", default_preset(self.style_profile.currentData())
+            ),
+            "layer_colors": dict(
+                getattr(
+                    self,
+                    "layer_colors",
+                    resolve_palette(self.style_profile.currentData()),
+                )
+            ),
+            "flat_border_enabled": bool(
+                getattr(self, "flat_border", None)
+                and self.flat_border.isChecked()
+            ),
+        }
+
     @Slot()
     def request_generation(self) -> None:
         if not self.gpx_path or not self.route or not self.current_frame:
@@ -331,7 +575,11 @@ class MemoryMapWindow(QMainWindow):
         self.progress.setValue(0); self.warnings.clear(); self.generate.setEnabled(False)
         try:
             frame_data = dict(self.current_frame)
-            frame_data.update(print_width_mm=self.print_width.value(), print_height_mm=self.print_height.value(), margin_mm=self.margin.value())
+            frame_data.update(
+                print_width_mm=self.print_width.value(),
+                print_height_mm=self.print_height.value(),
+                margin_mm=MemoryMapWindow._effective_margin(self),
+            )
             directory = Path(tempfile.mkdtemp(prefix="memorymap-desktop-"))
             payload = {
                 "route": self.route, "frame": MapFrame(**frame_data),
@@ -340,13 +588,7 @@ class MemoryMapWindow(QMainWindow):
                 "include_roads": self.roads_layer.isChecked(),
                 "include_buildings": self.buildings_layer.isChecked(),
                 "route_width_mm": self.route_width.value(),
-                "config": {
-                    "terrain_enabled": self.terrain_layer.isChecked(),
-                    "water_enabled": self.water_layer.isChecked(),
-                    "terrain_max_relief_mm": self.terrain_relief.value(),
-                    "water_recess_mm": self.water_recess.value(),
-                    "max_print_height_mm": self.building_max_height.value(),
-                },
+                "config": self._generation_config_payload(),
             }
             thread = QThread(self); worker = GenerationWorker(payload)
             worker.moveToThread(thread); thread.started.connect(worker.run)
@@ -373,10 +615,30 @@ class MemoryMapWindow(QMainWindow):
         self.progress.setValue(max(0, min(100, value)))
         if message: self.warnings.append(message)
 
-    @Slot(str)
-    def set_result(self, path: str) -> None:
-        self.result_path = Path(path); self.save.setEnabled(self.result_path.is_file())
+    @Slot(str, str)
+    def set_result(self, path: str, preview_path: str = "") -> None:
+        self.result_path = Path(path)
+        self.save.setEnabled(self.result_path.is_file())
         self.progress.setValue(100)
+        self.preview_path = Path(preview_path) if preview_path else None
+        if self.preview_path is None:
+            self.preview_view.setHtml(
+                placeholder_html(
+                    "3D preview was unavailable, but the generated 3MF can still be saved."
+                )
+            )
+            return
+        try:
+            self.preview_view.load(QUrl(viewer_url(self.preview_path)))
+            self.view_tabs.setCurrentIndex(self.preview_tab_index)
+        except (OSError, ValueError) as exc:
+            self.preview_path = None
+            self.preview_view.setHtml(
+                placeholder_html(
+                    "3D preview could not be opened. The generated 3MF is still available."
+                )
+            )
+            self.add_warning(f"3D preview could not be opened: {exc}")
 
     @Slot(str)
     def add_warning(self, message: str) -> None:

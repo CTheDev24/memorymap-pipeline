@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
+import logging
 import re
 import zipfile
+from pathlib import Path
 
 import numpy as np
 from shapely import contains_xy
@@ -10,24 +11,10 @@ from shapely.geometry.base import BaseGeometry
 from trimesh import Trimesh
 from trimesh.creation import extrude_polygon
 
+from .palettes import resolve_palette, rgba
+
 
 DEFAULT_FEATURE_EMBED_DEPTH_MM = 0.2
-
-MESH_COLORS = {
-    "base": np.array([255, 255, 255, 255], dtype=np.uint8),
-    "route": np.array([255, 102, 51, 255], dtype=np.uint8),
-    "roads": np.array([0, 0, 0, 255], dtype=np.uint8),
-    "buildings": np.array([128, 128, 128, 255], dtype=np.uint8),
-    "water": np.array([128, 128, 128, 255], dtype=np.uint8),
-}
-
-MESH_MATERIALS = {
-    "Base_White": ("White", "#FFFFFFFF"),
-    "Route_Accent": ("Orange", "#FF6633FF"),
-    "Roads_Black": ("Black", "#000000FF"),
-    "Buildings_Verification": ("Gray", "#808080FF"),
-    "Water_Gray": ("Gray Water", "#808080FF"),
-}
 
 def embedded_feature_dimensions(
     visible_height_mm: float,
@@ -46,6 +33,82 @@ def embedded_feature_dimensions(
         raise ValueError("Base thickness and feature embed depth cannot be negative")
     effective_embed = min(base_thickness_mm, embed_depth_mm)
     return visible_height_mm + effective_embed, -effective_embed, effective_embed
+
+
+def split_overconnected_vertex_fans(mesh: Trimesh) -> Trimesh:
+    """Separate coincident triangle fans around over-connected edges.
+
+    Independently triangulated terrain partitions can meet exactly along a
+    coastline edge after welding. The surface is closed, but sharing vertex
+    indices makes that contact non-manifold. Duplicate only affected vertices
+    for each locally disconnected fan, preserving every coordinate.
+    """
+    edge_counts = np.bincount(mesh.edges_unique_inverse)
+    overconnected = np.flatnonzero(edge_counts > 2)
+    if len(overconnected) == 0:
+        return mesh
+
+    original_faces = np.asarray(mesh.faces, dtype=int)
+    faces = original_faces.copy()
+    vertices = np.asarray(mesh.vertices, dtype=float).tolist()
+    affected_vertices = np.unique(mesh.edges_unique[overconnected])
+
+    edge_faces: dict[int, list[int]] = {}
+    for occurrence, edge_id in enumerate(mesh.edges_unique_inverse):
+        edge_faces.setdefault(int(edge_id), []).append(
+            int(mesh.edges_face[occurrence])
+        )
+
+    vertex_edges: dict[int, list[int]] = {
+        int(vertex): [] for vertex in affected_vertices
+    }
+    for edge_id, edge in enumerate(mesh.edges_unique):
+        for vertex in edge:
+            vertex_id = int(vertex)
+            if vertex_id in vertex_edges:
+                vertex_edges[vertex_id].append(edge_id)
+
+    for vertex in affected_vertices:
+        vertex_id = int(vertex)
+        incident = np.flatnonzero(np.any(original_faces == vertex_id, axis=1))
+        parent = {int(face): int(face) for face in incident}
+
+        def find(face: int) -> int:
+            while parent[face] != face:
+                parent[face] = parent[parent[face]]
+                face = parent[face]
+            return face
+
+        def union(first: int, second: int) -> None:
+            first_root = find(first)
+            second_root = find(second)
+            if first_root != second_root:
+                parent[second_root] = first_root
+
+        for edge_id in vertex_edges[vertex_id]:
+            adjacent = edge_faces[edge_id]
+            if len(adjacent) == 2:
+                union(adjacent[0], adjacent[1])
+
+        fans: dict[int, list[int]] = {}
+        for face in incident:
+            face_id = int(face)
+            fans.setdefault(find(face_id), []).append(face_id)
+        ordered_fans = sorted(fans.values(), key=lambda fan: min(fan))
+        for fan in ordered_fans[1:]:
+            replacement = len(vertices)
+            vertices.append(np.asarray(mesh.vertices[vertex_id], dtype=float).tolist())
+            for face_id in fan:
+                faces[face_id, faces[face_id] == vertex_id] = replacement
+
+    repaired = Trimesh(
+        vertices=np.asarray(vertices, dtype=float),
+        faces=faces,
+        process=False,
+    )
+    repaired.remove_unreferenced_vertices()
+    repaired.fix_normals(multibody=True)
+    return repaired
 
 
 def build_route_mesh(points: np.ndarray, route_width_mm: float, height_mm: float) -> Trimesh:
@@ -142,6 +205,14 @@ def route_mesh_from_polygon(polygon, height_mm: float, z_offset: float = 0.0) ->
     """
     mesh = extrude_polygon(polygon, height_mm)
     mesh.apply_translation((0.0, 0.0, z_offset))
+    valid_faces = np.isfinite(mesh.area_faces) & (mesh.area_faces > 1e-12)
+    if not np.all(valid_faces):
+        mesh.update_faces(valid_faces)
+        mesh.remove_unreferenced_vertices()
+    if len(mesh.faces) == 0:
+        raise ValueError("Polygon extrusion produced no valid faces")
+    if not mesh.is_watertight:
+        raise ValueError("Polygon extrusion produced a non-watertight mesh")
     return mesh
 
 
@@ -269,7 +340,10 @@ def center_meshes_to_base(meshes: list[Trimesh], width_mm: float, height_mm: flo
         mesh.apply_translation((offset_x, offset_y, 0.0))
 
 
-def _apply_3mf_materials(output_path: Path) -> None:
+def _apply_3mf_materials(
+    output_path: Path,
+    materials: dict[str, tuple[str, str]],
+) -> None:
     """Inject slicer-visible materials without reserializing the model XML.
 
     Some slicers reject otherwise valid 3MF files when the core namespace is rewritten
@@ -296,7 +370,7 @@ def _apply_3mf_materials(output_path: Path) -> None:
     material_id = max(used_ids, default=0) + 1
     material_xml = [f'<basematerials id="{material_id}">']
     material_indices: dict[str, int] = {}
-    for index, (object_name, (material_name, display_color)) in enumerate(MESH_MATERIALS.items()):
+    for index, (object_name, (material_name, display_color)) in enumerate(materials.items()):
         material_xml.append(
             f'<base name="{material_name}" displaycolor="{display_color}" />'
         )
@@ -379,59 +453,98 @@ def export_3mf(
     roads_mesh: Trimesh | None = None,
     buildings_mesh: Trimesh | None = None,
     water_mesh: Trimesh | None = None,
+    landscape_mesh: Trimesh | None = None,
+    style_profile: str = "urban",
+    color_preset: str | None = None,
+    layer_colors: dict[str, str] | None = None,
 ) -> None:
     from trimesh.exchange.export import export_mesh
 
-    from .printability import audit_printability
+    from .printability import audit_printability, remove_small_floating_components
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     meshes = []
 
+    if style_profile not in {"urban", "landscape"}:
+        raise ValueError(f"Unsupported style profile: {style_profile}")
+    landscape_style = style_profile == "landscape"
+    colors = resolve_palette(style_profile, color_preset, layer_colors)
+    materials: dict[str, tuple[str, str]] = {}
+
+    layer_meshes = {
+        "base": base_mesh,
+        "route": route_mesh,
+        "roads": roads_mesh,
+        "buildings": buildings_mesh,
+        "water": water_mesh,
+        "landscape": landscape_mesh,
+    }
+    cleanup_limits = {"buildings": 12, "water": 8, "landscape": 16}
+    removed_shells = {layer: 0 for layer in cleanup_limits}
     if base_mesh is not None:
+        changed = True
+        while changed:
+            changed = False
+            for layer, maximum_faces in cleanup_limits.items():
+                cleaned, removed = remove_small_floating_components(
+                    layer_meshes,
+                    layer,
+                    maximum_faces=maximum_faces,
+                )
+                layer_meshes[layer] = cleaned
+                removed_shells[layer] += removed
+                changed = changed or bool(removed)
+    buildings_mesh = layer_meshes["buildings"]
+    water_mesh = layer_meshes["water"]
+    landscape_mesh = layer_meshes["landscape"]
+    for layer, removed in removed_shells.items():
+        if removed:
+            logging.warning(
+                "Removed %d tiny unsupported %s shell(s) before export",
+                removed,
+                layer,
+            )
+
+    def color_mesh(mesh: Trimesh, name: str, label: str, layer: str) -> None:
         try:
-            base_mesh.metadata = base_mesh.metadata or {}
+            mesh.metadata = mesh.metadata or {}
         except Exception:
-            base_mesh.metadata = {}
-        base_mesh.metadata["name"] = "Base_White"
-        base_mesh.visual.face_colors = MESH_COLORS["base"]
-        meshes.append(base_mesh)
+            mesh.metadata = {}
+        mesh.metadata["name"] = name
+        mesh.visual.face_colors = np.asarray(rgba(colors[layer]), dtype=np.uint8)
+        materials[name] = (label, colors[layer] + "FF")
+        meshes.append(mesh)
+
+    if base_mesh is not None:
+        color_mesh(
+            base_mesh,
+            "Base_Bone" if landscape_style else "Base_White",
+            "Base",
+            "base",
+        )
 
     if route_mesh is not None:
-        try:
-            route_mesh.metadata = route_mesh.metadata or {}
-        except Exception:
-            route_mesh.metadata = {}
-        route_mesh.metadata["name"] = "Route_Accent"
-        route_mesh.visual.face_colors = MESH_COLORS["route"]
-        meshes.append(route_mesh)
+        color_mesh(route_mesh, "Route_Accent", "Route", "route")
 
     if roads_mesh is not None:
-        try:
-            roads_mesh.metadata = roads_mesh.metadata or {}
-        except Exception:
-            roads_mesh.metadata = {}
-        roads_mesh.metadata["name"] = "Roads_Black"
-        roads_mesh.visual.face_colors = MESH_COLORS["roads"]
-        meshes.append(roads_mesh)
+        color_mesh(roads_mesh, "Roads_Black", "Roads", "roads")
 
     if buildings_mesh is not None:
-        try:
-            buildings_mesh.metadata = buildings_mesh.metadata or {}
-        except Exception:
-            buildings_mesh.metadata = {}
-        buildings_mesh.metadata["name"] = "Buildings_Verification"
-        buildings_mesh.visual.face_colors = MESH_COLORS["buildings"]
-        meshes.append(buildings_mesh)
+        color_mesh(
+            buildings_mesh, "Buildings_Verification", "Buildings", "buildings"
+        )
 
     if water_mesh is not None:
-        try:
-            water_mesh.metadata = water_mesh.metadata or {}
-        except Exception:
-            water_mesh.metadata = {}
-        water_mesh.metadata["name"] = "Water_Gray"
-        water_mesh.visual.face_colors = MESH_COLORS["water"]
-        meshes.append(water_mesh)
+        color_mesh(
+            water_mesh,
+            "Water_Blue" if landscape_style else "Water_Gray",
+            "Water",
+            "water",
+        )
+
+    if landscape_mesh is not None:
+        color_mesh(landscape_mesh, "Terrain_Green", "Landscape", "landscape")
 
     audit_printability(
         {
@@ -440,6 +553,7 @@ def export_3mf(
             "roads": roads_mesh,
             "buildings": buildings_mesh,
             "water": water_mesh,
+            "landscape": landscape_mesh,
         }
     ).raise_for_errors()
 
@@ -448,4 +562,4 @@ def export_3mf(
         output_path,
         file_type="3mf",
     )
-    _apply_3mf_materials(output_path)
+    _apply_3mf_materials(output_path, materials)

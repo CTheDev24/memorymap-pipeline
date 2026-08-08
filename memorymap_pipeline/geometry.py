@@ -25,7 +25,12 @@ def buffered_polygon_from_points(points: np.ndarray, route_width_mm: float) -> P
     radius = float(route_width_mm) / 2.0
     # Use a moderate resolution for round caps; join_style=1 (mitre) to preserve corners
     poly = line.buffer(radius, resolution=16, cap_style=2, join_style=1)
-    return poly
+    # Dense GPX recordings can create thousands of sub-pixel boundary segments.
+    # Trimesh's polygon triangulation may turn those into zero-area faces and open
+    # the extrusion during cleanup. This tolerance is at most 1/200 of the route
+    # width, well below printable resolution, while preserving route topology.
+    tolerance = max(1e-4, float(route_width_mm) / 200.0)
+    return poly.simplify(tolerance, preserve_topology=True)
 
 
 def validate_polygon(polygon: Polygon) -> Tuple[bool, str]:

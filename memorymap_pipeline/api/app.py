@@ -137,7 +137,7 @@ def create_app(workspace: str | Path | None = None) -> FastAPI:
     root = Path(workspace) if workspace else Path(tempfile.mkdtemp(prefix="memorymap-api-"))
     root.mkdir(parents=True, exist_ok=True)
     state = ApiState(root)
-    app = FastAPI(title="MemoryMap API", version="2.0.0")
+    app = FastAPI(title="MemoryMap API", version="2.1.0")
 
     @app.on_event("shutdown")
     def cleanup() -> None:

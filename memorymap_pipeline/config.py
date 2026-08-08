@@ -6,6 +6,24 @@ from pathlib import Path
 from typing import Any
 
 
+ROUTE_LAYER_HEIGHT_SLOPES = {
+    0.08: 0.16,
+    0.12: 0.24,
+    0.16: 0.30,
+    0.20: 0.35,
+    0.24: 0.40,
+    0.28: 0.45,
+}
+
+
+def route_slope_for_layer_height(layer_height_mm: float) -> float:
+    """Return the tested route profile slope nearest a slicer's layer height."""
+    if layer_height_mm <= 0.0:
+        raise ValueError("Layer height must be positive")
+    selected = min(ROUTE_LAYER_HEIGHT_SLOPES, key=lambda value: abs(value - layer_height_mm))
+    return ROUTE_LAYER_HEIGHT_SLOPES[selected]
+
+
 DEFAULT_CONFIG = {
     "portrait": {"map_width": 190.0, "map_height": 240.0},
     "landscape": {"map_width": 240.0, "map_height": 190.0},
@@ -13,15 +31,36 @@ DEFAULT_CONFIG = {
     "route_width": 1.2,
     # Route tops share one elevation across their width and smooth only along travel.
     "route_terrain_smoothing_distance_mm": 1.5,
+    "route_layer_height_mm": 0.16,
     "route_mesh_max_edge_mm": 2.4,
     "base_thickness": 1.6,
     # overlap raised features into the base; feature heights remain visible heights
     "feature_embed_depth": 0.2,
     "margin": 5.0,
+    # Optional coplanar perimeter trim. Desktop launch defaults to borderless.
+    "flat_border_enabled": False,
     # terrain/water scaffold (disabled until selected by a client)
     "terrain_enabled": False,
     "terrain_provider": "usgs-3dep",
-    "terrain_grid_size": 96,
+    # None selects a rectangular print-resolution-aware DEM grid. An integer
+    # remains a supported explicit square-grid override for repeatable fixtures.
+    "terrain_grid_size": None,
+    "terrain_target_cell_size_mm": 0.55,
+    "terrain_grid_max_samples": 180_000,
+    "terrain_grid_max_dimension": 512,
+    "style_profile": "urban",
+    # Landscape surfaces follow the Map2Model-style bone substrate plus skins.
+    # The denser landscape grid retains print-scale drainage and ridge detail.
+    "landscape_terrain_target_cell_size_mm": 0.4,
+    "landscape_terrain_grid_max_samples": 240_000,
+    "landscape_terrain_grid_max_dimension": 640,
+    # Rugged landscape maps still use at least this fraction of the selected
+    # maximum relief; otherwise a requested 12 mm can silently become ~9 mm.
+    "landscape_minimum_relief_ratio": 0.75,
+    "surface_skin_thickness_mm": 0.4,
+    "landscape_water_visible_thickness_mm": 0.4,
+    "minimum_waterway_width_mm": 0.8,
+    "exposed_land_enabled": True,
     "terrain_request_timeout_seconds": 20.0,
     "terrain_request_attempts": 3,
     "terrain_retry_backoff_seconds": 0.5,
@@ -32,6 +71,8 @@ DEFAULT_CONFIG = {
     "terrain_flat_fallback": True,
     "terrain_max_relief_mm": 3.0,
     "terrain_min_relief_mm": 1.5,
+    # Values below 1.0 expand subtle lowland relief while preserving peaks.
+    "terrain_detail_gamma": 0.75,
     "water_enabled": False,
     "water_recess_mm": 0.4,
     # 0.2 mm remains exclusively gray above 0.4 mm embedded in white support
@@ -82,21 +123,25 @@ DEFAULT_CONFIG = {
         "track": 0.7,
     },
     # which highway types to keep by default
-    "road_types": ["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link", "residential", "living_street", "unclassified", "service", "pedestrian", "cycleway", "footway", "path", "track"],
-    # "all" includes pedestrian, cycle, path, and track networks; road_types controls output.
+    "road_types": ["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link", "residential", "living_street", "unclassified", "service", "cycleway"],
+    # Suppress only parking-lot circulation. Driveways, restricted access,
+    # and other service links can be structurally important to urban road meshes.
+    "excluded_road_service_types": ["parking_aisle"],
+    "excluded_road_access": [],
+    # "all" keeps complete OSM tags available; road_types controls output.
     "road_network_type": "all",
     # debug plotting for roads
     "roads_debug": False,
     # radius (meters) to query OSM around route center when fetching roads
     "road_query_radius_m": 1000,
     # building footprint generation
-    # adaptive hard cap for visible building height (user-adjustable up to 1.25 inches)
-    "max_print_height_mm": 25.0,
+    # architectural-relief ceiling (user-adjustable up to 1.25 inches)
+    "max_print_height_mm": 30.0,
     "building_vertical_exaggeration": 1.0,
     # prevent unsupported min_height volumes in support-free map prints
     "extend_elevated_building_parts_to_ground": True,
-    # minimum extrusion so 1-storey buildings remain visible
-    "min_building_height_mm": 0.4,
+    # minimum visible extrusion so dense urban footprints read as buildings
+    "min_building_height_mm": 1.2,
     # fallback real-world height when OSM height/levels tags are absent (metres, ~2 storeys)
     "building_default_height_m": 6.0,
     # metres per floor when deriving height from building:levels

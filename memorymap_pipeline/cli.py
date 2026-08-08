@@ -175,7 +175,7 @@ def main() -> None:
             z_offset=z_offset,
             embed_depth_mm=feature_embed_mm,
             max_print_height_mm=config.get("max_print_height_mm", 31.75),
-            min_building_height_mm=config.get("min_building_height_mm", 0.4),
+            min_building_height_mm=config.get("min_building_height_mm", 1.2),
             building_default_height_m=config.get("building_default_height_m", 6.0),
             building_levels_to_m=config.get("building_levels_to_m", 3.0),
             building_max_real_height_m=config.get("building_max_real_height_m", 400.0),

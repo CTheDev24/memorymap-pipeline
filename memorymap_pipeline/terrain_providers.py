@@ -106,7 +106,15 @@ class Usgs3depProvider:
             raise RuntimeError(
                 f"USGS 3DEP returned grid {elevations.shape}; expected {(rows, columns)}"
             )
-        elevations[~np.isfinite(elevations) | (elevations < -1e20)] = np.nan
+        # ArcGIS occasionally emits both negative and positive float sentinels
+        # (for example ~2.5e38) without declaring a TIFF no-data value.  Either
+        # polarity would otherwise become a full-height needle after relief
+        # normalization and would also be inherited by routes and surface skins.
+        elevations[
+            ~np.isfinite(elevations)
+            | (elevations < -12_000.0)
+            | (elevations > 12_000.0)
+        ] = np.nan
         return ElevationGrid(elevations, south, north, west, east, self.name)
 
 TERRARIUM_TILE_URL = (

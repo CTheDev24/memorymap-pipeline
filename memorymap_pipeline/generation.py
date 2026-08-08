@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 import logging
 import os
@@ -11,10 +11,11 @@ from typing import Any, Callable
 import numpy as np
 from shapely import contains_xy
 from shapely.geometry import LineString, box
+from shapely.ops import unary_union
 from trimesh.util import concatenate
 
 from .buildings import download_and_build_buildings
-from .config import DEFAULT_CONFIG
+from .config import DEFAULT_CONFIG, route_slope_for_layer_height
 from .geometry import buffered_polygon_from_points, repair_polygon
 from .gpx_loader import Route
 from .map_frame import MapFrame
@@ -26,18 +27,28 @@ from .mesh import (
     route_mesh_from_polygon,
 )
 from .roads import download_and_build_roads
+from .surface_layers import (
+    build_conformal_surface_skin,
+    download_exposed_land_polygons,
+    landscape_surface_region,
+    recess_terrain_surface,
+)
 from .terrain import (
     ElevationGrid,
     build_terrain_mesh,
     drape_mesh,
     drape_road_mesh,
     drape_route_mesh,
+    elevation_grid_for_frame,
+    terrain_grid_for_print,
+    terrain_mesh_heights,
     terrain_surface_from_grid,
 )
 from .terrain_providers import TerrariumProvider, Usgs3depProvider
 from .water import (
+    WaterFeature,
+    build_printable_vector_water_mesh,
     build_terrain_mesh_with_water,
-    build_vector_water_mesh,
     download_water_polygons,
     prepare_water_bodies,
 )
@@ -95,6 +106,7 @@ class GenerationRequest:
     elevation_grid: ElevationGrid | None = None
     water_polygons: list[Any] | None = None
     water_file: str | Path | None = None
+    landcover_file: str | Path | None = None
 
 
 @dataclass
@@ -107,6 +119,7 @@ class GenerationResult:
     roads_mesh: Any | None = None
     buildings_mesh: Any | None = None
     water_mesh: Any | None = None
+    landscape_mesh: Any | None = None
 
     @property
     def meshes(self) -> dict[str, Any]:
@@ -118,6 +131,7 @@ class GenerationResult:
                 "roads": self.roads_mesh,
                 "buildings": self.buildings_mesh,
                 "water": self.water_mesh,
+                "landscape": self.landscape_mesh,
             }.items()
             if mesh is not None
         }
@@ -135,33 +149,62 @@ def _merged_config(overrides: dict[str, Any]) -> dict[str, Any]:
 
 def _query_bounds(frame: MapFrame) -> tuple[tuple[float, float, float, float], float]:
     radius = math.hypot(frame.coverage_width_m, frame.coverage_height_m) / 2.0
-    lat_delta = radius / 111319.49
-    lon_delta = radius / (111319.49 * max(1e-6, math.cos(math.radians(frame.center_lat))))
+    margin = frame.margin_mm
+    x = np.asarray(
+        [margin, frame.print_width_mm - margin] * 2,
+        dtype=float,
+    )
+    y = np.asarray(
+        [
+            margin,
+            margin,
+            frame.print_height_mm - margin,
+            frame.print_height_mm - margin,
+        ],
+        dtype=float,
+    )
+    latitudes, longitudes = frame.print_to_lonlat(x, y)
     return (
-        frame.center_lat - lat_delta,
-        frame.center_lat + lat_delta,
-        frame.center_lon - lon_delta,
-        frame.center_lon + lon_delta,
+        float(np.min(latitudes)),
+        float(np.max(latitudes)),
+        float(np.min(longitudes)),
+        float(np.max(longitudes)),
     ), radius
+
+
+def _frame_for_border(
+    frame: MapFrame,
+    flat_border_enabled: bool,
+) -> MapFrame:
+    """Use the selected frame margin only when a physical trim is requested."""
+    if flat_border_enabled or frame.margin_mm == 0.0:
+        return frame
+    return replace(frame, margin_mm=0.0)
 
 
 def _route_mesh(polygon: Any, height_mm: float, z_offset: float) -> Any | None:
     if polygon.is_empty:
         return None
     parts = list(polygon.geoms) if polygon.geom_type == "MultiPolygon" else [polygon]
-    meshes = [route_mesh_from_polygon(part, height_mm, z_offset) for part in parts if not part.is_empty]
+    meshes = []
+    for part in parts:
+        if part.is_empty:
+            continue
+        try:
+            meshes.append(route_mesh_from_polygon(part, height_mm, z_offset))
+        except Exception as exc:
+            logging.warning("Skipping invalid route polygon during extrusion: %s", exc)
     if not meshes:
         return None
     return meshes[0] if len(meshes) == 1 else concatenate(meshes)
 
 
 def _feature_support_sampler(
-    terrain_surface: Any, water_bodies: list[Any]
+    terrain_surface: Any,
+    water_bodies: list[Any],
+    flat_margin_mm: float = 0.0,
 ) -> Callable[[Any, Any], np.ndarray]:
     """Sample the actual printable surface, including recessed water tops."""
-    if not water_bodies:
-        return terrain_surface.sample
-
     buffered_water = [
         (body.geometry.buffer(1e-7), float(body.level_mm)) for body in water_bodies
     ]
@@ -169,7 +212,15 @@ def _feature_support_sampler(
     def sample(x_mm, y_mm):
         x = np.asarray(x_mm, dtype=float)
         y = np.asarray(y_mm, dtype=float)
-        heights = np.asarray(terrain_surface.sample(x, y), dtype=float).copy()
+        heights = np.asarray(
+            terrain_mesh_heights(
+                terrain_surface,
+                x,
+                y,
+                flat_margin_mm,
+            ),
+            dtype=float,
+        ).copy()
         for geometry, level in buffered_water:
             heights = np.where(contains_xy(geometry, x, y), level, heights)
         return heights
@@ -181,6 +232,101 @@ def _mesh_stats(mesh: Any | None) -> dict[str, int] | None:
     if mesh is None:
         return None
     return {"vertices": int(len(mesh.vertices)), "faces": int(len(mesh.faces))}
+
+
+def _mesh_edge_defects(mesh: Any) -> tuple[int, int]:
+    """Return open and over-connected edge counts for an assembled mesh."""
+    edge_counts = np.bincount(mesh.edges_unique_inverse)
+    return (
+        int(np.count_nonzero(edge_counts == 1)),
+        int(np.count_nonzero(edge_counts > 2)),
+    )
+
+
+def _continuous_water_support_surface(
+    surface: Any,
+    water_bodies: list[Any],
+    water_mesh_thickness_mm: float,
+    support_overlap_mm: float,
+) -> Any:
+    """Flatten a continuous height field beneath vector water bodies.
+
+    This is the topology-safe fallback for a coastal partition that cannot be
+    welded manifoldly. It preserves the intended water/body overlap without
+    allowing DEM terrain (especially interpolated offshore values) to punch
+    through a flat ocean surface.
+    """
+    heights = np.asarray(surface.heights_mm, dtype=float).copy()
+    rows, columns = heights.shape
+    xs = np.linspace(0.0, surface.width_mm, columns)
+    ys = np.linspace(surface.height_mm, 0.0, rows)
+    x_grid, y_grid = np.meshgrid(xs, ys)
+    for body in water_bodies:
+        support_level = (
+            float(body.level_mm) - water_mesh_thickness_mm + support_overlap_mm
+        )
+        region = body.geometry.buffer(1e-7)
+        heights[contains_xy(region, x_grid, y_grid)] = support_level
+    return replace(surface, heights_mm=heights)
+
+
+def _restore_hydroflattened_land(
+    surface: Any,
+    water_geometries: list[Any],
+) -> tuple[Any, int]:
+    """Inpaint an exact DEM water plateau where it falls outside mapped water."""
+    valid_water = [geometry for geometry in water_geometries if not geometry.is_empty]
+    if not valid_water:
+        return surface, 0
+    water_region = unary_union(valid_water).buffer(1e-7)
+    heights = np.asarray(surface.heights_mm, dtype=float)
+    rows, columns = heights.shape
+    xs = np.linspace(0.0, surface.width_mm, columns)
+    ys = np.linspace(surface.height_mm, 0.0, rows)
+    x_grid, y_grid = np.meshgrid(xs, ys)
+    water_mask = np.asarray(contains_xy(water_region, x_grid, y_grid), dtype=bool)
+    if np.count_nonzero(water_mask) < max(16, heights.size // 200):
+        return surface, 0
+
+    rounded = np.round(heights[water_mask], decimals=9)
+    levels, counts = np.unique(rounded, return_counts=True)
+    plateau_level = float(levels[int(np.argmax(counts))])
+    if int(np.max(counts)) < max(16, len(rounded) // 20):
+        return surface, 0
+    repair = np.isclose(heights, plateau_level, atol=5e-9, rtol=0.0) & ~water_mask
+    repair_count = int(np.count_nonzero(repair))
+    if repair_count < max(16, heights.size // 2000):
+        return surface, 0
+
+    repaired = heights.copy()
+    known = ~repair & ~water_mask
+    remaining = repair.copy()
+    for _ in range(rows + columns):
+        if not np.any(remaining):
+            break
+        totals = np.zeros_like(repaired)
+        neighbour_counts = np.zeros_like(repaired, dtype=np.int16)
+        for row_offset, column_offset in ((-1, 0), (0, -1), (0, 1), (1, 0)):
+            source_rows = slice(max(0, -row_offset), rows - max(0, row_offset))
+            source_columns = slice(max(0, -column_offset), columns - max(0, column_offset))
+            target_rows = slice(max(0, row_offset), rows - max(0, -row_offset))
+            target_columns = slice(max(0, column_offset), columns - max(0, -column_offset))
+            neighbour_known = known[source_rows, source_columns]
+            totals[target_rows, target_columns] += np.where(
+                neighbour_known, repaired[source_rows, source_columns], 0.0
+            )
+            neighbour_counts[target_rows, target_columns] += neighbour_known
+        fillable = remaining & (neighbour_counts > 0)
+        if not np.any(fillable):
+            break
+        repaired[fillable] = totals[fillable] / neighbour_counts[fillable]
+        known[fillable] = True
+        remaining[fillable] = False
+
+    filled_count = repair_count - int(np.count_nonzero(remaining))
+    if filled_count == 0:
+        return surface, 0
+    return replace(surface, heights_mm=repaired), filled_count
 
 
 def generate_memory_map(
@@ -202,8 +348,30 @@ def generate_memory_map(
 
     progress(0, "Preparing print frame")
     _configure_packaged_networking()
-    frame = request.frame
     config = _merged_config(request.config)
+    flat_border_enabled = bool(config.get("flat_border_enabled", False))
+    frame = _frame_for_border(request.frame, flat_border_enabled)
+    style_profile = str(config.get("style_profile", "urban"))
+    if style_profile not in {"urban", "landscape"}:
+        raise ValueError(f"Unsupported style profile: {style_profile}")
+    landscape_style = style_profile == "landscape"
+    surface_skin_thickness_mm = float(
+        config.get("surface_skin_thickness_mm", 0.4)
+    )
+    water_mesh_thickness_mm = float(config.get("water_mesh_thickness_mm", 0.6))
+    water_support_overlap_mm = float(config.get("water_support_overlap_mm", 0.4))
+    if landscape_style:
+        landscape_water_visible_mm = float(
+            config.get("landscape_water_visible_thickness_mm", 0.4)
+        )
+        if not 0 < landscape_water_visible_mm <= water_mesh_thickness_mm:
+            raise ValueError(
+                "Landscape water visible thickness must be positive and no greater "
+                "than the water mesh thickness"
+            )
+        water_support_overlap_mm = (
+            water_mesh_thickness_mm - landscape_water_visible_mm
+        )
     output_path = Path(request.output_path)
     scaled = frame.transform_points(request.route.points)
     printable = box(
@@ -221,10 +389,47 @@ def generate_memory_map(
     bbox, radius = _query_bounds(frame)
     transform = {"map_frame": frame}
     terrain_surface = None
+    terrain_grid_spec = None
     water_mesh = None
+    landscape_mesh = None
     water_bodies = []
+    water_geometries: list[Any] = []
+    linear_water_geometries: list[Any] = []
+    linear_water_region = None
     if request.include_base and bool(config.get("terrain_enabled", False)):
-        grid_size = int(config.get("terrain_grid_size", 96))
+        terrain_target_cell_size_mm = float(
+            config.get(
+                "landscape_terrain_target_cell_size_mm"
+                if landscape_style
+                else "terrain_target_cell_size_mm",
+                0.4 if landscape_style else 0.55,
+            )
+        )
+        terrain_grid_max_samples = int(
+            config.get(
+                "landscape_terrain_grid_max_samples"
+                if landscape_style
+                else "terrain_grid_max_samples",
+                240_000 if landscape_style else 180_000,
+            )
+        )
+        terrain_grid_max_dimension = int(
+            config.get(
+                "landscape_terrain_grid_max_dimension"
+                if landscape_style
+                else "terrain_grid_max_dimension",
+                640 if landscape_style else 512,
+            )
+        )
+        terrain_grid_spec = terrain_grid_for_print(
+            frame.print_width_mm,
+            frame.print_height_mm,
+            override=config.get("terrain_grid_size"),
+            target_cell_size_mm=terrain_target_cell_size_mm,
+            maximum_samples=terrain_grid_max_samples,
+            maximum_dimension=terrain_grid_max_dimension,
+        )
+        grid_size = terrain_grid_spec.shape
         elevation_grid = request.elevation_grid
         if elevation_grid is None:
             if config.get("terrain_provider", "usgs-3dep") != "usgs-3dep":
@@ -237,7 +442,7 @@ def generate_memory_map(
             )
             try:
                 elevation_grid = provider.fetch(
-                    bbox, (grid_size, grid_size), cache_dir
+                    bbox, grid_size, cache_dir
                 )
             except Exception as usgs_exc:
                 warnings.append(
@@ -255,7 +460,7 @@ def generate_memory_map(
                 )
                 try:
                     elevation_grid = global_provider.fetch(
-                        bbox, (grid_size, grid_size), cache_dir
+                        bbox, grid_size, cache_dir
                     )
                 except Exception as fallback_exc:
                     if not bool(config.get("terrain_flat_fallback", True)):
@@ -269,25 +474,46 @@ def generate_memory_map(
                     )
                     south, north, west, east = bbox
                     elevation_grid = ElevationGrid(
-                        np.zeros((grid_size, grid_size), dtype=float),
+                        np.zeros(grid_size, dtype=float),
                         south,
                         north,
                         west,
                         east,
                         "flat-fallback",
                     )
+        else:
+            provided_rows, provided_columns = elevation_grid.elevations_m.shape
+            terrain_grid_spec = terrain_grid_for_print(
+                frame.print_width_mm,
+                frame.print_height_mm,
+                override=(provided_rows, provided_columns),
+            )
+        elevation_grid = elevation_grid_for_frame(
+            elevation_grid,
+            frame,
+            terrain_grid_spec.shape,
+        )
+        maximum_relief_mm = float(config.get("terrain_max_relief_mm", 3.0))
+        minimum_relief_mm = float(config.get("terrain_min_relief_mm", 1.5))
+        if landscape_style:
+            minimum_relief_mm = max(
+                minimum_relief_mm,
+                maximum_relief_mm
+                * float(config.get("landscape_minimum_relief_ratio", 0.75)),
+            )
         terrain_surface = terrain_surface_from_grid(
             elevation_grid,
             frame.print_width_mm,
             frame.print_height_mm,
             math.hypot(frame.coverage_width_m, frame.coverage_height_m),
-            float(config.get("terrain_max_relief_mm", 3.0)),
-            float(config.get("terrain_min_relief_mm", 1.5)),
+            maximum_relief_mm,
+            minimum_relief_mm,
+            float(config.get("terrain_detail_gamma", 0.75)),
         )
         if bool(config.get("water_enabled", False)):
             water_polygons = request.water_polygons
             if water_polygons is None:
-                water_polygons = download_water_polygons(
+                downloaded_water = download_water_polygons(
                     bbox=bbox,
                     center_lat=frame.center_lat,
                     center_lon=frame.center_lon,
@@ -296,37 +522,188 @@ def generate_memory_map(
                     map_height_mm=frame.print_height_mm,
                     radius_m=radius,
                     water_file=request.water_file,
+                    minimum_waterway_width_mm=float(
+                        config.get("minimum_waterway_width_mm", 0.8)
+                    ),
+                    include_metadata=landscape_style,
                 )
+                if landscape_style:
+                    water_features = [
+                        feature
+                        for feature in downloaded_water
+                        if isinstance(feature, WaterFeature)
+                    ]
+                    water_geometries = [
+                        feature.geometry for feature in water_features
+                    ]
+                    linear_water_geometries = [
+                        feature.geometry
+                        for feature in water_features
+                        if feature.kind == "waterway"
+                    ]
+                    water_polygons = [
+                        feature.geometry
+                        for feature in water_features
+                        if feature.kind != "waterway"
+                    ]
+                else:
+                    water_polygons = list(downloaded_water)
+                    water_geometries = list(water_polygons)
+            else:
+                water_polygons = list(water_polygons)
+                water_geometries = list(water_polygons)
+            if landscape_style and water_geometries:
+                terrain_surface, restored_land_samples = _restore_hydroflattened_land(
+                    terrain_surface, water_geometries
+                )
+                if restored_land_samples:
+                    warnings.append(
+                        "Restored terrain relief for "
+                        f"{restored_land_samples:,} hydro-flattened coastal land samples."
+                    )
             if water_polygons:
                 water_bodies = prepare_water_bodies(
                     water_polygons,
                     terrain_surface,
                     float(config.get("water_recess_mm", 0.4)),
+                    surface_offset_mm=(
+                        surface_skin_thickness_mm if landscape_style else 0.0
+                    ),
                     minimum_height_mm=-request.base_thickness_mm
                     + float(config.get("water_base_skin_mm", 0.4))
-                    + float(config.get("water_mesh_thickness_mm", 0.6)),
+                    + water_mesh_thickness_mm,
                     shoreline_tolerance_mm=float(
                         config.get("water_shoreline_tolerance_mm", 0.1)
                     ),
                     margin_mm=frame.margin_mm,
                 )
-                water_mesh = build_vector_water_mesh(
+                water_mesh, water_bodies = build_printable_vector_water_mesh(
                     water_bodies,
-                    float(config.get("water_mesh_thickness_mm", 0.6)),
+                    water_mesh_thickness_mm,
                 )
-            else:
+            if linear_water_geometries:
+                linear_water_region = (
+                    unary_union(linear_water_geometries)
+                    .buffer(0)
+                    .intersection(printable)
+                )
+                if water_bodies:
+                    linear_water_region = linear_water_region.difference(
+                        unary_union([body.geometry for body in water_bodies])
+                    ).buffer(0)
+                linear_visible_mm = (
+                    landscape_water_visible_mm
+                    if landscape_style
+                    else surface_skin_thickness_mm
+                )
+                linear_surface_offset_mm = (
+                    surface_skin_thickness_mm
+                    - float(config.get("water_recess_mm", 0.4))
+                    - linear_visible_mm
+                )
+                linear_water_mesh = build_conformal_surface_skin(
+                    terrain_surface,
+                    linear_water_region,
+                    visible_thickness_mm=linear_visible_mm,
+                    embed_depth_mm=water_mesh_thickness_mm - linear_visible_mm,
+                    surface_offset_mm=linear_surface_offset_mm,
+                    clip_region=printable,
+                    flat_margin_mm=frame.margin_mm,
+                )
+                if linear_water_mesh is not None:
+                    water_mesh = (
+                        linear_water_mesh
+                        if water_mesh is None
+                        else concatenate((water_mesh, linear_water_mesh))
+                    )
+            if not water_geometries:
                 warnings.append("Water is enabled but no water polygons were supplied.")
-        base_mesh = (
-            build_terrain_mesh_with_water(
+        base_terrain_surface = terrain_surface
+        if linear_water_region is not None and not linear_water_region.is_empty:
+            conformal_support_offset_mm = (
+                surface_skin_thickness_mm
+                - float(config.get("water_recess_mm", 0.4))
+                - (
+                    landscape_water_visible_mm
+                    if landscape_style
+                    else surface_skin_thickness_mm
+                )
+            )
+            base_terrain_surface = recess_terrain_surface(
                 terrain_surface,
+                linear_water_region,
+                max(0.0, -conformal_support_offset_mm),
+            )
+        if water_bodies:
+            base_mesh = build_terrain_mesh_with_water(
+                base_terrain_surface,
                 request.base_thickness_mm,
                 water_bodies,
-                float(config.get("water_mesh_thickness_mm", 0.6)),
-                float(config.get("water_support_overlap_mm", 0.4)),
+                water_mesh_thickness_mm,
+                water_support_overlap_mm,
+                flat_margin_mm=frame.margin_mm,
             )
-            if water_bodies
-            else build_terrain_mesh(terrain_surface, request.base_thickness_mm)
-        )
+            open_edges, overconnected_edges = _mesh_edge_defects(base_mesh)
+            if open_edges or overconnected_edges:
+                logging.info(
+                    "Detailed water recess produced a non-manifold structural base "
+                    "(%d open and %d over-connected edges); using continuous terrain "
+                    "support instead.",
+                    open_edges,
+                    overconnected_edges,
+                )
+                continuous_support_surface = _continuous_water_support_surface(
+                    base_terrain_surface,
+                    water_bodies,
+                    water_mesh_thickness_mm,
+                    water_support_overlap_mm,
+                )
+                base_mesh = build_terrain_mesh(
+                    continuous_support_surface,
+                    request.base_thickness_mm,
+                    flat_margin_mm=frame.margin_mm,
+                )
+        else:
+            base_mesh = build_terrain_mesh(
+                base_terrain_surface,
+                request.base_thickness_mm,
+                flat_margin_mm=frame.margin_mm,
+            )
+        if landscape_style:
+            exposed_land = (
+                download_exposed_land_polygons(
+                    bbox=bbox,
+                    center_lat=frame.center_lat,
+                    center_lon=frame.center_lon,
+                    transform=transform,
+                    map_width_mm=frame.print_width_mm,
+                    map_height_mm=frame.print_height_mm,
+                    radius_m=radius,
+                    landcover_file=request.landcover_file,
+                )
+                if bool(config.get("exposed_land_enabled", True))
+                else []
+            )
+            if bool(config.get("exposed_land_enabled", True)) and not exposed_land:
+                warnings.append(
+                    "No mapped beach, sand, rock, or other exposed-land polygons "
+                    "were returned; the landscape surface remains green in those areas."
+                )
+            green_region = landscape_surface_region(
+                frame.print_width_mm,
+                frame.print_height_mm,
+                frame.margin_mm,
+                water_geometries=water_geometries,
+                exposed_geometries=exposed_land,
+            )
+            landscape_mesh = build_conformal_surface_skin(
+                terrain_surface,
+                green_region,
+                visible_thickness_mm=surface_skin_thickness_mm,
+                embed_depth_mm=float(config.get("feature_embed_depth", 0.2)),
+                clip_region=printable,
+                flat_margin_mm=frame.margin_mm,
+            )
     else:
         base_mesh = (
             build_base_plate(frame.print_width_mm, frame.print_height_mm, request.base_thickness_mm)
@@ -334,7 +711,11 @@ def generate_memory_map(
             else None
         )
     feature_support_at = (
-        _feature_support_sampler(terrain_surface, water_bodies)
+        _feature_support_sampler(
+            terrain_surface,
+            water_bodies,
+            frame.margin_mm,
+        )
         if terrain_surface is not None
         else None
     )
@@ -359,6 +740,14 @@ def generate_memory_map(
                 visible_height_mm=request.route_height_mm,
                 smoothing_distance_mm=float(
                     config.get("route_terrain_smoothing_distance_mm", 1.5)
+                ),
+                maximum_profile_slope=float(
+                    config.get(
+                        "route_profile_max_slope",
+                        route_slope_for_layer_height(
+                            float(config.get("route_layer_height_mm", 0.16))
+                        ),
+                    )
                 ),
             )
         if route_mesh is None:
@@ -389,6 +778,11 @@ def generate_memory_map(
             radius_m=radius,
             roads_file=str(request.roads_file) if request.roads_file else None,
             terrain_smoothing_types=config.get("road_terrain_smoothing_types", ()),
+            excluded_service_types=config.get(
+                "excluded_road_service_types", ()
+            ),
+            excluded_access=config.get("excluded_road_access", ()),
+            priority_region=route_polygon if route_mesh is not None else None,
             )
         finally:
             logging.getLogger().removeHandler(collector)
@@ -485,11 +879,33 @@ def generate_memory_map(
             warnings.extend(f"Building detail: {message}" for message in collector.messages[-4:])
     progress(85, "Building mesh complete")
 
-    if all(mesh is None for mesh in (base_mesh, route_mesh, roads_mesh, buildings_mesh, water_mesh)):
+    if all(
+        mesh is None
+        for mesh in (
+            base_mesh,
+            route_mesh,
+            roads_mesh,
+            buildings_mesh,
+            water_mesh,
+            landscape_mesh,
+        )
+    ):
         raise ValueError("No printable layers were generated")
-    export_3mf(output_path, base_mesh, route_mesh, roads_mesh, buildings_mesh, water_mesh)
+    export_3mf(
+        output_path,
+        base_mesh,
+        route_mesh,
+        roads_mesh,
+        buildings_mesh,
+        water_mesh,
+        landscape_mesh=landscape_mesh,
+        style_profile=style_profile,
+        color_preset=config.get("color_preset"),
+        layer_colors=config.get("layer_colors"),
+    )
     stats = {
         "route_points": len(request.route.points),
+        "flat_border_enabled": flat_border_enabled,
         "roads": _geometry_count(unioned_roads),
         "buildings": _geometry_count(unioned_buildings),
         "terrain": (
@@ -497,6 +913,22 @@ def generate_memory_map(
                 "source": elevation_grid.source,
                 "flatness_rating": terrain_surface.analysis.flatness_rating,
                 "relief_mm": terrain_surface.analysis.target_relief_mm,
+                "grid": {
+                    "mode": (
+                        "provided"
+                        if request.elevation_grid is not None
+                        else terrain_grid_spec.mode
+                    ),
+                    "rows": terrain_grid_spec.rows,
+                    "columns": terrain_grid_spec.columns,
+                    "samples": terrain_grid_spec.sample_count,
+                    "target_cell_size_mm": terrain_grid_spec.target_cell_size_mm,
+                    "cell_width_mm": terrain_grid_spec.cell_width_mm,
+                    "cell_height_mm": terrain_grid_spec.cell_height_mm,
+                    "estimated_terrain_faces": (
+                        terrain_grid_spec.estimated_terrain_faces
+                    ),
+                },
             }
             if terrain_surface is not None
             else None
@@ -507,6 +939,7 @@ def generate_memory_map(
             "roads": _mesh_stats(roads_mesh),
             "buildings": _mesh_stats(buildings_mesh),
             "water": _mesh_stats(water_mesh),
+            "landscape": _mesh_stats(landscape_mesh),
         },
     }
     progress(100, "3MF export complete")
@@ -519,6 +952,7 @@ def generate_memory_map(
         roads_mesh=roads_mesh,
         buildings_mesh=buildings_mesh,
         water_mesh=water_mesh,
+        landscape_mesh=landscape_mesh,
     )
 
 

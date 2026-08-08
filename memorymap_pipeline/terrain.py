@@ -10,6 +10,8 @@ from shapely.geometry import LineString, Point
 from shapely.geometry.base import BaseGeometry
 from trimesh import Trimesh
 
+from .map_frame import MapFrame
+
 
 @dataclass(frozen=True)
 class TerrainAnalysis:
@@ -19,6 +21,112 @@ class TerrainAnalysis:
     flatness_rating: int
     target_relief_mm: float
     vertical_scale_mm_per_m: float
+
+
+@dataclass(frozen=True)
+class TerrainGridSpec:
+    """Resolved DEM sampling dimensions and print-space diagnostics."""
+
+    rows: int
+    columns: int
+    mode: str
+    target_cell_size_mm: float | None
+    cell_width_mm: float
+    cell_height_mm: float
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.rows, self.columns
+
+    @property
+    def sample_count(self) -> int:
+        return self.rows * self.columns
+
+    @property
+    def estimated_terrain_faces(self) -> int:
+        # The terrain solid has top and bottom triangles plus two triangles per
+        # perimeter segment.
+        cells = (self.rows - 1) * (self.columns - 1)
+        perimeter = 2 * (self.rows - 1) + 2 * (self.columns - 1)
+        return 4 * cells + 2 * perimeter
+
+
+def terrain_grid_for_print(
+    width_mm: float,
+    height_mm: float,
+    *,
+    override: int | tuple[int, int] | list[int] | None = None,
+    target_cell_size_mm: float = 0.55,
+    maximum_samples: int = 180_000,
+    maximum_dimension: int = 512,
+) -> TerrainGridSpec:
+    """Resolve a rectangular terrain grid from the finished print dimensions.
+
+    Explicit legacy integer overrides remain square. A two-value override is
+    interpreted as ``(rows, columns)``. Adaptive dimensions preserve the print
+    aspect ratio and are capped before mesh construction so the terrain solid
+    cannot unexpectedly grow to several million triangles.
+    """
+    if width_mm <= 0 or height_mm <= 0:
+        raise ValueError("Terrain print dimensions must be positive")
+
+    if override is not None:
+        if isinstance(override, bool):
+            raise ValueError("Terrain grid override must contain integer dimensions")
+        if isinstance(override, (int, np.integer)):
+            rows = columns = int(override)
+        elif isinstance(override, (tuple, list)) and len(override) == 2:
+            rows, columns = override
+            if (
+                isinstance(rows, bool)
+                or isinstance(columns, bool)
+                or not isinstance(rows, (int, np.integer))
+                or not isinstance(columns, (int, np.integer))
+            ):
+                raise ValueError("Terrain grid override must contain integer dimensions")
+            rows, columns = int(rows), int(columns)
+        else:
+            raise ValueError("Terrain grid override must be an integer or (rows, columns)")
+        if min(rows, columns) < 2:
+            raise ValueError("Terrain grid dimensions must be at least two")
+        return TerrainGridSpec(
+            rows=rows,
+            columns=columns,
+            mode="override",
+            target_cell_size_mm=None,
+            cell_width_mm=width_mm / (columns - 1),
+            cell_height_mm=height_mm / (rows - 1),
+        )
+
+    if target_cell_size_mm <= 0:
+        raise ValueError("Terrain target cell size must be positive")
+    if maximum_samples < 4 or maximum_dimension < 2:
+        raise ValueError("Terrain adaptive grid limits are invalid")
+
+    desired_rows = max(2, int(np.ceil(height_mm / target_cell_size_mm)) + 1)
+    desired_columns = max(2, int(np.ceil(width_mm / target_cell_size_mm)) + 1)
+    scale = min(
+        1.0,
+        (maximum_dimension - 1) / float(desired_rows - 1),
+        (maximum_dimension - 1) / float(desired_columns - 1),
+        np.sqrt(maximum_samples / float(desired_rows * desired_columns)),
+    )
+    rows = max(2, int(np.floor((desired_rows - 1) * scale)) + 1)
+    columns = max(2, int(np.floor((desired_columns - 1) * scale)) + 1)
+    while rows * columns > maximum_samples:
+        if rows / height_mm >= columns / width_mm:
+            rows -= 1
+        else:
+            columns -= 1
+
+    return TerrainGridSpec(
+        rows=rows,
+        columns=columns,
+        mode="adaptive",
+        target_cell_size_mm=float(target_cell_size_mm),
+        cell_width_mm=width_mm / (columns - 1),
+        cell_height_mm=height_mm / (rows - 1),
+    )
 
 
 @dataclass(frozen=True)
@@ -145,21 +253,42 @@ def terrain_surface_from_grid(
     horizontal_span_m: float,
     maximum_relief_mm: float = 3.0,
     minimum_relief_mm: float = 1.5,
+    detail_gamma: float = 1.0,
 ) -> TerrainSurface:
+    if detail_gamma <= 0.0:
+        raise ValueError("Terrain detail gamma must be positive")
+    values = _repair_elevation_samples(grid.elevations_m)
     analysis = analyze_terrain(
-        grid.elevations_m,
+        values,
         horizontal_span_m,
         maximum_relief_mm,
         minimum_relief_mm,
     )
-    values = grid.elevations_m.copy()
-    if not np.isfinite(values).all():
-        values[~np.isfinite(values)] = float(np.nanmedian(values))
     low, high = np.percentile(values, [5.0, 95.0])
     if high - low <= 1e-9:
         normalized = np.zeros_like(values)
     else:
-        normalized = np.clip((values - low) / (high - low), 0.0, 1.0)
+        # Preserve the robust percentile range without turning the lower and
+        # upper five percent into flat shelves.  The tails receive a compact,
+        # monotonic five percent of the printed relief instead of being clipped.
+        robust_range = high - low
+        central = 0.05 + 0.90 * (values - low) / robust_range
+        normalized = central.copy()
+        below = values < low
+        above = values > high
+        normalized[below] = 0.05 * np.exp(
+            (values[below] - low) / robust_range
+        )
+        normalized[above] = 1.0 - 0.05 * np.exp(
+            -(values[above] - high) / robust_range
+        )
+        minimum = float(np.min(normalized))
+        maximum = float(np.max(normalized))
+        normalized = (normalized - minimum) / (maximum - minimum)
+        # A mild power curve allocates more of the printable Z range to
+        # lowland changes.  This keeps coastal valleys legible without clipping
+        # peaks or changing the configured maximum relief.
+        normalized = np.power(normalized, detail_gamma)
     return TerrainSurface(
         heights_mm=normalized * analysis.target_relief_mm,
         width_mm=width_mm,
@@ -168,17 +297,192 @@ def terrain_surface_from_grid(
     )
 
 
-def build_terrain_mesh(surface: TerrainSurface, base_thickness_mm: float) -> Trimesh:
-    """Create a watertight terrain solid above a flat structural bottom."""
-    if base_thickness_mm <= 0:
-        raise ValueError("Terrain base thickness must be positive")
+def elevation_grid_for_frame(
+    grid: ElevationGrid,
+    frame: MapFrame,
+    shape: tuple[int, int] | None = None,
+) -> ElevationGrid:
+    """Resample an axis-aligned geographic DEM onto the exact map frame.
+
+    Provider rasters cover the bounding rectangle around the map. Stretching
+    that rectangle directly over a rotated or differently proportioned print
+    maps its corner cells into the wrong locations, which is especially visible
+    as sea-level shelves on long coastal routes.
+    """
+    rows, columns = shape or grid.elevations_m.shape
+    if min(rows, columns) < 2:
+        raise ValueError("Resampled elevation grid must be at least two by two")
+    source = _repair_elevation_samples(grid.elevations_m)
+    x = np.linspace(0.0, frame.print_width_mm, columns)
+    y = np.linspace(frame.print_height_mm, 0.0, rows)
+    x_grid, y_grid = np.meshgrid(x, y)
+    latitudes, longitudes = frame.print_to_lonlat(x_grid, y_grid)
+
+    source_rows, source_columns = source.shape
+    source_column = np.clip(
+        (longitudes - grid.west) / (grid.east - grid.west)
+        * (source_columns - 1),
+        0.0,
+        source_columns - 1,
+    )
+    source_row = np.clip(
+        (grid.north - latitudes) / (grid.north - grid.south)
+        * (source_rows - 1),
+        0.0,
+        source_rows - 1,
+    )
+    c0 = np.floor(source_column).astype(int)
+    r0 = np.floor(source_row).astype(int)
+    c1 = np.minimum(c0 + 1, source_columns - 1)
+    r1 = np.minimum(r0 + 1, source_rows - 1)
+    tx = source_column - c0
+    ty = source_row - r0
+    north = source[r0, c0] * (1.0 - tx) + source[r0, c1] * tx
+    south = source[r1, c0] * (1.0 - tx) + source[r1, c1] * tx
+    values = north * (1.0 - ty) + south * ty
+    return ElevationGrid(
+        values,
+        grid.south,
+        grid.north,
+        grid.west,
+        grid.east,
+        grid.source,
+    )
+
+
+def _repair_elevation_samples(elevations_m: np.ndarray) -> np.ndarray:
+    """Replace DEM no-data sentinels with nearby terrain without creating shelves."""
+    values = np.asarray(elevations_m, dtype=float).copy()
+    valid = (
+        np.isfinite(values)
+        & (values >= -12_000.0)
+        & (values <= 12_000.0)
+    )
+    if not np.any(valid):
+        raise ValueError("Elevation grid contains no plausible terrain samples")
+    if np.all(valid):
+        return values
+
+    # Grow valid values into no-data holes one cell at a time. Averaging all
+    # available neighbours avoids the global-median plateaus produced by the
+    # previous fallback and naturally fills offshore sentinels from sea level.
+    missing = ~valid
+    rows, columns = values.shape
+    for _ in range(rows + columns):
+        if not np.any(missing):
+            break
+        totals = np.zeros_like(values)
+        counts = np.zeros_like(values, dtype=np.int16)
+        for row_offset, column_offset in (
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+        ):
+            source_rows = slice(max(0, -row_offset), rows - max(0, row_offset))
+            source_columns = slice(
+                max(0, -column_offset),
+                columns - max(0, column_offset),
+            )
+            target_rows = slice(max(0, row_offset), rows - max(0, -row_offset))
+            target_columns = slice(
+                max(0, column_offset),
+                columns - max(0, -column_offset),
+            )
+            neighbour_valid = valid[source_rows, source_columns]
+            totals[target_rows, target_columns] += np.where(
+                neighbour_valid,
+                values[source_rows, source_columns],
+                0.0,
+            )
+            counts[target_rows, target_columns] += neighbour_valid
+        fillable = missing & (counts > 0)
+        if not np.any(fillable):
+            break
+        values[fillable] = totals[fillable] / counts[fillable]
+        valid[fillable] = True
+        missing[fillable] = False
+
+    if np.any(missing):
+        values[missing] = float(np.median(values[valid]))
+    return values
+
+
+def terrain_mesh_axes(
+    surface: TerrainSurface,
+    flat_margin_mm: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return terrain axes with exact inner trim boundaries when requested."""
+    if flat_margin_mm < 0:
+        raise ValueError("Terrain trim margin cannot be negative")
+    if flat_margin_mm * 2.0 >= min(surface.width_mm, surface.height_mm):
+        raise ValueError("Terrain trim margin is too large")
     rows, columns = surface.heights_mm.shape
     xs = np.linspace(0.0, surface.width_mm, columns)
     ys = np.linspace(surface.height_mm, 0.0, rows)
-    top = np.array(
-        [(x, y, surface.heights_mm[row, column]) for row, y in enumerate(ys) for column, x in enumerate(xs)],
-        dtype=float,
+    if flat_margin_mm > 0.0:
+        xs = np.unique(
+            np.append(
+                xs,
+                (flat_margin_mm, surface.width_mm - flat_margin_mm),
+            )
+        )
+        ys = np.unique(
+            np.append(
+                ys,
+                (flat_margin_mm, surface.height_mm - flat_margin_mm),
+            )
+        )[::-1]
+    return xs, ys
+
+
+def terrain_mesh_heights(
+    surface: TerrainSurface,
+    x_mm: np.ndarray,
+    y_mm: np.ndarray,
+    flat_margin_mm: float = 0.0,
+) -> np.ndarray:
+    """Sample terrain while keeping the outer trim at one constant elevation."""
+    heights = np.asarray(surface.sample(x_mm, y_mm), dtype=float)
+    if flat_margin_mm <= 0.0:
+        return heights
+    flat_height = float(np.min(surface.heights_mm))
+    trim = (
+        (x_mm <= flat_margin_mm + 1e-9)
+        | (x_mm >= surface.width_mm - flat_margin_mm - 1e-9)
+        | (y_mm <= flat_margin_mm + 1e-9)
+        | (y_mm >= surface.height_mm - flat_margin_mm - 1e-9)
     )
+    return np.where(trim, flat_height, heights)
+
+
+def build_terrain_mesh(
+    surface: TerrainSurface,
+    base_thickness_mm: float,
+    flat_margin_mm: float = 0.0,
+) -> Trimesh:
+    """Create a watertight terrain solid above a flat structural bottom."""
+    if base_thickness_mm <= 0:
+        raise ValueError("Terrain base thickness must be positive")
+    xs, ys = terrain_mesh_axes(surface, flat_margin_mm)
+    x_grid, y_grid = np.meshgrid(xs, ys)
+    top = np.column_stack(
+        (
+            x_grid.reshape(-1),
+            y_grid.reshape(-1),
+            terrain_mesh_heights(
+                surface,
+                x_grid,
+                y_grid,
+                flat_margin_mm,
+            ).reshape(-1),
+        )
+    )
+    rows, columns = len(ys), len(xs)
     bottom = top.copy()
     bottom[:, 2] = -base_thickness_mm
     vertices = np.vstack((top, bottom))
@@ -322,13 +626,14 @@ def drape_route_mesh(
     route_width_mm: float,
     visible_height_mm: float,
     smoothing_distance_mm: float = 1.5,
+    maximum_profile_slope: float = 0.3,
 ) -> Trimesh:
     """Drape a constant-width route with one terrain height per cross-section.
 
-    The underside follows terrain vertex-by-vertex for continuous support. Top vertices
-    project to the route centerline, sample the full route width, and smooth only along
-    the direction of travel. This prevents terrain triangles from twisting the orange
-    surface from one edge of the route to the other.
+    Top vertices project to the route centerline, sample the full route width, and
+    smooth only along the direction of travel. Where the slope limiter raises a route
+    over a short terrain valley, the underside rises by the same amount to form a real
+    bridge instead of an excessively tall wall.
     """
     if centerline.is_empty or centerline.length <= 0.0:
         raise ValueError("Route centerline must have positive length")
@@ -336,6 +641,8 @@ def drape_route_mesh(
         raise ValueError("Route width and visible height must be positive")
     if smoothing_distance_mm < 0.0:
         raise ValueError("Route smoothing distance cannot be negative")
+    if maximum_profile_slope <= 0.0:
+        raise ValueError("Route maximum profile slope must be positive")
 
     result = mesh.copy()
     sample = getattr(surface, "sample", surface)
@@ -376,8 +683,56 @@ def drape_route_mesh(
 
     # Smoothing may raise neighboring valleys but never reduces the requested visible
     # height over the highest terrain sample in the current cross-section.
-    top_heights = np.maximum(profile_support, local_support) + visible_height_mm
+    required_top = np.maximum(profile_support, local_support) + visible_height_mm
+    top_heights = _slope_limited_upper_profile(
+        stations,
+        required_top,
+        maximum_profile_slope,
+    )
+    unique_stations, inverse = np.unique(stations, return_inverse=True)
+    unique_top = np.full(len(unique_stations), -np.inf, dtype=float)
+    np.maximum.at(unique_top, inverse, top_heights)
+    all_stations = np.array(
+        [centerline.project(Point(px, py)) for px, py in result.vertices[:, :2]],
+        dtype=float,
+    )
+    profile_top = np.interp(all_stations, unique_stations, unique_top)
+    bottom_z = float(np.min(original_z))
+    solid_thickness = top_z - bottom_z
+    layer_fraction = np.clip((original_z - bottom_z) / solid_thickness, 0.0, 1.0)
+    # Preserve one constant printable thickness across the entire route. This anchors
+    # high terrain with the embedded underside and bridges the lower side of sharp
+    # cross-slopes instead of stretching the wall down by several millimeters.
+    result.vertices[:, 2] = profile_top - solid_thickness + (
+        layer_fraction * solid_thickness
+    )
     result.vertices[top_indices, 2] = top_heights
+    return result
+
+
+def _slope_limited_upper_profile(
+    stations: np.ndarray,
+    required_heights: np.ndarray,
+    maximum_slope: float,
+) -> np.ndarray:
+    """Raise valleys until adjacent route samples obey a bidirectional slope limit."""
+    if len(stations) < 2:
+        return np.asarray(required_heights, dtype=float).copy()
+    order = np.argsort(stations, kind="stable")
+    sorted_stations = np.asarray(stations, dtype=float)[order]
+    profile = np.asarray(required_heights, dtype=float)[order].copy()
+    for index in range(1, len(profile)):
+        distance = sorted_stations[index] - sorted_stations[index - 1]
+        profile[index] = max(
+            profile[index], profile[index - 1] - maximum_slope * distance
+        )
+    for index in range(len(profile) - 2, -1, -1):
+        distance = sorted_stations[index + 1] - sorted_stations[index]
+        profile[index] = max(
+            profile[index], profile[index + 1] - maximum_slope * distance
+        )
+    result = np.empty_like(profile)
+    result[order] = profile
     return result
 
 

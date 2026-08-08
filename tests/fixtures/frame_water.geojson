@@ -1,0 +1,41 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"natural": "water", "water": "pond"},
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-95.37070, 29.76025],
+          [-95.37035, 29.76025],
+          [-95.37035, 29.76050],
+          [-95.37070, 29.76050],
+          [-95.37070, 29.76025]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {"waterway": "stream"},
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-95.37065, 29.75975],
+          [-95.36935, 29.75975]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {"waterway": "canal"},
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-95.36980, 29.75945],
+          [-95.36980, 29.76055]
+        ]
+      }
+    }
+  ]
+}

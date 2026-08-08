@@ -1,13 +1,15 @@
 """Qt worker for running the in-process generation service off the UI thread."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QObject, Signal, Slot
 
 
 class GenerationWorker(QObject):
     progress = Signal(int, str)
     warning = Signal(str)
-    completed = Signal(str)
+    completed = Signal(str, str)
     failed = Signal(str)
     finished = Signal()
 
@@ -24,7 +26,18 @@ class GenerationWorker(QObject):
             result = generate_memory_map(request, progress_callback=self._progress)
             for warning in result.warnings:
                 self.warning.emit(str(warning))
-            self.completed.emit(str(result.output_path))
+            preview_path = Path(result.output_path).with_name("memorymap-preview.glb")
+            preview_value = ""
+            try:
+                from .preview import export_preview_glb
+
+                export_preview_glb(result.meshes, preview_path)
+                preview_value = str(preview_path)
+            except Exception as exc:  # preview failure must not discard a valid 3MF
+                self.warning.emit(
+                    f"3D preview unavailable; the 3MF was generated successfully: {exc}"
+                )
+            self.completed.emit(str(result.output_path), preview_value)
         except Exception as exc:  # worker boundary: surface all pipeline failures
             self.failed.emit(str(exc))
         finally:

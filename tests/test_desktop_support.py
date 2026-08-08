@@ -15,11 +15,26 @@ def project() -> DesktopProject:
 
 
 def test_project_json_and_file_round_trip(tmp_path):
-    expected = project()
+    expected = DesktopProject(
+        frame=project().frame,
+        gpx_path="sample.gpx",
+        include_buildings=False,
+        route_width_mm=1.5,
+        route_layer_height_mm=0.20,
+        style_profile="landscape",
+        surface_skin_thickness_mm=0.6,
+        minimum_waterway_width_mm=1.0,
+        flat_border_enabled=True,
+        color_preset="urban-classic",
+        layer_colors={"route": "#AA5500"},
+    )
     assert DesktopProject.from_json(expected.to_json()) == expected
     path = tmp_path / "sample.memorymap.json"
     expected.save(path)
     assert DesktopProject.load(path) == expected
+    assert expected.to_dict()["flat_border_enabled"] is True
+    assert expected.to_dict()["style"]["layer_colors"]["route"] == "#AA5500"
+    assert expected.to_dict()["route"]["layer_height_mm"] == pytest.approx(0.20)
 
 
 def test_project_rejects_unknown_version_and_invalid_dimensions():
@@ -30,6 +45,27 @@ def test_project_rejects_unknown_version_and_invalid_dimensions():
     value["version"] = 1
     value["route"]["width_mm"] = 0
     with pytest.raises(ValueError, match="positive"):
+        DesktopProject.from_dict(value)
+
+
+def test_project_loads_legacy_version_one_without_style_settings():
+    value = project().to_dict()
+    del value["style"]
+
+    restored = DesktopProject.from_dict(value)
+
+    assert restored.style_profile == "urban"
+    assert restored.flat_border_enabled is False
+    assert restored.surface_skin_thickness_mm == pytest.approx(0.4)
+    assert restored.minimum_waterway_width_mm == pytest.approx(0.8)
+    assert restored.route_layer_height_mm == pytest.approx(0.16)
+
+
+def test_project_rejects_unknown_style_profile():
+    value = project().to_dict()
+    value["style"]["profile"] = "satellite"
+
+    with pytest.raises(ValueError, match="Unsupported style profile"):
         DesktopProject.from_dict(value)
 
 
@@ -140,3 +176,87 @@ def test_frame_zoom_preserves_center_and_scales_coverage():
     assert window.current_frame["coverage_width_m"] == pytest.approx(1_100.0)
     assert window.current_frame["coverage_height_m"] == pytest.approx(880.0)
     assert scripts and "setFrame" in scripts[-1]
+
+
+def test_generation_config_includes_style_profile_and_landscape_dimensions():
+    pytest.importorskip("PySide6")
+    from memorymap_pipeline.desktop.window import MemoryMapWindow
+
+    class Check:
+        def __init__(self, checked):
+            self.checked = checked
+
+        def isChecked(self):
+            return self.checked
+
+    class Value:
+        def __init__(self, value):
+            self._value = value
+
+        def value(self):
+            return self._value
+
+    class Combo:
+        def currentData(self):
+            return "landscape"
+
+    window = type("WindowState", (), {})()
+    window.terrain_layer = Check(True)
+    window.water_layer = Check(True)
+    window.terrain_relief = Value(3.0)
+    window.water_recess = Value(0.4)
+    window.building_max_height = Value(25.0)
+    window.style_profile = Combo()
+    window.route_layer_height = type(
+        "LayerHeight", (), {"currentData": lambda self: 0.16}
+    )()
+    window.surface_skin_thickness = Value(0.4)
+    window.minimum_waterway_width = Value(0.8)
+    window.flat_border = Check(False)
+    window.color_preset_name = "landscape-classic"
+    window.layer_colors = {"water": "#102030"}
+
+    payload = MemoryMapWindow._generation_config_payload(window)
+
+    assert payload["style_profile"] == "landscape"
+    assert payload["surface_skin_thickness_mm"] == pytest.approx(0.4)
+    assert payload["minimum_waterway_width_mm"] == pytest.approx(0.8)
+    assert payload["flat_border_enabled"] is False
+    assert payload["color_preset"] == "landscape-classic"
+    assert payload["layer_colors"]["water"] == "#102030"
+
+
+def test_optional_border_defaults_to_full_extent_and_enables_margin_when_checked():
+    pytest.importorskip("PySide6")
+    from memorymap_pipeline.desktop.window import MemoryMapWindow
+
+    class Check:
+        def __init__(self, checked):
+            self.checked = checked
+
+        def isChecked(self):
+            return self.checked
+
+    class Margin:
+        def __init__(self):
+            self.enabled = None
+
+        def value(self):
+            return 5.0
+
+        def setEnabled(self, enabled):
+            self.enabled = enabled
+
+    window = type("WindowState", (), {})()
+    window.flat_border = Check(False)
+    window.margin = Margin()
+    window.route = None
+
+    assert MemoryMapWindow._effective_margin(window) == pytest.approx(0.0)
+    MemoryMapWindow._border_toggled(window, False)
+    assert window.margin.enabled is False
+
+    window.flat_border.checked = True
+    assert MemoryMapWindow._effective_margin(window) == pytest.approx(5.0)
+    MemoryMapWindow._border_toggled(window, True)
+    assert window.margin.enabled is True

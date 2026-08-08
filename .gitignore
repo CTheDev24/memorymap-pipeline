@@ -6,6 +6,7 @@ __pycache__/
 # Virtual environments
 .venv/
 venv/
+*.egg-info/
 
 # Generated applications
 build/
