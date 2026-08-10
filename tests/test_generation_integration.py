@@ -112,6 +112,75 @@ def test_partial_export_assigns_materials_only_to_present_objects(tmp_path: Path
     assert _model_assembly(output) == ("MemoryMap", ["Base_White", "Route_Accent"])
 
 
+def test_landscape_generation_uses_profile_route_height_by_default(tmp_path: Path) -> None:
+    route = load_route_from_gpx(FIXTURES / "frame_route.gpx")
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+    config = load_config()
+    config["style_profile"] = "landscape"
+    result = generation.generate_memory_map(
+        generation.GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=tmp_path / "landscape-route-height.3mf",
+            include_roads=False,
+            include_buildings=False,
+            route_height_mm=None,
+            base_thickness_mm=1.0,
+            config=config,
+        )
+    )
+
+    assert result.route_mesh is not None
+    assert result.route_mesh.bounds[1, 2] == pytest.approx(1.2)
+    assert result.stats["route_height_mm"] == pytest.approx(1.2)
+    assert result.stats["route_height_source"] == "profile_default"
+
+
+def test_generation_exports_supported_route_markers(tmp_path: Path) -> None:
+    route = load_route_from_gpx(FIXTURES / "frame_route.gpx")
+    frame = MapFrame(
+        center_lat=29.7600,
+        center_lon=-95.3700,
+        coverage_width_m=180.0,
+        coverage_height_m=140.0,
+        print_width_mm=120.0,
+        print_height_mm=90.0,
+        margin_mm=5.0,
+    )
+    config = load_config()
+    config["route_markers"] = "both"
+    output = tmp_path / "route-markers.3mf"
+
+    result = generation.generate_memory_map(
+        generation.GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=output,
+            include_roads=False,
+            include_buildings=False,
+            base_thickness_mm=1.0,
+            config=config,
+        )
+    )
+
+    assert result.start_marker_mesh is not None
+    assert result.finish_marker_mesh is not None
+    assert result.stats["layers"]["start_marker"]["faces"] > 0
+    assert result.stats["layers"]["finish_marker"]["faces"] > 0
+    materials = _model_materials(output)
+    assert materials["Start_Marker"] == materials["Route_Accent"]
+    assert materials["Finish_Marker"] == materials["Route_Accent"]
+    assert _model_assembly(output)[1][-2:] == ["Start_Marker", "Finish_Marker"]
+
+
 def test_landscape_export_uses_bone_green_and_blue_material_bodies(
     tmp_path: Path,
 ) -> None:
@@ -196,6 +265,8 @@ def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
     assert progress and progress[-1] == 100
     assert result.stats["roads"] > 0
     assert result.stats["buildings"] == 2  # third footprint is entirely east of the frame
+    assert result.stats["route_height_mm"] == pytest.approx(2.0)
+    assert result.stats["route_height_source"] == "explicit"
 
     names, vertices = _model_objects(output)
     assert {"Base_White", "Route_Accent", "Roads_Black", "Buildings_Verification"} <= names

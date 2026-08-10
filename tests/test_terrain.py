@@ -15,6 +15,11 @@ from trimesh import Trimesh
 from memorymap_pipeline import generation, water as water_module
 from memorymap_pipeline.config import load_config
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
+from memorymap_pipeline.landcover import (
+    LandCoverClass,
+    LandCoverGrid,
+    LandCoverProvenance,
+)
 from memorymap_pipeline.map_frame import MapFrame
 from memorymap_pipeline.mesh import export_3mf, refine_mesh_edges, route_mesh_from_polygon
 from memorymap_pipeline.terrain import (
@@ -1075,6 +1080,61 @@ def test_landscape_generation_builds_supported_bone_green_blue_layers(
         for item in root.findall("m:resources/m:object", namespace)
     }
     assert {"Base_Bone", "Terrain_Green", "Water_Blue", "MemoryMap"} <= names
+
+
+def test_landscape_generation_applies_coastal_evidence_grid_without_network(
+    tmp_path: Path, monkeypatch
+) -> None:
+    route = load_route_from_gpx(Path(__file__).parent / "fixtures" / "frame_route.gpx")
+    frame = MapFrame(29.76, -95.37, 180.0, 140.0, 120.0, 90.0)
+    classes = np.full((5, 5), LandCoverClass.VEGETATION, dtype=np.uint8)
+    classes[:, 0] = LandCoverClass.WATER
+    classes[:, 1] = LandCoverClass.BARE
+    classes[2, 2] = LandCoverClass.BUILT
+    grid = LandCoverGrid(
+        classes,
+        (0.0, 0.0, 120.0, 90.0),
+        LandCoverProvenance("fixture", "coastal-fixture", "1", True),
+    )
+    monkeypatch.setattr(
+        generation,
+        "download_coastal_exposure_evidence",
+        lambda **_kwargs: pytest.fail("supplied grids must suppress network evidence"),
+    )
+    monkeypatch.setattr(
+        generation,
+        "download_exposed_land_polygons",
+        lambda **_kwargs: [box(30.0, 30.0, 40.0, 40.0)],
+    )
+
+    result = generation.generate_memory_map(
+        generation.GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=tmp_path / "coastal-evidence.3mf",
+            include_route=False,
+            include_roads=False,
+            include_buildings=False,
+            config={
+                "terrain_enabled": True,
+                "style_profile": "landscape",
+                "exposed_land_enabled": True,
+            },
+            elevation_grid=_grid(
+                [[30.0, 30.3, 30.6], [29.8, 30.1, 30.4], [29.5, 29.8, 30.1]]
+            ),
+            landcover_grid=grid,
+        )
+    )
+
+    contributions = result.stats["ground_cover"]["contributions"]
+    assert contributions["worldcover_bare"] == 5
+    assert contributions["built_rejected"] == 1
+    assert contributions["final_exposed"] > 0
+    assert result.stats["ground_cover"]["osm_exposed_polygon_area_mm2"] == pytest.approx(
+        100.0
+    )
+    assert result.landscape_mesh is not None and result.landscape_mesh.is_watertight
 
 
 def test_borderless_generation_contours_terrain_to_plate_extents(

@@ -457,6 +457,8 @@ def export_3mf(
     style_profile: str = "urban",
     color_preset: str | None = None,
     layer_colors: dict[str, str] | None = None,
+    start_marker_mesh: Trimesh | None = None,
+    finish_marker_mesh: Trimesh | None = None,
 ) -> None:
     from trimesh.exchange.export import export_mesh
 
@@ -479,6 +481,8 @@ def export_3mf(
         "buildings": buildings_mesh,
         "water": water_mesh,
         "landscape": landscape_mesh,
+        "start_marker": start_marker_mesh,
+        "finish_marker": finish_marker_mesh,
     }
     cleanup_limits = {"buildings": 12, "water": 8, "landscape": 16}
     removed_shells = {layer: 0 for layer in cleanup_limits}
@@ -527,6 +531,12 @@ def export_3mf(
     if route_mesh is not None:
         color_mesh(route_mesh, "Route_Accent", "Route", "route")
 
+    if start_marker_mesh is not None:
+        color_mesh(start_marker_mesh, "Start_Marker", "Start Marker", "route")
+
+    if finish_marker_mesh is not None:
+        color_mesh(finish_marker_mesh, "Finish_Marker", "Finish Marker", "route")
+
     if roads_mesh is not None:
         color_mesh(roads_mesh, "Roads_Black", "Roads", "roads")
 
@@ -554,6 +564,8 @@ def export_3mf(
             "buildings": buildings_mesh,
             "water": water_mesh,
             "landscape": landscape_mesh,
+            "start_marker": start_marker_mesh,
+            "finish_marker": finish_marker_mesh,
         }
     ).raise_for_errors()
 

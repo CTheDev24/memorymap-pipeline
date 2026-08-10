@@ -5,20 +5,83 @@ from pathlib import Path
 
 import numpy as np
 from shapely import contains_xy
-from shapely.geometry import Polygon, box
+from shapely.geometry import (
+    LineString,
+    MultiLineString,
+    MultiPoint,
+    Point,
+    Polygon,
+    box,
+)
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from trimesh import Trimesh
 
 from .buildings import _transform_shapely_polygon
+from .projection import apply_transform, project_lonlat_array
 from .terrain import TerrainSurface, terrain_mesh_heights
 
 
 EXPOSED_LAND_TAGS = {
-    "natural": ["beach", "sand", "bare_rock", "scree", "shingle", "mud"],
-    "surface": ["sand", "fine_gravel", "gravel", "rock"],
+    "natural": [
+        "beach",
+        "sand",
+        "bare_rock",
+        "scree",
+        "shingle",
+        "mud",
+        "blockfield",
+    ],
+    "surface": [
+        "sand",
+        "fine_gravel",
+        "gravel",
+        "rock",
+        "pebblestone",
+        "stone",
+        "bare_ground",
+        "ground",
+    ],
     "landuse": ["quarry"],
 }
+
+COASTAL_EXPOSURE_EVIDENCE_TAGS = {
+    "natural": ["cliff", "rock", "stone"],
+    "geological": ["outcrop"],
+}
+
+
+def _load_osm_features(
+    bbox: tuple[float, float, float, float],
+    center_lat: float,
+    center_lon: float,
+    tags: dict[str, list[str]],
+    *,
+    radius_m: float | None,
+    source_file: str | Path | None,
+):
+    import geopandas as gpd
+
+    if source_file is not None:
+        return gpd.read_file(source_file)
+
+    import osmnx as ox
+
+    fetch_point = getattr(ox, "features_from_point", None) or getattr(
+        ox, "geometries_from_point", None
+    )
+    fetch_bbox = getattr(ox, "features_from_bbox", None) or getattr(
+        ox, "geometries_from_bbox", None
+    )
+    if radius_m is not None and fetch_point is not None:
+        return fetch_point((center_lat, center_lon), tags=tags, dist=radius_m)
+    if fetch_bbox is not None:
+        south, north, west, east = bbox
+        try:
+            return fetch_bbox((west, south, east, north), tags=tags)
+        except TypeError:
+            return fetch_bbox(north, south, east, west, tags=tags)
+    raise RuntimeError("Installed OSMnx does not expose a feature query API")
 
 
 def download_exposed_land_polygons(
@@ -34,42 +97,14 @@ def download_exposed_land_polygons(
 ) -> list[Polygon]:
     """Load beach, sand, bare-rock, and similar exposed-ground polygons."""
     try:
-        import geopandas as gpd
-
-        if landcover_file is not None:
-            data = gpd.read_file(landcover_file)
-        else:
-            import osmnx as ox
-
-            fetch_point = getattr(ox, "features_from_point", None) or getattr(
-                ox, "geometries_from_point", None
-            )
-            fetch_bbox = getattr(ox, "features_from_bbox", None) or getattr(
-                ox, "geometries_from_bbox", None
-            )
-            if radius_m is not None and fetch_point is not None:
-                data = fetch_point(
-                    (center_lat, center_lon),
-                    tags=EXPOSED_LAND_TAGS,
-                    dist=radius_m,
-                )
-            elif fetch_bbox is not None:
-                south, north, west, east = bbox
-                try:
-                    data = fetch_bbox(
-                        (west, south, east, north),
-                        tags=EXPOSED_LAND_TAGS,
-                    )
-                except TypeError:
-                    data = fetch_bbox(
-                        north,
-                        south,
-                        east,
-                        west,
-                        tags=EXPOSED_LAND_TAGS,
-                    )
-            else:
-                raise RuntimeError("Installed OSMnx does not expose a feature query API")
+        data = _load_osm_features(
+            bbox,
+            center_lat,
+            center_lon,
+            EXPOSED_LAND_TAGS,
+            radius_m=radius_m,
+            source_file=landcover_file,
+        )
     except Exception as exc:
         logging.warning("Failed to load exposed-land polygons: %s", exc)
         return []
@@ -100,6 +135,101 @@ def download_exposed_land_polygons(
                     child for child in print_polygon.geoms if not child.is_empty
                 )
     return transformed
+
+
+def _transform_evidence_geometry(
+    geometry: BaseGeometry,
+    *,
+    center_lat: float,
+    center_lon: float,
+    transform: dict,
+) -> BaseGeometry | None:
+    """Transform point/line evidence to print coordinates without making it an area."""
+
+    def transformed_coordinates(coordinates) -> list[tuple[float, float]]:
+        values = np.asarray(coordinates, dtype=float)
+        projected = project_lonlat_array(
+            values[:, 1], values[:, 0], center_lat=center_lat, center_lon=center_lon
+        )
+        frame = transform.get("map_frame")
+        mapped = (
+            frame.transform_projected(projected)
+            if frame is not None
+            else apply_transform(projected, transform)
+        )
+        return [(float(x), float(y)) for x, y in mapped]
+
+    if geometry.geom_type == "Point":
+        return Point(transformed_coordinates(geometry.coords)[0])
+    if geometry.geom_type == "LineString":
+        return LineString(transformed_coordinates(geometry.coords))
+    if geometry.geom_type == "MultiPoint":
+        return MultiPoint(
+            [transformed_coordinates(child.coords)[0] for child in geometry.geoms]
+        )
+    if geometry.geom_type == "MultiLineString":
+        return MultiLineString(
+            [transformed_coordinates(child.coords) for child in geometry.geoms]
+        )
+    return None
+
+
+def download_coastal_exposure_evidence(
+    bbox: tuple[float, float, float, float],
+    center_lat: float,
+    center_lon: float,
+    transform: dict,
+    map_width_mm: float,
+    map_height_mm: float,
+    *,
+    buffer_mm: float,
+    radius_m: float | None = None,
+    evidence_file: str | Path | None = None,
+) -> list[Polygon]:
+    """Load buffered coastal clues which may corroborate, but never define, exposure.
+
+    Only point and line features are accepted. ``buffer_mm`` must already be
+    converted by the caller from the desired real-world distance into print space.
+    The returned polygons are evidence masks, not exposed-ground polygons.
+    """
+    if buffer_mm <= 0.0:
+        raise ValueError("Coastal evidence buffer must be positive")
+    try:
+        data = _load_osm_features(
+            bbox,
+            center_lat,
+            center_lon,
+            COASTAL_EXPOSURE_EVIDENCE_TAGS,
+            radius_m=radius_m,
+            source_file=evidence_file,
+        )
+    except Exception as exc:
+        logging.warning("Failed to load coastal exposure evidence: %s", exc)
+        return []
+
+    print_bounds = box(0.0, 0.0, map_width_mm, map_height_mm)
+    evidence: list[Polygon] = []
+    for _, feature in data.iterrows():
+        geometry = feature.geometry
+        if geometry is None or geometry.is_empty:
+            continue
+        try:
+            transformed = _transform_evidence_geometry(
+                geometry,
+                center_lat=center_lat,
+                center_lon=center_lon,
+                transform=transform,
+            )
+            if transformed is None or transformed.is_empty:
+                continue
+            buffered = transformed.buffer(buffer_mm).intersection(print_bounds)
+        except Exception:
+            continue
+        if buffered.geom_type == "Polygon" and not buffered.is_empty:
+            evidence.append(buffered)
+        elif buffered.geom_type == "MultiPolygon":
+            evidence.extend(child for child in buffered.geoms if not child.is_empty)
+    return evidence
 
 
 def landscape_surface_region(
