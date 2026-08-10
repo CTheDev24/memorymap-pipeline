@@ -47,7 +47,10 @@ def test_embedded_viewer_assets_are_declared_as_package_data() -> None:
 def test_pyinstaller_collects_package_data_and_qt_webengine() -> None:
     spec = (PROJECT_ROOT / "memorymap-desktop.spec").read_text(encoding="utf-8")
 
-    assert 'collect_data_files("memorymap_pipeline")' in spec
+    assert '"memorymap_pipeline/desktop/viewer"' in spec
+    assert '"memorymap_pipeline/data"' in spec
+    assert 'collect_data_files("rasterio")' in spec
+    assert 'collect_submodules("rasterio")' in spec
     assert '"PySide6.QtWebEngineCore"' in spec
     assert '"PySide6.QtWebEngineWidgets"' in spec
 

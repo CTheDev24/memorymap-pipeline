@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-import pytest
-from shapely.geometry import box
+from types import SimpleNamespace
 
+import pytest
+from shapely.geometry import LineString, Point, box
+
+import memorymap_pipeline.surface_layers as surface_layers
 from memorymap_pipeline.surface_layers import (
+    COASTAL_EXPOSURE_EVIDENCE_TAGS,
+    EXPOSED_LAND_TAGS,
     build_conformal_surface_skin,
+    download_coastal_exposure_evidence,
+    download_exposed_land_polygons,
     landscape_surface_region,
     recess_terrain_surface,
 )
@@ -34,6 +41,98 @@ def _surface():
         height_mm=60.0,
         horizontal_span_m=1_000.0,
     )
+
+
+class _Features:
+    def __init__(self, geometries):
+        self._features = [SimpleNamespace(geometry=geometry) for geometry in geometries]
+
+    def iterrows(self):
+        return enumerate(self._features)
+
+
+def _print_transform():
+    return {
+        "scale": 0.001,
+        "min_x": 0.0,
+        "min_y": 0.0,
+        "offset_x": 50.0,
+        "offset_y": 50.0,
+    }
+
+
+def test_exposed_land_query_includes_expanded_polygon_tags() -> None:
+    assert "blockfield" in EXPOSED_LAND_TAGS["natural"]
+    assert {"pebblestone", "stone", "bare_ground", "ground"} <= set(
+        EXPOSED_LAND_TAGS["surface"]
+    )
+
+
+def test_exposed_land_rejects_non_polygon_surface_features(monkeypatch) -> None:
+    monkeypatch.setattr(
+        surface_layers,
+        "_load_osm_features",
+        lambda *args, **kwargs: _Features(
+            [LineString([(0.0, 0.0), (0.001, 0.0)]), box(0.0, 0.0, 0.001, 0.001)]
+        ),
+    )
+
+    polygons = download_exposed_land_polygons(
+        (-1.0, 1.0, -1.0, 1.0),
+        0.0,
+        0.0,
+        _print_transform(),
+        100.0,
+        100.0,
+    )
+
+    assert len(polygons) == 1
+    assert polygons[0].geom_type == "Polygon"
+
+
+def test_coastal_evidence_query_and_buffer_are_separate_from_exposed_polygons(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def load(*args, **kwargs):
+        captured["tags"] = args[3]
+        return _Features(
+            [
+                Point(0.0, 0.0),
+                LineString([(0.0, 0.0), (0.001, 0.0)]),
+                box(0.0, 0.0, 0.001, 0.001),
+            ]
+        )
+
+    monkeypatch.setattr(surface_layers, "_load_osm_features", load)
+    evidence = download_coastal_exposure_evidence(
+        (-1.0, 1.0, -1.0, 1.0),
+        0.0,
+        0.0,
+        _print_transform(),
+        100.0,
+        100.0,
+        buffer_mm=2.0,
+    )
+
+    assert captured["tags"] == COASTAL_EXPOSURE_EVIDENCE_TAGS
+    assert len(evidence) == 2
+    assert all(item.geom_type == "Polygon" for item in evidence)
+    assert evidence[0].area == pytest.approx(Point(50.0, 50.0).buffer(2.0).area)
+
+
+def test_coastal_evidence_requires_positive_print_buffer() -> None:
+    with pytest.raises(ValueError, match="buffer"):
+        download_coastal_exposure_evidence(
+            (-1.0, 1.0, -1.0, 1.0),
+            0.0,
+            0.0,
+            _print_transform(),
+            100.0,
+            100.0,
+            buffer_mm=0.0,
+        )
 
 
 def test_landscape_region_leaves_water_and_exposed_ground_uncovered() -> None:

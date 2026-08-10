@@ -15,6 +15,18 @@ ROUTE_LAYER_HEIGHT_SLOPES = {
     0.28: 0.45,
 }
 
+ROUTE_HEIGHT_PROFILE_DEFAULTS = {"urban": 2.0, "landscape": 1.2}
+
+
+def route_height_for_profile(style_profile: str, override_mm: float | None = None) -> float:
+    """Resolve visible route height, honoring an explicit user override."""
+    if style_profile not in ROUTE_HEIGHT_PROFILE_DEFAULTS:
+        raise ValueError(f"Unsupported style profile: {style_profile}")
+    height = ROUTE_HEIGHT_PROFILE_DEFAULTS[style_profile] if override_mm is None else float(override_mm)
+    if height <= 0.0:
+        raise ValueError("Route height must be positive")
+    return height
+
 
 def route_slope_for_layer_height(layer_height_mm: float) -> float:
     """Return the tested route profile slope nearest a slicer's layer height."""
@@ -27,8 +39,13 @@ def route_slope_for_layer_height(layer_height_mm: float) -> float:
 DEFAULT_CONFIG = {
     "portrait": {"map_width": 190.0, "map_height": 240.0},
     "landscape": {"map_width": 240.0, "map_height": 190.0},
-    "route_height": 2.0,
+    # None resolves from style profile (Urban 2.0 mm, Landscape 1.2 mm).
+    "route_height": None,
     "route_width": 1.2,
+    "route_markers": "none",
+    "route_marker_diameter_mm": 3.2,
+    "route_marker_height_mm": 1.0,
+    "route_marker_sections": 32,
     # Route tops share one elevation across their width and smooth only along travel.
     "route_terrain_smoothing_distance_mm": 1.5,
     "route_layer_height_mm": 0.16,
@@ -60,6 +77,13 @@ DEFAULT_CONFIG = {
     "surface_skin_thickness_mm": 0.4,
     "landscape_water_visible_thickness_mm": 0.4,
     "minimum_waterway_width_mm": 0.8,
+    # Automatic combines a categorical print-grid provider (when supplied)
+    # with explicit OSM exposed-ground polygons. Phase 1 remains fully offline.
+    "ground_cover_mode": "auto",
+    "ground_cover_sensitivity": "balanced",
+    "ground_cover_coastal_distance_m": 1000.0,
+    "landcover_min_feature_mm2": 0.5,
+    "landcover_min_width_mm": 0.6,
     "exposed_land_enabled": True,
     "terrain_request_timeout_seconds": 20.0,
     "terrain_request_attempts": 3,
@@ -124,6 +148,32 @@ DEFAULT_CONFIG = {
     },
     # which highway types to keep by default
     "road_types": ["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link", "residential", "living_street", "unclassified", "service", "cycleway"],
+    # Landscape maps retain only major contextual roads at lower relief.
+    "landscape_road_height": 0.4,
+    "landscape_road_types": [
+        "motorway", "motorway_link", "trunk", "trunk_link",
+        "primary", "primary_link",
+    ],
+    "landscape_road_widths": {
+        "motorway": 1.4,
+        "motorway_link": 1.1,
+        "trunk": 1.2,
+        "trunk_link": 1.0,
+        "primary": 1.0,
+        "primary_link": 0.8,
+    },
+    "landscape_road_terrain_smoothing_types": [
+        "motorway", "motorway_link", "trunk", "trunk_link",
+        "primary", "primary_link",
+    ],
+    "landscape_road_terrain_smoothing_distances_mm": {
+        "motorway": 5.0,
+        "motorway_link": 3.5,
+        "trunk": 4.0,
+        "trunk_link": 3.0,
+        "primary": 3.0,
+        "primary_link": 2.5,
+    },
     # Suppress only parking-lot circulation. Driveways, restricted access,
     # and other service links can be structurally important to urban road meshes.
     "excluded_road_service_types": ["parking_aisle"],

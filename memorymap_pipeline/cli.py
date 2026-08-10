@@ -4,7 +4,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from .config import load_config
+from .config import load_config, route_height_for_profile
 from .gpx_loader import load_route_from_gpx
 from .mesh import (
     build_base_plate,
@@ -59,7 +59,10 @@ def main() -> None:
 
     config = load_config(args.config)
     route_width_mm = args.route_width_mm if args.route_width_mm is not None else config["route_width"]
-    route_height_mm = args.route_height_mm if args.route_height_mm is not None else config["route_height"]
+    route_height_mm = route_height_for_profile(
+        str(config.get("style_profile", "urban")),
+        args.route_height_mm if args.route_height_mm is not None else config["route_height"],
+    )
     base_thickness_mm = args.base_thickness_mm if args.base_thickness_mm is not None else config["base_thickness"]
     margin_mm = args.margin_mm if args.margin_mm is not None else config["margin"]
 

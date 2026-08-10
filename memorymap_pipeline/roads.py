@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from types import MappingProxyType
+from typing import Iterable, Mapping
 import logging
 
 import shapely.geometry as geom
@@ -19,6 +20,70 @@ class RoadTerrainCorridor:
     region: geom.base.BaseGeometry
     width_mm: float
     classification: str
+
+
+@dataclass(frozen=True)
+class RoadStyle:
+    """Resolved, profile-specific defaults for printable road geometry."""
+
+    road_types: tuple[str, ...]
+    road_widths_mm: Mapping[str, float]
+    visible_height_mm: float
+    terrain_smoothing_types: tuple[str, ...]
+
+
+URBAN_ROAD_TYPES = (
+    "motorway", "motorway_link", "trunk", "trunk_link", "primary",
+    "primary_link", "secondary", "secondary_link", "tertiary",
+    "tertiary_link", "residential", "living_street", "unclassified",
+    "service", "cycleway",
+)
+URBAN_ROAD_WIDTHS_MM = MappingProxyType({
+    "motorway": 2.4, "motorway_link": 2.0, "trunk": 2.0,
+    "trunk_link": 1.8, "primary": 2.0, "primary_link": 1.8,
+    "secondary": 1.6, "secondary_link": 1.4, "tertiary": 1.4,
+    "tertiary_link": 1.2, "residential": 1.1, "living_street": 1.0,
+    "unclassified": 1.0, "service": 0.8, "pedestrian": 1.0,
+    "cycleway": 0.7, "footway": 0.6, "path": 0.5, "track": 0.7,
+})
+URBAN_ROAD_HEIGHT_MM = 0.8
+URBAN_ROAD_TERRAIN_SMOOTHING_TYPES = (
+    "motorway", "motorway_link", "trunk", "trunk_link",
+)
+
+LANDSCAPE_ROAD_TYPES = (
+    "motorway", "motorway_link", "trunk", "trunk_link", "primary",
+    "primary_link",
+)
+LANDSCAPE_ROAD_WIDTHS_MM = MappingProxyType({
+    "motorway": 1.4, "motorway_link": 1.1, "trunk": 1.2,
+    "trunk_link": 1.0, "primary": 1.0, "primary_link": 0.8,
+})
+LANDSCAPE_ROAD_HEIGHT_MM = 0.4
+LANDSCAPE_ROAD_TERRAIN_SMOOTHING_TYPES = LANDSCAPE_ROAD_TYPES
+
+_ROAD_STYLES = MappingProxyType({
+    "urban": RoadStyle(
+        URBAN_ROAD_TYPES,
+        URBAN_ROAD_WIDTHS_MM,
+        URBAN_ROAD_HEIGHT_MM,
+        URBAN_ROAD_TERRAIN_SMOOTHING_TYPES,
+    ),
+    "landscape": RoadStyle(
+        LANDSCAPE_ROAD_TYPES,
+        LANDSCAPE_ROAD_WIDTHS_MM,
+        LANDSCAPE_ROAD_HEIGHT_MM,
+        LANDSCAPE_ROAD_TERRAIN_SMOOTHING_TYPES,
+    ),
+})
+
+
+def resolve_road_style(style_profile: str) -> RoadStyle:
+    """Return immutable road defaults for an Urban or Landscape profile."""
+    try:
+        return _ROAD_STYLES[style_profile]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported style profile: {style_profile}") from exc
 
 
 def _normalize_highway_value(highway):

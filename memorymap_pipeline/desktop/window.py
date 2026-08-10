@@ -167,6 +167,14 @@ class MemoryMapWindow(QMainWindow):
         self.flat_border.toggled.connect(self._border_toggled)
         self.margin.setEnabled(False)
         self.route_width = self._spin(1.2, .1, 20)
+        self.route_height = QComboBox()
+        self.route_height.addItem("Auto (profile default)", None)
+        for height in (1.0, 1.2, 1.5, 2.0, 2.5, 3.0):
+            self.route_height.addItem(f"{height:.1f} mm", height)
+        self.route_height.setToolTip(
+            "Auto uses 1.2 mm for Landscape and 2.0 mm for Urban. "
+            "Select a value to override the profile default."
+        )
         self.route_layer_height = QComboBox()
         for layer_height, slope in ROUTE_LAYER_HEIGHT_SLOPES.items():
             self.route_layer_height.addItem(
@@ -184,7 +192,16 @@ class MemoryMapWindow(QMainWindow):
         form.addRow("Border", self.flat_border)
         form.addRow("Margin (mm)", self.margin)
         form.addRow("Route width (mm)", self.route_width)
+        form.addRow("Route height", self.route_height)
         form.addRow("Route layer height", self.route_layer_height)
+        marker_row = QWidget()
+        marker_layout = QHBoxLayout(marker_row)
+        marker_layout.setContentsMargins(0, 0, 0, 0)
+        self.start_marker = QCheckBox("Start")
+        self.finish_marker = QCheckBox("Finish")
+        marker_layout.addWidget(self.start_marker)
+        marker_layout.addWidget(self.finish_marker)
+        form.addRow("Route markers", marker_row)
         reset = QPushButton("Reset frame to route")
         reset.clicked.connect(self.reset_frame)
         form.addRow(reset)
@@ -214,9 +231,27 @@ class MemoryMapWindow(QMainWindow):
         self.minimum_waterway_width.setToolTip(
             "Narrower mapped waterways are widened to this printable width."
         )
+        self.ground_cover_mode = QComboBox()
+        self.ground_cover_mode.addItem("Automatic (raster + OSM)", "auto")
+        self.ground_cover_mode.addItem("OSM only", "osm-only")
+        self.ground_cover_mode.addItem("Off", "off")
+        self.ground_cover_sensitivity = QComboBox()
+        self.ground_cover_sensitivity.addItem("Balanced", "balanced")
+        self.ground_cover_sensitivity.addItem("Conservative", "conservative")
+        self.ground_cover_sensitivity.addItem("Broad", "broad")
+        self.ground_cover_mode.setToolTip(
+            "Automatic downloads and caches WorldCover and annual land cover, then "
+            "combines them with mapped beaches, sand, rock, cliffs, and water."
+        )
+        self.ground_cover_sensitivity.setToolTip(
+            "Controls print-scale cleanup of exposed ground. Broad retains more "
+            "small coastal patches; Conservative removes more marginal detail."
+        )
         style_form.addRow("Profile", self.style_profile)
         style_form.addRow("Surface skin", self.surface_skin_thickness)
         style_form.addRow("Minimum waterway width", self.minimum_waterway_width)
+        style_form.addRow("Ground cover", self.ground_cover_mode)
+        style_form.addRow("Exposed-ground detail", self.ground_cover_sensitivity)
         outer.addWidget(style_box)
 
         palette_box = QGroupBox("Layer colors")
@@ -253,6 +288,8 @@ class MemoryMapWindow(QMainWindow):
         layers = QGroupBox("Layers")
         layer_layout = QVBoxLayout(layers)
         self.route_layer = QCheckBox("Route"); self.route_layer.setChecked(True)
+        self.route_layer.toggled.connect(self.start_marker.setEnabled)
+        self.route_layer.toggled.connect(self.finish_marker.setEnabled)
         self.roads_layer = QCheckBox("Roads"); self.roads_layer.setChecked(True)
         self.buildings_layer = QCheckBox("Buildings"); self.buildings_layer.setChecked(True)
         self.terrain_layer = QCheckBox("Terrain (USGS 3DEP)")
@@ -488,6 +525,8 @@ class MemoryMapWindow(QMainWindow):
         )
         self.surface_skin_thickness.setEnabled(landscape)
         self.minimum_waterway_width.setEnabled(landscape)
+        self.ground_cover_mode.setEnabled(landscape)
+        self.ground_cover_sensitivity.setEnabled(landscape)
         if hasattr(self, "color_preset") and self.color_preset.currentData() is not None:
             preset = default_preset(self.style_profile.currentData())
             index = self.color_preset.findData(preset)
@@ -539,6 +578,18 @@ class MemoryMapWindow(QMainWindow):
 
     def _generation_config_payload(self) -> dict:
         route_layer_height = float(self.route_layer_height.currentData())
+        start_marker = bool(
+            getattr(self, "start_marker", None) and self.start_marker.isChecked()
+        )
+        finish_marker = bool(
+            getattr(self, "finish_marker", None) and self.finish_marker.isChecked()
+        )
+        marker_mode = (
+            "both" if start_marker and finish_marker
+            else "start" if start_marker
+            else "finish" if finish_marker
+            else "none"
+        )
         return {
             "terrain_enabled": self.terrain_layer.isChecked(),
             "water_enabled": self.water_layer.isChecked(),
@@ -549,9 +600,12 @@ class MemoryMapWindow(QMainWindow):
             "route_profile_max_slope": route_slope_for_layer_height(
                 route_layer_height
             ),
+            "route_markers": marker_mode,
             "style_profile": self.style_profile.currentData(),
             "surface_skin_thickness_mm": self.surface_skin_thickness.value(),
             "minimum_waterway_width_mm": self.minimum_waterway_width.value(),
+            "ground_cover_mode": self.ground_cover_mode.currentData(),
+            "ground_cover_sensitivity": self.ground_cover_sensitivity.currentData(),
             "color_preset": getattr(
                 self, "color_preset_name", default_preset(self.style_profile.currentData())
             ),
@@ -588,6 +642,7 @@ class MemoryMapWindow(QMainWindow):
                 "include_roads": self.roads_layer.isChecked(),
                 "include_buildings": self.buildings_layer.isChecked(),
                 "route_width_mm": self.route_width.value(),
+                "route_height_mm": self.route_height.currentData(),
                 "config": self._generation_config_payload(),
             }
             thread = QThread(self); worker = GenerationWorker(payload)

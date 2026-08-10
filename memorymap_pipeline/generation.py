@@ -15,10 +15,20 @@ from shapely.ops import unary_union
 from trimesh.util import concatenate
 
 from .buildings import download_and_build_buildings
-from .config import DEFAULT_CONFIG, route_slope_for_layer_height
+from .config import DEFAULT_CONFIG, route_height_for_profile, route_slope_for_layer_height
 from .geometry import buffered_polygon_from_points, repair_polygon
 from .gpx_loader import Route
+from .landcover import (
+    LandCoverClass,
+    LandCoverGrid,
+    LandCoverRequest,
+    cleanup_exposed_mask,
+    fuse_coastal_evidence,
+    polygonize_exposed_mask,
+    rasterize_geometry_mask,
+)
 from .map_frame import MapFrame
+from .impact_observatory import ImpactObservatoryProvider
 from .mesh import (
     build_base_plate,
     embedded_feature_dimensions,
@@ -26,9 +36,11 @@ from .mesh import (
     refine_mesh_edges,
     route_mesh_from_polygon,
 )
-from .roads import download_and_build_roads
+from .roads import download_and_build_roads, resolve_road_style
+from .route_markers import RouteMarkerMode, build_route_marker, marker_centers
 from .surface_layers import (
     build_conformal_surface_skin,
+    download_coastal_exposure_evidence,
     download_exposed_land_polygons,
     landscape_surface_region,
     recess_terrain_surface,
@@ -52,6 +64,7 @@ from .water import (
     download_water_polygons,
     prepare_water_bodies,
 )
+from .worldcover import WorldCoverProvider
 
 
 ProgressCallback = Callable[[int, str], None]
@@ -98,7 +111,7 @@ class GenerationRequest:
     include_roads: bool = True
     include_buildings: bool = True
     route_width_mm: float = 1.2
-    route_height_mm: float = 2.0
+    route_height_mm: float | None = None
     base_thickness_mm: float = 1.6
     config: dict[str, Any] = field(default_factory=dict)
     roads_file: str | Path | None = None
@@ -107,6 +120,7 @@ class GenerationRequest:
     water_polygons: list[Any] | None = None
     water_file: str | Path | None = None
     landcover_file: str | Path | None = None
+    landcover_grid: LandCoverGrid | None = None
 
 
 @dataclass
@@ -120,6 +134,8 @@ class GenerationResult:
     buildings_mesh: Any | None = None
     water_mesh: Any | None = None
     landscape_mesh: Any | None = None
+    start_marker_mesh: Any | None = None
+    finish_marker_mesh: Any | None = None
 
     @property
     def meshes(self) -> dict[str, Any]:
@@ -132,6 +148,8 @@ class GenerationResult:
                 "buildings": self.buildings_mesh,
                 "water": self.water_mesh,
                 "landscape": self.landscape_mesh,
+                "start_marker": self.start_marker_mesh,
+                "finish_marker": self.finish_marker_mesh,
             }.items()
             if mesh is not None
         }
@@ -343,7 +361,7 @@ def generate_memory_map(
 
     if len(request.route.points) < 2:
         raise ValueError("At least two route points are required")
-    if min(request.route_width_mm, request.route_height_mm, request.base_thickness_mm) <= 0:
+    if min(request.route_width_mm, request.base_thickness_mm) <= 0:
         raise ValueError("Mesh dimensions must be positive")
 
     progress(0, "Preparing print frame")
@@ -355,6 +373,7 @@ def generate_memory_map(
     if style_profile not in {"urban", "landscape"}:
         raise ValueError(f"Unsupported style profile: {style_profile}")
     landscape_style = style_profile == "landscape"
+    route_height_mm = route_height_for_profile(style_profile, request.route_height_mm)
     surface_skin_thickness_mm = float(
         config.get("surface_skin_thickness_mm", 0.4)
     )
@@ -381,7 +400,7 @@ def generate_memory_map(
         frame.print_height_mm - frame.margin_mm,
     )
     route_extrusion_mm, z_offset, feature_embed_mm = embedded_feature_dimensions(
-        request.route_height_mm,
+        route_height_mm,
         request.base_thickness_mm if request.include_base else 0.0,
         float(config.get("feature_embed_depth", 0.2)),
     )
@@ -396,6 +415,7 @@ def generate_memory_map(
     water_geometries: list[Any] = []
     linear_water_geometries: list[Any] = []
     linear_water_region = None
+    ground_cover_stats = None
     if request.include_base and bool(config.get("terrain_enabled", False)):
         terrain_target_cell_size_mm = float(
             config.get(
@@ -670,6 +690,11 @@ def generate_memory_map(
                 flat_margin_mm=frame.margin_mm,
             )
         if landscape_style:
+            ground_cover_mode = str(config.get("ground_cover_mode", "auto"))
+            if ground_cover_mode not in {"auto", "osm-only", "off"}:
+                raise ValueError(
+                    "Ground-cover mode must be 'auto', 'osm-only', or 'off'"
+                )
             exposed_land = (
                 download_exposed_land_polygons(
                     bbox=bbox,
@@ -682,9 +707,181 @@ def generate_memory_map(
                     landcover_file=request.landcover_file,
                 )
                 if bool(config.get("exposed_land_enabled", True))
+                and ground_cover_mode != "off"
                 else []
             )
-            if bool(config.get("exposed_land_enabled", True)) and not exposed_land:
+            osm_exposed_land = list(exposed_land)
+            worldcover_grid = request.landcover_grid
+            impact_grid = None
+            provider_warnings: list[str] = []
+            if ground_cover_mode == "auto" and worldcover_grid is None:
+                cache_dir = (
+                    Path(os.environ.get("LOCALAPPDATA", Path.home()))
+                    / "MemoryMap"
+                    / "landcover-cache"
+                )
+                landcover_request = LandCoverRequest(
+                    (0.0, 0.0, frame.print_width_mm, frame.print_height_mm),
+                    terrain_grid_spec.rows,
+                    terrain_grid_spec.columns,
+                    (bbox[2], bbox[0], bbox[3], bbox[1]),
+                )
+                try:
+                    worldcover_grid = WorldCoverProvider(
+                        cache_dir / "worldcover"
+                    ).get_land_cover(landcover_request)
+                except Exception as exc:
+                    provider_warnings.append(f"ESA WorldCover unavailable: {exc}")
+                try:
+                    impact_grid = ImpactObservatoryProvider(
+                        cache_dir / "impact-observatory"
+                    ).get_land_cover(landcover_request)
+                except Exception as exc:
+                    provider_warnings.append(
+                        f"Impact Observatory land cover unavailable: {exc}"
+                    )
+                if provider_warnings:
+                    warnings.append(
+                        "; ".join(provider_warnings)
+                        + ("; using OSM-only exposed ground."
+                           if worldcover_grid is None and impact_grid is None
+                           else "; continuing with the available raster source.")
+                    )
+            if ground_cover_mode == "auto" and (
+                worldcover_grid is not None or impact_grid is not None
+            ):
+                available_grid = worldcover_grid or impact_grid
+                assert available_grid is not None
+                unknown_classes = np.full(
+                    available_grid.shape,
+                    LandCoverClass.UNKNOWN.value,
+                    dtype=np.uint8,
+                )
+                if worldcover_grid is None:
+                    worldcover_grid = LandCoverGrid(
+                        unknown_classes,
+                        available_grid.bounds_mm,
+                        available_grid.provenance,
+                    )
+                if impact_grid is None:
+                    impact_grid = LandCoverGrid(
+                        unknown_classes,
+                        available_grid.bounds_mm,
+                        available_grid.provenance,
+                    )
+                mapped_water_mask = rasterize_geometry_mask(
+                    available_grid, water_geometries
+                )
+                osm_exposed_mask = rasterize_geometry_mask(
+                    available_grid, exposed_land
+                )
+                evidence_buffer_mm = 60.0 * min(
+                    frame.printable_width_mm / frame.coverage_width_m,
+                    frame.printable_height_mm / frame.coverage_height_m,
+                )
+                evidence_geometries = (
+                    []
+                    if request.landcover_grid is not None
+                    else download_coastal_exposure_evidence(
+                        bbox=bbox,
+                        center_lat=frame.center_lat,
+                        center_lon=frame.center_lon,
+                        transform=transform,
+                        map_width_mm=frame.print_width_mm,
+                        map_height_mm=frame.print_height_mm,
+                        buffer_mm=evidence_buffer_mm,
+                        radius_m=radius,
+                    )
+                )
+                evidence_result = fuse_coastal_evidence(
+                    worldcover_grid,
+                    impact_grid,
+                    mapped_water=mapped_water_mask,
+                    osm_exposed=osm_exposed_mask,
+                    cliff_or_outcrop=rasterize_geometry_mask(
+                        available_grid, evidence_geometries
+                    ),
+                    cell_size_m=(
+                        frame.coverage_width_m / available_grid.shape[1],
+                        frame.coverage_height_m / available_grid.shape[0],
+                    ),
+                    coastal_distance_m=float(
+                        config.get("ground_cover_coastal_distance_m", 1000.0)
+                    ),
+                    sensitivity=str(
+                        config.get("ground_cover_sensitivity", "balanced")
+                    ),
+                )
+                fused_grid = evidence_result.grid
+                cleaned_mask = cleanup_exposed_mask(
+                    fused_grid,
+                    excluded_water=mapped_water_mask,
+                    sensitivity=str(
+                        config.get("ground_cover_sensitivity", "balanced")
+                    ),
+                )
+                cleaned_classes = np.full(
+                    fused_grid.shape,
+                    LandCoverClass.UNKNOWN.value,
+                    dtype=np.uint8,
+                )
+                cleaned_classes[cleaned_mask] = LandCoverClass.BARE.value
+                cleaned_grid = LandCoverGrid(
+                    cleaned_classes, fused_grid.bounds_mm, fused_grid.provenance
+                )
+                raster_exposed = polygonize_exposed_mask(
+                    cleaned_grid,
+                ).intersection(printable)
+                exposed_land = list(osm_exposed_land)
+                if not raster_exposed.is_empty:
+                    exposed_land.append(raster_exposed)
+                exposed_cells = int(np.count_nonzero(cleaned_mask))
+                cell_count = fused_grid.classes.size
+                ground_cover_stats = {
+                    "mode": ground_cover_mode,
+                    "sensitivity": str(
+                        config.get("ground_cover_sensitivity", "balanced")
+                    ),
+                    "provider": fused_grid.provenance.provider,
+                    "dataset": fused_grid.provenance.dataset,
+                    "edition": fused_grid.provenance.edition,
+                    "cached": fused_grid.provenance.cached,
+                    "details": dict(fused_grid.provenance.details),
+                    "contributions": dict(evidence_result.contribution_counts),
+                    "osm_exposed_polygon_area_mm2": float(
+                        unary_union(osm_exposed_land).area
+                        if osm_exposed_land
+                        else 0.0
+                    ),
+                    "rows": fused_grid.shape[0],
+                    "columns": fused_grid.shape[1],
+                    "exposed_cells": exposed_cells,
+                    "exposed_percent": 100.0 * exposed_cells / cell_count,
+                    "vegetation_percent": float(
+                        100.0
+                        * np.count_nonzero(
+                            fused_grid.classes == LandCoverClass.VEGETATION.value
+                        )
+                        / cell_count
+                    ),
+                    "water_percent": float(
+                        100.0
+                        * np.count_nonzero(
+                            fused_grid.classes == LandCoverClass.WATER.value
+                        )
+                        / cell_count
+                    ),
+                }
+            else:
+                ground_cover_stats = {
+                    "mode": ground_cover_mode,
+                    "provider": "osm" if ground_cover_mode != "off" else None,
+                }
+            if (
+                bool(config.get("exposed_land_enabled", True))
+                and ground_cover_mode != "off"
+                and not exposed_land
+            ):
                 warnings.append(
                     "No mapped beach, sand, rock, or other exposed-land polygons "
                     "were returned; the landscape surface remains green in those areas."
@@ -737,7 +934,7 @@ def generate_memory_map(
                 LineString(scaled),
                 feature_support_at,
                 route_width_mm=request.route_width_mm,
-                visible_height_mm=request.route_height_mm,
+                visible_height_mm=route_height_mm,
                 smoothing_distance_mm=float(
                     config.get("route_terrain_smoothing_distance_mm", 1.5)
                 ),
@@ -754,9 +951,76 @@ def generate_memory_map(
             warnings.append("The route does not intersect the printable frame.")
     progress(25, "Route mesh complete")
 
+    marker_mode = RouteMarkerMode.parse(config.get("route_markers", "none"))
+    start_marker_mesh = None
+    finish_marker_mesh = None
+    if request.include_route and marker_mode is not RouteMarkerMode.NONE:
+        marker_diameter_mm = float(config.get("route_marker_diameter_mm", 3.2))
+        support_at = feature_support_at
+        if support_at is None:
+            support_height = request.base_thickness_mm if request.include_base else 0.0
+
+            def support_at(x_values, _y_values):
+                return np.full(np.asarray(x_values).shape, support_height, dtype=float)
+
+        for marker_name, center in marker_centers(
+            scaled[0], scaled[-1], marker_mode, marker_diameter_mm
+        ):
+            marker_mesh, reason = build_route_marker(
+                center,
+                support_at,
+                printable,
+                diameter_mm=marker_diameter_mm,
+                visible_height_mm=float(config.get("route_marker_height_mm", 1.0)),
+                embed_depth_mm=feature_embed_mm,
+                sections=int(config.get("route_marker_sections", 32)),
+            )
+            if marker_mesh is None:
+                warnings.append(f"{marker_name.title()} marker omitted: {reason}.")
+            elif marker_name == "start":
+                start_marker_mesh = marker_mesh
+            else:
+                finish_marker_mesh = marker_mesh
+
     unioned_roads = None
     roads_mesh = None
     if request.include_roads:
+        default_road_style = resolve_road_style(style_profile)
+        if landscape_style:
+            road_types = config.get(
+                "landscape_road_types", default_road_style.road_types
+            )
+            road_widths = config.get(
+                "landscape_road_widths", default_road_style.road_widths_mm
+            )
+            road_height_mm = float(
+                config.get(
+                    "landscape_road_height",
+                    default_road_style.visible_height_mm,
+                )
+            )
+            road_smoothing_types = config.get(
+                "landscape_road_terrain_smoothing_types",
+                default_road_style.terrain_smoothing_types,
+            )
+            road_smoothing_distances = config.get(
+                "landscape_road_terrain_smoothing_distances_mm", {}
+            )
+        else:
+            road_types = config.get("road_types", default_road_style.road_types)
+            road_widths = config.get(
+                "road_widths", default_road_style.road_widths_mm
+            )
+            road_height_mm = float(
+                config.get("road_height", default_road_style.visible_height_mm)
+            )
+            road_smoothing_types = config.get(
+                "road_terrain_smoothing_types",
+                default_road_style.terrain_smoothing_types,
+            )
+            road_smoothing_distances = config.get(
+                "road_terrain_smoothing_distances_mm", {}
+            )
         collector = _WarningCollector()
         logging.getLogger().addHandler(collector)
         try:
@@ -765,9 +1029,9 @@ def generate_memory_map(
             center_lat=frame.center_lat,
             center_lon=frame.center_lon,
             transform=transform,
-            road_types=config["road_types"],
-            road_widths=config["road_widths"],
-            road_height_mm=float(config["road_height"]),
+            road_types=road_types,
+            road_widths=road_widths,
+            road_height_mm=road_height_mm,
             network_type=str(config.get("road_network_type", "all")),
             map_width_mm=frame.print_width_mm,
             map_height_mm=frame.print_height_mm,
@@ -777,7 +1041,7 @@ def generate_memory_map(
             embed_depth_mm=feature_embed_mm,
             radius_m=radius,
             roads_file=str(request.roads_file) if request.roads_file else None,
-            terrain_smoothing_types=config.get("road_terrain_smoothing_types", ()),
+            terrain_smoothing_types=road_smoothing_types,
             excluded_service_types=config.get(
                 "excluded_road_service_types", ()
             ),
@@ -811,13 +1075,11 @@ def generate_memory_map(
                     roads_mesh,
                     feature_support_at,
                     profile_corridors,
-                    visible_height_mm=float(config["road_height"]),
+                    visible_height_mm=road_height_mm,
                     minimum_visible_height_mm=float(
                         config.get("road_terrain_min_visible_height_mm", 0.4)
                     ),
-                    smoothing_distances_mm=config.get(
-                        "road_terrain_smoothing_distances_mm", {}
-                    ),
+                    smoothing_distances_mm=road_smoothing_distances,
                 )
             else:
                 roads_mesh = drape_mesh(
@@ -888,6 +1150,8 @@ def generate_memory_map(
             buildings_mesh,
             water_mesh,
             landscape_mesh,
+            start_marker_mesh,
+            finish_marker_mesh,
         )
     ):
         raise ValueError("No printable layers were generated")
@@ -902,11 +1166,26 @@ def generate_memory_map(
         style_profile=style_profile,
         color_preset=config.get("color_preset"),
         layer_colors=config.get("layer_colors"),
+        start_marker_mesh=start_marker_mesh,
+        finish_marker_mesh=finish_marker_mesh,
     )
     stats = {
         "route_points": len(request.route.points),
+        "style_profile": style_profile,
+        "route_height_mm": route_height_mm,
+        "route_height_source": "profile_default" if request.route_height_mm is None else "explicit",
         "flat_border_enabled": flat_border_enabled,
         "roads": _geometry_count(unioned_roads),
+        "road_style": (
+            {
+                "profile": style_profile,
+                "types": list(road_types),
+                "height_mm": road_height_mm,
+            }
+            if request.include_roads
+            else None
+        ),
+        "ground_cover": ground_cover_stats,
         "buildings": _geometry_count(unioned_buildings),
         "terrain": (
             {
@@ -940,6 +1219,8 @@ def generate_memory_map(
             "buildings": _mesh_stats(buildings_mesh),
             "water": _mesh_stats(water_mesh),
             "landscape": _mesh_stats(landscape_mesh),
+            "start_marker": _mesh_stats(start_marker_mesh),
+            "finish_marker": _mesh_stats(finish_marker_mesh),
         },
     }
     progress(100, "3MF export complete")
@@ -953,6 +1234,8 @@ def generate_memory_map(
         buildings_mesh=buildings_mesh,
         water_mesh=water_mesh,
         landscape_mesh=landscape_mesh,
+        start_marker_mesh=start_marker_mesh,
+        finish_marker_mesh=finish_marker_mesh,
     )
 
 

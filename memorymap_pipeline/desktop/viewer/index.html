@@ -126,7 +126,7 @@
 
     function classify(name) {
       const value = (name || "").toLowerCase();
-      if (value.includes("route")) return "Route";
+      if (value.includes("route") || value.includes("marker")) return "Route";
       if (value.includes("road")) return "Roads";
       if (value.includes("building")) return "Buildings";
       if (value.includes("water")) return "Water";

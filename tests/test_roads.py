@@ -9,7 +9,56 @@ from trimesh import Trimesh
 
 from memorymap_pipeline.config import DEFAULT_CONFIG
 from memorymap_pipeline.map_frame import MapFrame
-from memorymap_pipeline.roads import _extrude_road_polygon, download_and_build_roads
+from memorymap_pipeline.roads import (
+    _extrude_road_polygon,
+    download_and_build_roads,
+    resolve_road_style,
+)
+
+
+def test_urban_road_style_matches_existing_geometry_defaults() -> None:
+    style = resolve_road_style("urban")
+
+    assert style.road_types == tuple(DEFAULT_CONFIG["road_types"])
+    assert dict(style.road_widths_mm) == DEFAULT_CONFIG["road_widths"]
+    assert style.visible_height_mm == DEFAULT_CONFIG["road_height"]
+    assert style.terrain_smoothing_types == tuple(
+        DEFAULT_CONFIG["road_terrain_smoothing_types"]
+    )
+
+
+def test_landscape_road_style_is_restrained_and_smooths_every_retained_road() -> None:
+    style = resolve_road_style("landscape")
+
+    assert style.road_types == (
+        "motorway",
+        "motorway_link",
+        "trunk",
+        "trunk_link",
+        "primary",
+        "primary_link",
+    )
+    assert dict(style.road_widths_mm) == {
+        "motorway": 1.4,
+        "motorway_link": 1.1,
+        "trunk": 1.2,
+        "trunk_link": 1.0,
+        "primary": 1.0,
+        "primary_link": 0.8,
+    }
+    assert style.visible_height_mm == 0.4
+    assert style.terrain_smoothing_types == style.road_types
+    assert style.road_types == tuple(DEFAULT_CONFIG["landscape_road_types"])
+    assert dict(style.road_widths_mm) == DEFAULT_CONFIG["landscape_road_widths"]
+    assert style.visible_height_mm == DEFAULT_CONFIG["landscape_road_height"]
+    assert style.terrain_smoothing_types == tuple(
+        DEFAULT_CONFIG["landscape_road_terrain_smoothing_types"]
+    )
+
+
+def test_road_style_resolver_rejects_unknown_profile() -> None:
+    with pytest.raises(ValueError, match="Unsupported style profile: trail"):
+        resolve_road_style("trail")
 
 
 def test_urban_defaults_keep_cycleways_but_not_access_tracks() -> None:

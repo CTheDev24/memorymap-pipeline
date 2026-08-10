@@ -21,9 +21,12 @@ def test_project_json_and_file_round_trip(tmp_path):
         include_buildings=False,
         route_width_mm=1.5,
         route_layer_height_mm=0.20,
+        route_markers="both",
         style_profile="landscape",
         surface_skin_thickness_mm=0.6,
         minimum_waterway_width_mm=1.0,
+        ground_cover_mode="osm-only",
+        ground_cover_sensitivity="broad",
         flat_border_enabled=True,
         color_preset="urban-classic",
         layer_colors={"route": "#AA5500"},
@@ -35,6 +38,11 @@ def test_project_json_and_file_round_trip(tmp_path):
     assert expected.to_dict()["flat_border_enabled"] is True
     assert expected.to_dict()["style"]["layer_colors"]["route"] == "#AA5500"
     assert expected.to_dict()["route"]["layer_height_mm"] == pytest.approx(0.20)
+    assert expected.to_dict()["route"]["height_mm"] is None
+    assert expected.to_dict()["route"]["markers"] == "both"
+    assert expected.to_dict()["style"]["ground_cover_mode"] == "osm-only"
+    assert expected.to_dict()["style"]["ground_cover_sensitivity"] == "broad"
+    assert expected.to_dict()["version"] == 2
 
 
 def test_project_rejects_unknown_version_and_invalid_dimensions():
@@ -50,6 +58,7 @@ def test_project_rejects_unknown_version_and_invalid_dimensions():
 
 def test_project_loads_legacy_version_one_without_style_settings():
     value = project().to_dict()
+    value["version"] = 1
     del value["style"]
 
     restored = DesktopProject.from_dict(value)
@@ -59,6 +68,18 @@ def test_project_loads_legacy_version_one_without_style_settings():
     assert restored.surface_skin_thickness_mm == pytest.approx(0.4)
     assert restored.minimum_waterway_width_mm == pytest.approx(0.8)
     assert restored.route_layer_height_mm == pytest.approx(0.16)
+    assert restored.route_height_mm == pytest.approx(2.0)
+    assert restored.route_markers == "none"
+
+
+def test_project_version_two_preserves_auto_and_explicit_route_height():
+    automatic = project().to_dict()
+    automatic["route"]["height_mm"] = None
+    assert DesktopProject.from_dict(automatic).route_height_mm is None
+
+    explicit = project().to_dict()
+    explicit["route"]["height_mm"] = 1.5
+    assert DesktopProject.from_dict(explicit).route_height_mm == pytest.approx(1.5)
 
 
 def test_project_rejects_unknown_style_profile():
@@ -212,9 +233,17 @@ def test_generation_config_includes_style_profile_and_landscape_dimensions():
     )()
     window.surface_skin_thickness = Value(0.4)
     window.minimum_waterway_width = Value(0.8)
+    window.ground_cover_mode = type(
+        "GroundCoverMode", (), {"currentData": lambda self: "auto"}
+    )()
+    window.ground_cover_sensitivity = type(
+        "GroundCoverSensitivity", (), {"currentData": lambda self: "balanced"}
+    )()
     window.flat_border = Check(False)
     window.color_preset_name = "landscape-classic"
     window.layer_colors = {"water": "#102030"}
+    window.start_marker = Check(True)
+    window.finish_marker = Check(False)
 
     payload = MemoryMapWindow._generation_config_payload(window)
 
@@ -224,6 +253,9 @@ def test_generation_config_includes_style_profile_and_landscape_dimensions():
     assert payload["flat_border_enabled"] is False
     assert payload["color_preset"] == "landscape-classic"
     assert payload["layer_colors"]["water"] == "#102030"
+    assert payload["route_markers"] == "start"
+    assert payload["ground_cover_mode"] == "auto"
+    assert payload["ground_cover_sensitivity"] == "balanced"
 
 
 def test_optional_border_defaults_to_full_extent_and_enables_margin_when_checked():
