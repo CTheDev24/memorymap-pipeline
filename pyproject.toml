@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memorymap-pipeline"
-version = "2.1.1"
+version = "2.1.2"
 description = "Convert GPX tracks and nearby map data into printable 3MF memory maps."
 readme = "README.md"
 requires-python = ">=3.11"

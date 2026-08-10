@@ -265,6 +265,10 @@ def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
     assert progress and progress[-1] == 100
     assert result.stats["roads"] > 0
     assert result.stats["buildings"] == 2  # third footprint is entirely east of the frame
+    height_distribution = result.stats["building_height_distribution"]
+    assert height_distribution["count"] == 2
+    assert sum(height_distribution["height_sources"].values()) == 2
+    assert height_distribution["rendered_height_mm"]["maximum"] > 0.0
     assert result.stats["route_height_mm"] == pytest.approx(2.0)
     assert result.stats["route_height_source"] == "explicit"
 

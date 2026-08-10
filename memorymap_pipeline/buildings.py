@@ -571,14 +571,21 @@ def _tiered_building_height_mapper(
             return preset_for(item.building_class).fallback_levels
         return real_height_m / 3.0
 
-    high_rises = sorted(
+    confident_storeys = sorted(
         storey_signal(item, item.total_height_m)
         for item in dimensions
         if item.height_source in {"height", "levels"}
-        and storey_signal(item, item.total_height_m) >= 9.0
     )
-    high_reference = float(np.percentile(high_rises, 99)) if high_rises else 9.0
-    high_reference = max(high_reference, 9.01)
+    regular_high_reference = (
+        max(9.0, float(np.percentile(confident_storeys, 90)))
+        if confident_storeys
+        else 9.0
+    )
+    exceptional_reference = (
+        max(regular_high_reference, confident_storeys[-1])
+        if confident_storeys
+        else regular_high_reference
+    )
 
     def low_rise(item: BuildingDimensions, footprint_area_m2: float) -> float:
         if item.building_type in _ACCESSORY_BUILDING_TYPES:
@@ -633,16 +640,74 @@ def _tiered_building_height_mapper(
         if storeys <= 8.0:
             fraction = (storeys - 3.0) / 5.0
             return min(max(1.2, (3.0 + fraction * 6.0) * scale_factor), scaled_ceiling)
+        high_floor = max(1.2, 9.0 * scale_factor)
+        if storeys <= 9.0:
+            return min(high_floor, scaled_ceiling)
+        regular_ceiling = max(high_floor, scaled_ceiling * 0.58)
+        if regular_high_reference > 9.0 and storeys <= regular_high_reference:
+            fraction = (storeys - 9.0) / (regular_high_reference - 9.0)
+            visible = high_floor + (fraction**0.85) * (regular_ceiling - high_floor)
+            return min(visible, scaled_ceiling)
+        if exceptional_reference <= regular_high_reference + 1e-9:
+            return min(regular_ceiling, scaled_ceiling)
         fraction = min(
             1.0,
-            max(0.0, (storeys - 9.0) / (high_reference - 9.0)),
+            max(
+                0.0,
+                (storeys - regular_high_reference)
+                / (exceptional_reference - regular_high_reference),
+            ),
         )
-        high_floor = max(1.2, 9.0 * scale_factor)
-        high_ceiling = max(high_floor, scaled_ceiling)
-        visible = high_floor + (fraction**0.72) * (high_ceiling - high_floor)
+        visible = regular_ceiling + (fraction**1.25) * (
+            scaled_ceiling - regular_ceiling
+        )
         return min(visible, scaled_ceiling)
 
     return mapped
+
+
+def _height_distribution_stats(
+    dimensions: list[BuildingDimensions], rendered_heights_mm: list[float], max_height_mm: float
+) -> dict[str, object]:
+    """Return compact diagnostics for source and rendered-height distributions."""
+
+    if len(dimensions) != len(rendered_heights_mm):
+        raise ValueError("Building dimensions and rendered heights must have equal lengths")
+    source_counts: dict[str, int] = {}
+    for item in dimensions:
+        source_counts[item.height_source] = source_counts.get(item.height_source, 0) + 1
+    real_heights = np.asarray([item.total_height_m for item in dimensions], dtype=float)
+    rendered = np.asarray(rendered_heights_mm, dtype=float)
+
+    def percentile(values: np.ndarray, value: float) -> float | None:
+        return float(np.percentile(values, value)) if values.size else None
+
+    def fraction_at_or_above(fraction: float) -> float:
+        if not rendered.size or max_height_mm <= 0.0:
+            return 0.0
+        return float(np.count_nonzero(rendered >= max_height_mm * fraction) / rendered.size)
+
+    return {
+        "count": len(dimensions),
+        "height_sources": dict(sorted(source_counts.items())),
+        "real_height_m": {
+            "p50": percentile(real_heights, 50),
+            "p90": percentile(real_heights, 90),
+            "p99": percentile(real_heights, 99),
+            "maximum": float(real_heights.max()) if real_heights.size else None,
+        },
+        "rendered_height_mm": {
+            "p50": percentile(rendered, 50),
+            "p90": percentile(rendered, 90),
+            "p99": percentile(rendered, 99),
+            "maximum": float(rendered.max()) if rendered.size else None,
+        },
+        "ceiling_occupancy": {
+            "at_least_50_percent": fraction_at_or_above(0.50),
+            "at_least_75_percent": fraction_at_or_above(0.75),
+            "at_least_90_percent": fraction_at_or_above(0.90),
+        },
+    }
 
 
 def _stadium_recipe_for_landmark(
@@ -1042,7 +1107,6 @@ def download_and_build_buildings(
         max_print_height_mm,
         map_scale_mm_per_m=building_scale_mm_per_m,
     )
-
     def real_area_m2(polygon: geom.base.BaseGeometry) -> float:
         return polygon.area / max(horizontal_scale_mm_per_m**2, 1e-12)
 
@@ -1058,6 +1122,16 @@ def download_and_build_buildings(
             total_visible = min(total_visible, preset.max_visual_height_mm)
         fraction = np.clip(real_height_m / max(dimensions.total_height_m, 1e-9), 0.0, 1.0)
         return float(total_visible * fraction)
+
+    rendered_element_heights = [
+        classified_height(dims, dims.total_height_m, dims.footprint_area_m2)
+        for _poly, dims, _is_part, _landmark in elements
+    ]
+    height_distribution = _height_distribution_stats(
+        [dims for _poly, dims, _is_part, _landmark in elements],
+        rendered_element_heights,
+        max_print_height_mm,
+    )
 
     logging.info(
         "Buildings: %d footprints | real heights %.1f–%.1f m | "
@@ -1178,6 +1252,7 @@ def download_and_build_buildings(
             final_mesh = concatenate(meshes)
         except Exception:
             final_mesh = meshes[0]
+        final_mesh.metadata["building_height_distribution"] = height_distribution
 
     # Union of all clipped footprints (used for debug overlay and return value)
     unioned = ops.unary_union([p for p, _dims, _is_part, _landmark in elements])

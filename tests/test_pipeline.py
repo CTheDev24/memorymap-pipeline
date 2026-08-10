@@ -8,6 +8,7 @@ from shapely.geometry import box
 from memorymap_pipeline.buildings import (
     _adaptive_height_mapper,
     _building_dimensions,
+    _height_distribution_stats,
     _tiered_building_height_mapper,
     _extract_real_height_m,
     _tags_from_gdf_row,
@@ -388,3 +389,54 @@ def test_tiered_building_mapper_scales_citywide_heights_with_map_extent():
     assert marathon(lowrise, lowrise.total_height_m, 500.0) == pytest.approx(4.5)
     assert neighbourhood(tower, tower.total_height_m, 500.0) == pytest.approx(30.0)
     assert marathon(tower, tower.total_height_m, 500.0) == pytest.approx(15.0)
+
+
+def test_tiered_building_mapper_reserves_ceiling_for_exceptional_towers():
+    ordinary = [
+        _building_dimensions(
+            {"building": "apartments", "building:levels": str(12 + index % 9)},
+            6.0,
+            3.0,
+            400.0,
+        )
+        for index in range(100)
+    ]
+    exceptional = _building_dimensions(
+        {"building": "apartments", "building:levels": "60"}, 6.0, 3.0, 400.0
+    )
+    mapper = _tiered_building_height_mapper([*ordinary, exceptional], 24.8)
+    rendered = [
+        mapper(item, item.total_height_m, 500.0) for item in [*ordinary, exceptional]
+    ]
+
+    assert max(rendered[:-1]) <= 24.8 * 0.58 + 0.25
+    assert rendered[-1] == pytest.approx(24.8)
+    assert sum(height >= 24.8 * 0.9 for height in rendered) <= 2
+
+
+def test_tiered_building_mapper_does_not_promote_uniform_towers_to_ceiling():
+    towers = [
+        _building_dimensions(
+            {"building": "apartments", "building:levels": "20"}, 6.0, 3.0, 400.0
+        )
+        for _ in range(40)
+    ]
+    mapper = _tiered_building_height_mapper(towers, 24.8)
+
+    assert mapper(towers[0], towers[0].total_height_m, 500.0) == pytest.approx(24.8 * 0.58)
+
+
+def test_building_height_distribution_reports_sources_and_ceiling_occupancy():
+    fallback = _building_dimensions({"building": "yes"}, 6.0, 3.0, 400.0)
+    levels = _building_dimensions(
+        {"building": "apartments", "building:levels": "12"}, 6.0, 3.0, 400.0
+    )
+    explicit = _building_dimensions(
+        {"building": "office", "height": "180"}, 6.0, 3.0, 400.0
+    )
+
+    stats = _height_distribution_stats([fallback, levels, explicit], [2.0, 10.0, 24.8], 24.8)
+
+    assert stats["height_sources"] == {"fallback": 1, "height": 1, "levels": 1}
+    assert stats["rendered_height_mm"]["maximum"] == pytest.approx(24.8)
+    assert stats["ceiling_occupancy"]["at_least_90_percent"] == pytest.approx(1 / 3)

@@ -1187,6 +1187,11 @@ def generate_memory_map(
         ),
         "ground_cover": ground_cover_stats,
         "buildings": _geometry_count(unioned_buildings),
+        "building_height_distribution": (
+            buildings_mesh.metadata.get("building_height_distribution")
+            if buildings_mesh is not None
+            else None
+        ),
         "terrain": (
             {
                 "source": elevation_grid.source,
