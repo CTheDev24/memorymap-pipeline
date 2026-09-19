@@ -1,0 +1,15 @@
+{
+  "name": "Chicago Marathon full-route-scale benchmark v1",
+  "coverage_note": "REPLACE with year, source coverage and any subset limitations",
+  "sources": {
+    "route": {"path": "downloads/route.gpx", "origin": "REPLACE with source URL or local run identity", "acquired_at": "REPLACE with acquisition date", "license": "REPLACE with usage rights"},
+    "buildings": {"path": "downloads/buildings.geojson", "origin": "https://www.openstreetmap.org", "acquired_at": "REPLACE with snapshot date", "license": "ODbL 1.0; OpenStreetMap contributors"},
+    "roads": {"path": "downloads/roads.geojson", "origin": "https://www.openstreetmap.org", "acquired_at": "REPLACE with snapshot date", "license": "ODbL 1.0; OpenStreetMap contributors"},
+    "water": {"path": "downloads/water.geojson", "origin": "https://www.openstreetmap.org", "acquired_at": "REPLACE with snapshot date", "license": "ODbL 1.0; OpenStreetMap contributors"}
+  },
+  "crops": [
+    {"name": "downtown", "center_latlon": [41.883, -87.630], "size_mm": 25},
+    {"name": "dense-neighborhood", "center_latlon": [41.940, -87.647], "size_mm": 25},
+    {"name": "sparse-neighborhood", "center_latlon": [41.846, -87.640], "size_mm": 25}
+  ]
+}

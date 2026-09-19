@@ -165,6 +165,10 @@ def _floating_components(
             bottom = bottom[sample_indices]
 
         for bottom_triangle in bottom:
+            # One direct base contact proves this shell's support path. Extra
+            # edges cannot change reachability and are costly on citywide maps.
+            if any(support[0] == "base" for support in support_graph[key]):
+                break
             bottom_polygon = Polygon(bottom_triangle[:, :2])
             if bottom_polygon.area <= 1e-10:
                 continue
@@ -175,7 +179,7 @@ def _floating_components(
                 else:  # Shapely 1.x compatibility
                     index = geometry_indices[id(candidate)]
                 surface = surface_triangles[index]
-                if surface.component == key:
+                if surface.component == key or surface.component in support_graph[key]:
                     continue
                 overlap_region = bottom_polygon.intersection(surface_polygons[index])
                 if overlap_region.area <= 1e-8:
@@ -188,6 +192,8 @@ def _floating_components(
                 overlap = support_z - bottom_z
                 if -contact_tolerance_mm <= overlap <= maximum_overlap_mm:
                     support_graph[key].add(surface.component)
+                    if surface.component[0] == "base":
+                        break
 
     connected = {key for key in component_lookup if key[0] == "base"}
     changed = True

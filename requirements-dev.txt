@@ -6,3 +6,4 @@ pyproj>=3.4
 shapely>=2.0
 networkx>=3.1
 requests>=2.28
+scipy>=1.11

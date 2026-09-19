@@ -49,8 +49,11 @@ Notes:
 - Export now stops when a component is non-manifold, has inconsistent face winding or
   non-positive volume, or has no geometric support path to the base. Roofs may be supported
   through their building body; mutually touching floating shells do not satisfy the check.
-- The production printability profile assumes a 0.4 mm nozzle, 0.16 mm layer height,
-  0.8 mm minimum structural XY feature, and a 1.6 mm structural base.
+- The intended printability profile assumes a 0.4 mm nozzle, 0.16 mm layer height,
+  0.8 mm structural XY target, and a 1.6 mm structural base. The export audit checks
+  topology and support; it does not enforce minimum building width or guarantee
+  toolpath survival. See the [footprint benchmark](benchmarks/README.md) for
+  reproducible specimens, Chicago snapshots, and slicing/physical-print validation.
 - Debug plots for roads can be enabled by setting `roads_debug` to `true` in the config.
 
 ```bash

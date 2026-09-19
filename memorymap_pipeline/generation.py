@@ -121,6 +121,9 @@ class GenerationRequest:
     water_file: str | Path | None = None
     landcover_file: str | Path | None = None
     landcover_grid: LandCoverGrid | None = None
+    building_diagnostics: list[dict] | None = None
+    # Internal analysis may inspect meshes before the normal audited export.
+    export_model: bool = True
 
 
 @dataclass
@@ -1133,6 +1136,7 @@ def generate_memory_map(
             extend_elevated_parts_to_ground=bool(
                 config.get("extend_elevated_building_parts_to_ground", True)
             ),
+            diagnostics=request.building_diagnostics,
         )
         finally:
             logging.getLogger().removeHandler(collector)
@@ -1155,20 +1159,21 @@ def generate_memory_map(
         )
     ):
         raise ValueError("No printable layers were generated")
-    export_3mf(
-        output_path,
-        base_mesh,
-        route_mesh,
-        roads_mesh,
-        buildings_mesh,
-        water_mesh,
-        landscape_mesh=landscape_mesh,
-        style_profile=style_profile,
-        color_preset=config.get("color_preset"),
-        layer_colors=config.get("layer_colors"),
-        start_marker_mesh=start_marker_mesh,
-        finish_marker_mesh=finish_marker_mesh,
-    )
+    if request.export_model:
+        export_3mf(
+            output_path,
+            base_mesh,
+            route_mesh,
+            roads_mesh,
+            buildings_mesh,
+            water_mesh,
+            landscape_mesh=landscape_mesh,
+            style_profile=style_profile,
+            color_preset=config.get("color_preset"),
+            layer_colors=config.get("layer_colors"),
+            start_marker_mesh=start_marker_mesh,
+            finish_marker_mesh=finish_marker_mesh,
+        )
     stats = {
         "route_points": len(request.route.points),
         "style_profile": style_profile,
@@ -1228,7 +1233,7 @@ def generate_memory_map(
             "finish_marker": _mesh_stats(finish_marker_mesh),
         },
     }
-    progress(100, "3MF export complete")
+    progress(100, "3MF export complete" if request.export_model else "Meshes ready for analysis")
     return GenerationResult(
         output_path=output_path,
         warnings=warnings,

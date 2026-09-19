@@ -59,6 +59,15 @@ def test_roof_can_reach_base_through_supported_body() -> None:
     assert report.printable
 
 
+def test_mutually_overlapping_floating_shells_do_not_support_each_other() -> None:
+    base = build_base_plate(40.0, 30.0, 1.6)
+    first = _solid((4.0, 4.0, 2.0), (10.0, 10.0, 4.0))
+    second = _solid((4.0, 4.0, 2.0), (11.0, 10.0, 4.0))
+    report = audit_printability({"base": base, "buildings": concatenate((first, second))})
+    assert not report.printable
+    assert any(issue.code == "floating_components" for issue in report.issues)
+
+
 def test_only_tiny_proven_floating_building_shells_are_removed() -> None:
     base = build_base_plate(40.0, 30.0, 1.6)
     grounded = _solid((4.0, 4.0, 2.2), (10.0, 10.0, 0.9))

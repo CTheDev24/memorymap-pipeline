@@ -819,6 +819,7 @@ def download_and_build_buildings(
     terrain_height_at: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None,
     building_scale_mm_per_m: float | None = None,
     extend_elevated_parts_to_ground: bool = True,
+    diagnostics: list[dict] | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
@@ -841,8 +842,6 @@ def download_and_build_buildings(
             cols = list(df.columns)
             for _, row in df.iterrows():
                 g = row.geometry
-                if g is None:
-                    continue
                 geo_with_tags.append((g, _tags_from_gdf_row(row, cols)))
         except Exception as exc:
             logging.warning("Failed to read local buildings file %s: %s", buildings_file, exc)
@@ -994,14 +993,20 @@ def download_and_build_buildings(
         tuple[geom.base.BaseGeometry, BuildingDimensions, bool, LandmarkDefinition | None]
     ] = []
 
-    for g, tags in geo_with_tags:
-        if g is None:
-            continue
-        if g.geom_type == "Polygon":
+    diagnostic_by_geometry: dict[int, dict] = {}
+    for source_index, (g, tags) in enumerate(geo_with_tags, 1):
+        if g is not None and g.geom_type == "Polygon":
             polys = [g]
-        elif g.geom_type == "MultiPolygon":
+        elif g is not None and g.geom_type == "MultiPolygon":
             polys = list(g.geoms)
         else:
+            if diagnostics is not None:
+                diagnostics.append({
+                    "id": f"b{source_index:06d}-p0",
+                    "source_id": str(tags.get("_osm_id", tags.get("id", source_index))),
+                    "status": "unresolved", "reason": "unsupported_or_null_geometry",
+                    "output_face_ranges": [],
+                })
             continue
 
         landmark = None
@@ -1025,7 +1030,16 @@ def download_and_build_buildings(
             max_height_m=building_max_real_height_m,
         )
 
-        for p in polys:
+        for polygon_index, p in enumerate(polys, 1):
+            record = {
+                "id": f"b{source_index:06d}-p{polygon_index}",
+                "source_id": str(tags.get("_osm_id", tags.get("id", source_index))),
+                "status": "unresolved",
+                "reason": "empty_or_invalid_geometry",
+                "output_face_ranges": [],
+            }
+            if diagnostics is not None:
+                diagnostics.append(record)
             if p.is_empty:
                 continue
 
@@ -1034,6 +1048,7 @@ def download_and_build_buildings(
                     p, center_lat=center_lat, center_lon=center_lon, transform=transform
                 )
             except Exception:
+                record.update(status="unresolved", reason="transform_failed")
                 continue
 
             if not tp.is_valid:
@@ -1042,6 +1057,8 @@ def download_and_build_buildings(
                 continue
 
             original_area = tp.area
+            if diagnostics is not None:
+                record["source_print_geometry"] = geom.mapping(tp)
             if original_area <= 0.0:
                 continue
             element_dimensions = replace(
@@ -1053,9 +1070,11 @@ def download_and_build_buildings(
             try:
                 clipped = tp.intersection(plate_box)
             except Exception:
+                record["reason"] = "frame_intersection_failed"
                 continue
 
             if clipped.is_empty:
+                record.update(status="omitted", reason="outside_frame")
                 continue
 
             fraction_inside = clipped.area / original_area
@@ -1063,6 +1082,7 @@ def download_and_build_buildings(
             # less than (1 - building_clip_threshold).  With a threshold of 0.5 this
             # discards any building that has more than 50 % of its area outside.
             if fraction_inside < (1.0 - building_clip_threshold):
+                record.update(status="omitted", reason="frame_clip_threshold")
                 continue
 
             if not clipped.is_valid:
@@ -1073,6 +1093,8 @@ def download_and_build_buildings(
             elements.append(
                 (clipped, element_dimensions, "building:part" in effective_tags, landmark)
             )
+            diagnostic_by_geometry[id(clipped)] = record
+            record.update(status="unresolved", reason="not_meshed")
 
     if not elements:
         return None, None
@@ -1084,8 +1106,12 @@ def download_and_build_buildings(
         ] = []
         for poly, dims, is_part, landmark in elements:
             remainder = poly if is_part else poly.difference(part_union)
+            record = diagnostic_by_geometry[id(poly)]
             if not remainder.is_empty:
                 resolved.append((remainder, dims, is_part, landmark))
+                diagnostic_by_geometry[id(remainder)] = record
+            else:
+                record.update(status="omitted", reason="replaced_by_building_parts")
         elements = resolved
 
     supported_elevated = _supported_elevated_elements(elements)
@@ -1152,8 +1178,14 @@ def download_and_build_buildings(
 
     # Extrude each building individually then concatenate into one mesh
     meshes = []
+    face_cursor = 0
     surface_z = z_offset + embed_depth_mm
     for element_index, (poly, dimensions, _is_part, landmark) in enumerate(elements):
+        record = diagnostic_by_geometry[id(poly)]
+        first_mesh = len(meshes)
+        mesh_failed = False
+        if diagnostics is not None:
+            record["output_print_geometry"] = geom.mapping(poly)
         parts: list[geom.Polygon] = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
         parts.sort(key=lambda candidate: candidate.area, reverse=True)
         for part_index, part in enumerate(parts):
@@ -1242,7 +1274,17 @@ def download_and_build_buildings(
                 if roof is not None:
                     meshes.append(roof)
             except Exception as exc:
+                mesh_failed = True
                 logging.warning("Failed creating building mesh: %s", exc)
+
+        face_count = sum(len(mesh.faces) for mesh in meshes[first_mesh:])
+        if face_count:
+            record["output_face_ranges"].append([face_cursor, face_cursor + face_count])
+        record.update(
+            status="retained" if face_count and not mesh_failed else "unresolved",
+            reason="individual_extrusion" if face_count and not mesh_failed else "mesh_failed",
+        )
+        face_cursor += face_count
 
     final_mesh = None
     if meshes:
