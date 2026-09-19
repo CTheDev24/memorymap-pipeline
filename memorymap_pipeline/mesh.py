@@ -204,8 +204,37 @@ def route_mesh_from_polygon(polygon, height_mm: float, z_offset: float = 0.0) ->
     The polygon bottom will be at z=z_offset and top at z=z_offset + height_mm.
     """
     mesh = extrude_polygon(polygon, height_mm)
+    if not mesh.is_watertight and polygon.is_valid and polygon.geom_type == "Polygon":
+        # A courtyard touching the exterior at a point extrudes to a four-face
+        # edge. Partition through that contact without filling or widening it.
+        from shapely.geometry import LineString
+        from shapely.ops import split
+        from trimesh.util import concatenate
+
+        contacts = []
+        for ring in polygon.interiors:
+            contact = polygon.exterior.intersection(ring)
+            if contact.geom_type == "Point":
+                contacts.append(contact)
+            elif contact.geom_type == "MultiPoint":
+                contacts.extend(contact.geoms)
+        x0, y0, x1, y1 = polygon.bounds
+        for contact in contacts:
+            for line in (
+                LineString([(x0 - 1, contact.y), (x1 + 1, contact.y)]),
+                LineString([(contact.x, y0 - 1), (contact.x, y1 + 1)]),
+            ):
+                parts = list(split(polygon, line).geoms)
+                candidates = [extrude_polygon(part, height_mm) for part in parts]
+                if len(parts) > 1 and all(candidate.is_watertight for candidate in candidates):
+                    mesh = concatenate(candidates)
+                    break
+            if mesh.is_watertight:
+                break
     mesh.apply_translation((0.0, 0.0, z_offset))
-    valid_faces = np.isfinite(mesh.area_faces) & (mesh.area_faces > 1e-12)
+    # Positive-area slivers can close a valid shell. Removing them by size opens
+    # near-collinear footprints; discard only nonfinite or truly collapsed faces.
+    valid_faces = np.isfinite(mesh.area_faces) & (mesh.area_faces > 0.0)
     if not np.all(valid_faces):
         mesh.update_faces(valid_faces)
         mesh.remove_unreferenced_vertices()

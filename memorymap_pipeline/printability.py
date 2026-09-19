@@ -108,6 +108,22 @@ def _triangle_height(triangle: np.ndarray, x: float, y: float) -> float | None:
     )
 
 
+def _vertical_solid_contains(triangles: np.ndarray, x: float, y: float, z: float) -> bool:
+    """Test occupancy using oriented crossings above a point, including cavities.
+
+    Deduplicate coplanar hits so a ray on a triangulation diagonal is counted once.
+    This is only the fallback for deep overlaps, not the normal contact path.
+    """
+    crossings = set()
+    for triangle in triangles:
+        height = _triangle_height(triangle, x, y)
+        if height is None or height <= z:
+            continue
+        normal_z = np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0])[2]
+        crossings.add((round(height, 9), 1 if normal_z > 0 else -1))
+    return sum(sign for _height, sign in crossings) > 0
+
+
 def _floating_components(
     active: Mapping[str, Trimesh],
     component_lookup: Mapping[tuple[str, int], _Component],
@@ -190,7 +206,14 @@ def _floating_components(
                 if support_z is None or bottom_z is None:
                     continue
                 overlap = support_z - bottom_z
-                if -contact_tolerance_mm <= overlap <= maximum_overlap_mm:
+                contact = -contact_tolerance_mm <= overlap <= maximum_overlap_mm
+                if overlap > maximum_overlap_mm:
+                    other = component_lookup[surface.component]
+                    other_triangles = active[other.layer].triangles[other.face_indices]
+                    contact = _vertical_solid_contains(
+                        other_triangles, sample.x, sample.y, bottom_z + 1e-7
+                    )
+                if contact:
                     support_graph[key].add(surface.component)
                     if surface.component[0] == "base":
                         break

@@ -750,6 +750,16 @@ def _stadium_recipe_for_landmark(
     )
 
 
+def _is_numerical_fragment(polygon: geom.Polygon) -> bool:
+    """Identify boolean-operation residue at coordinate roundoff precision."""
+    x0, y0, x1, y1 = polygon.bounds
+    precision = 8 * np.spacing(max(1.0, abs(x0), abs(y0), abs(x1), abs(y1)))
+    return (
+        polygon.minimum_clearance <= precision
+        and polygon.area <= precision * max(x1 - x0, y1 - y0)
+    )
+
+
 def _supported_elevated_elements(
     elements: list[
         tuple[
@@ -759,12 +769,15 @@ def _supported_elevated_elements(
             LandmarkDefinition | None,
         ]
     ],
-) -> set[int]:
-    """Find elevated parts with a footprint and height support path to ground."""
+    vertical_bounds: list[tuple[float, float]] | None = None,
+) -> dict[int, float]:
+    """Map supported parts to bottoms that retain contact after height mapping."""
+    if vertical_bounds is not None:
+        vertical_bounds = list(vertical_bounds)
     footprints = [element[0] for element in elements]
     tree = STRtree(footprints)
     supported = {
-        index
+        index: 0.0
         for index, (_poly, dimensions, _is_part, _landmark) in enumerate(elements)
         if dimensions.min_height_m <= 1e-9
     }
@@ -774,7 +787,7 @@ def _supported_elevated_elements(
         if dimensions.min_height_m > 1e-9
     }
     while pending:
-        newly_supported: set[int] = set()
+        newly_supported: dict[int, float] = {}
         for index in pending:
             footprint, dimensions, _is_part, _landmark = elements[index]
             for candidate in tree.query(footprint, predicate="intersects"):
@@ -786,10 +799,17 @@ def _supported_elevated_elements(
                     continue
                 if footprint.intersection(support_footprint).area <= 1e-8:
                     continue
-                newly_supported.add(index)
-                break
+                bottom = (
+                    dimensions.min_height_m if vertical_bounds is None else
+                    min(vertical_bounds[index][0], vertical_bounds[support_index][1])
+                )
+                newly_supported[index] = max(newly_supported.get(index, 0.0), bottom)
         if not newly_supported:
             break
+        if vertical_bounds is not None:
+            for index, bottom in newly_supported.items():
+                old_bottom, old_top = vertical_bounds[index]
+                vertical_bounds[index] = (bottom, old_top - (old_bottom - bottom))
         supported.update(newly_supported)
         pending.difference_update(newly_supported)
     return supported
@@ -1114,8 +1134,6 @@ def download_and_build_buildings(
                 record.update(status="omitted", reason="replaced_by_building_parts")
         elements = resolved
 
-    supported_elevated = _supported_elevated_elements(elements)
-
     # Architectural relief uses explicit low/mid/high visual tiers. Horizontal map
     # scale remains useful for recovering each footprint's real-world area.
     all_real_heights = [dims.total_height_m for _, dims, _, _ in elements]
@@ -1153,6 +1171,26 @@ def download_and_build_buildings(
         classified_height(dims, dims.total_height_m, dims.footprint_area_m2)
         for _poly, dims, _is_part, _landmark in elements
     ]
+    # Real-world support does not guarantee contact after visual height mapping:
+    # each building's tier and footprint can change its vertical scale.
+    vertical_bounds = []
+    for poly, dims, _is_part, _landmark in elements:
+        area_m2 = dims.footprint_area_m2 or real_area_m2(poly)
+        total = classified_height(dims, dims.total_height_m, area_m2)
+        minimum_body = min(0.6, total)
+        bottom = min(
+            classified_height(dims, dims.min_height_m, area_m2),
+            max(0.0, total - minimum_body),
+        )
+        eave = min(
+            total,
+            max(bottom + minimum_body, classified_height(dims, dims.eave_height_m, area_m2)),
+        )
+        vertical_bounds.append((bottom, eave))
+    supported_elevated = _supported_elevated_elements(elements, vertical_bounds)
+    if extend_elevated_parts_to_ground:
+        for index, bottom in supported_elevated.items():
+            rendered_element_heights[index] -= max(0.0, vertical_bounds[index][0] - bottom)
     height_distribution = _height_distribution_stats(
         [dims for _poly, dims, _is_part, _landmark in elements],
         rendered_element_heights,
@@ -1187,6 +1225,18 @@ def download_and_build_buildings(
         if diagnostics is not None:
             record["output_print_geometry"] = geom.mapping(poly)
         parts: list[geom.Polygon] = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
+        numerical = [part for part in parts if _is_numerical_fragment(part)]
+        if numerical:
+            parts = [part for part in parts if not _is_numerical_fragment(part)]
+            if diagnostics is not None:
+                record["numerical_fragments_removed"] = [
+                    {"area_mm2": part.area, "reason": "coordinate_roundoff_boolean_residue"}
+                    for part in numerical
+                ]
+                record["output_print_geometry"] = geom.mapping(ops.unary_union(parts))
+            if not parts:
+                record.update(status="omitted", reason="coordinate_roundoff_boolean_residue")
+                continue
         parts.sort(key=lambda candidate: candidate.area, reverse=True)
         for part_index, part in enumerate(parts):
             if part.is_empty:
@@ -1250,6 +1300,19 @@ def download_and_build_buildings(
                         classified_height(dimensions, dimensions.eave_height_m, footprint_area_m2),
                     ),
                 )
+                if extend_elevated_parts_to_ground and element_index in supported_elevated:
+                    # Translate a supported upper part as a unit; stretching its
+                    # bottom down would turn a thin crown into a tall wall.
+                    shift = max(0.0, bottom_mm - supported_elevated[element_index])
+                    bottom_mm -= shift
+                    eave_mm -= shift
+                    total_mm -= shift
+                    if diagnostics is not None and shift > 1e-9:
+                        record.setdefault("support_adjustments", []).append({
+                            "part_index": part_index,
+                            "downward_translation_mm": shift,
+                            "reason": "preserve_contact_after_height_mapping",
+                        })
                 effective_embed = (
                     embed_depth_mm if bottom_mm <= 1e-9 else min(embed_depth_mm, bottom_mm)
                 )
@@ -1275,6 +1338,8 @@ def download_and_build_buildings(
                     meshes.append(roof)
             except Exception as exc:
                 mesh_failed = True
+                if diagnostics is not None:
+                    record.setdefault("mesh_errors", []).append(str(exc))
                 logging.warning("Failed creating building mesh: %s", exc)
 
         face_count = sum(len(mesh.faces) for mesh in meshes[first_mesh:])

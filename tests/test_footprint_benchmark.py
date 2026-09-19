@@ -105,7 +105,18 @@ def test_frozen_run_is_offline_and_preserves_full_frame(tmp_path, monkeypatch):
     monkeypatch.setattr(requests.sessions.Session, "request", no_network)
     manifest = freeze(_offline_spec(tmp_path), tmp_path / "snapshot")
     frozen = json.loads(manifest.read_text())
-    assert frozen["frame"]["margin_mm"] == 5
+    assert frozen["frame"]["margin_mm"] == 0
+    assert frozen["route_clearance_mm"] == 5
+    assert not frozen["config"]["flat_border_enabled"]
+    from shapely.geometry import LineString
+
+    from memorymap_pipeline.gpx_loader import load_route_from_gpx
+    from memorymap_pipeline.map_frame import MapFrame
+
+    points = load_route_from_gpx(manifest.parent / "route.gpx").points
+    outline = LineString(MapFrame(**frozen["frame"]).transform_points(points)).buffer(0.6)
+    x0, y0, x1, y1 = outline.bounds
+    assert min(x0, y0, 190 - x1, 240 - y1) == pytest.approx(5, abs=0.01)
     output = tmp_path / "baseline"
     report = json.loads(run(manifest, output).read_text())
     assert report["frame"] == frozen["frame"]
@@ -280,3 +291,70 @@ def test_bambu_records_a_run_with_all_specimens_blocked(tmp_path, monkeypatch):
     assert json.loads(result.read_text())["specimens"] == [
         {"specimen": "failed", "status": "blocked_by_geometry"}
     ]
+
+
+def test_chicago_collapsed_crop_faces_preserve_volume():
+    from trimesh import Trimesh
+
+    data = json.loads((FIXTURES / "chicago_geometry_regressions.json").read_text())["crop"]
+    original = Trimesh(vertices=data["vertices"], faces=data["faces"], process=False)
+    cropped = crop_mesh(original, data["bounds"])
+    assert cropped.is_watertight
+    assert cropped.volume == pytest.approx(0.013254935128763634, abs=1e-12)
+    assert cropped.bounds[0, 2] == pytest.approx(-0.2)
+    assert cropped.bounds[1, 2] == pytest.approx(1.2)
+
+
+def test_chicago_touching_courtyard_and_near_collinear_footprints():
+    from shapely.geometry import shape
+
+    from memorymap_pipeline.mesh import route_mesh_from_polygon
+
+    data = json.loads((FIXTURES / "chicago_geometry_regressions.json").read_text())
+    for record in data["footprints"]:
+        polygon = shape(record["geometry"])
+        mesh = route_mesh_from_polygon(polygon, 1.4, -0.2)
+        assert mesh.is_watertight, record["id"]
+        assert mesh.volume == pytest.approx(polygon.area * 1.4, abs=1e-10)
+        # The horizontal top surfaces must reproduce the courtyard and outline.
+        from shapely.geometry import Polygon
+        top = [Polygon(t[:, :2]) for t in mesh.triangles if np.allclose(t[:, 2], 1.2)]
+        assert unary_union(top).symmetric_difference(polygon).area < 1e-10
+
+
+def test_support_requires_contact_after_rendered_height_mapping():
+    from memorymap_pipeline.buildings import _building_dimensions, _supported_elevated_elements
+
+    def dims(tags):
+        return _building_dimensions(tags, default_height_m=6, levels_to_m=3, max_height_m=400)
+
+    elements = [
+        (box(0, 0, 2, 2), dims({"height": 60}), True, None),
+        (box(0, 0, 1, 1), dims({"height": 160, "min_height": 55}), True, None),
+    ]
+    assert 1 in _supported_elevated_elements(elements)
+    assert _supported_elevated_elements(elements, [(0, 3), (4, 12)])[1] == 3
+    assert _supported_elevated_elements(elements, [(0, 4), (4, 12)])[1] == 4
+
+
+def test_route_margin_measures_from_outer_route_edge():
+    from shapely.geometry import LineString
+
+    from memorymap_pipeline.gpx_loader import load_route_from_gpx
+    from memorymap_pipeline.map_frame import MapFrame
+
+    route = load_route_from_gpx(FIXTURES / "frame_route.gpx")
+    frame = MapFrame.fit_route(route.points, 190, 240, margin_mm=5, route_padding_mm=0.6)
+    outline = LineString(frame.transform_points(route.points)).buffer(0.6)
+    x0, y0, x1, y1 = outline.bounds
+    clearances = [x0, y0, 190 - x1, 240 - y1]
+    assert min(clearances) == pytest.approx(5, abs=0.01)
+    assert all(clearance >= 5 - 0.01 for clearance in clearances)
+
+
+def test_numerical_fragment_filter_is_not_a_printability_size_filter():
+    from memorymap_pipeline.buildings import _is_numerical_fragment
+
+    assert _is_numerical_fragment(box(100, 100, 100 + 2 * np.spacing(100.0), 101))
+    assert not _is_numerical_fragment(box(100, 100, 100.000001, 101))
+    assert not _is_numerical_fragment(box(100, 100, 100.2, 100.2))

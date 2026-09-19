@@ -88,10 +88,71 @@ printability, generation integration, pipeline, and building-parts/roof suites.
 These tests validate the harness and existing geometry behavior; they do not
 substitute for per-feature toolpath inspection or physical printing.
 
+## Confirmed course and geometry repairs
+
+The user confirmed the X1 Carbon, 0.4 mm nozzle, PLA and 190 × 240 mm model.
+The supplied GPX has the same 163 ordered route coordinates as the provisional
+course. Its file SHA-256 is
+`ee42f2729d4fe337e27738effabf92a5f8632460cbc592a8af7eb5f4fd055ea1`.
+The 5 mm margin means clearance from the **outer route edge** to the model edge.
+The benchmark now records `route_clearance_mm` separately from physical trim:
+map content can reach the edge, while route scale reserves 5 mm plus half the
+1.2 mm route width. It preserves aspect ratio, so clearance can be larger on one axis.
+
+The corrected snapshot is `downloads/chicago-2025-confirmed/snapshot-clearance/`.
+Its manifest SHA-256 is
+`cf060dffb36fca5d403318f9fe338a1a3aff67dc8976c8a52de78c7d86672aa6`.
+Earlier snapshots and failed runs remain unchanged. In the corrected model, route-edge
+clearances are approximately 5.00 mm north/south and 55.00 mm east/west; the wider
+side clearance follows from preserving the course's proportions.
+
+The final generation retained 9,883 polygon records and omitted 48 replaced/clipped
+records, with **zero unresolved source geometries**. Numerical cleanup affected two
+boolean remnants of approximately 2.75e-16 and 1.70e-17 square millimeters; the
+other geometry from both source records remains retained.
+
+The Chicago investigation produced these repairs:
+
+- Partition a courtyard that touches its exterior at one point into closed solids,
+  preserving the courtyard and total volume.
+- Preserve positive-area triangulation slivers needed to close near-collinear footprints.
+- Remove collapsed crop triangles only when the cut shell is open; closed shells
+  retain their existing connectivity.
+- Verify occupied volume when a support overlap exceeds the audit's 5 mm shortcut.
+  The large downtown parts overlap grounded solids; their earlier floating-shell
+  reports were false positives. Tests still reject a floating part beneath an arch.
+- Preserve the thickness of elevated parts when height mapping requires lowering
+  them to meet a supporting body. This separate regression was caught by the crown test.
+- Record and remove boolean-operation residue at coordinate-roundoff precision,
+  before extrusion. This is not a minimum printable footprint filter.
+
+All layer meshes are archived in `layer-meshes.npz` for repeatable diagnostics.
+Automated validation passed **99 tests**, including the new Chicago regressions,
+route-edge clearance, deep-overlap and unsupported-arch cases.
+
+The completed run is `outputs/chicago-2025-confirmed-v4/`. The full-map model and
+all three crops export successfully, with **zero building faces removed by export**.
+The original scale and crop sizes are preserved. This supersedes the initial
+geometry blockers above, but does not establish small-feature survival in slicing
+or physical printing.
+
+All three corrected crops generated toolpaths with Bambu Studio 02.06.00.51,
+X1 Carbon / 0.4 mm / 0.16 mm Optimal / Generic PLA. Archived sliced projects,
+resolved settings, G-code and `slicing.json` are under the run's `bambu-x1c-pla/`.
+
+| Crop | Actual layers | Last layer Z (mm) |
+|---|---:|---:|
+| Downtown | 124 | 19.88 |
+| Dense neighborhood | 85 | 13.64 |
+| Sparse neighborhood | 41 | 6.60 |
+
+Known printer/slicer details and artifact paths are populated in `evidence.json`.
+All per-feature observations remain pending. The acceptance checker still returns
+`not_accepted`, with no unresolved/export/model-identity/profile failures: toolpath
+inspection, omission acknowledgment and physical evidence are still required.
+
 ## What remains before capability acceptance
 
-- Resolve the Chicago floating shells and two unresolved source geometries, and
-  repair or diagnose the sparse specimen's crop-capping failure using the saved mesh.
 - Review paths at narrow necks, upper sections and roofs; preserve street/route/water
   separation rather than relying on layer-count summaries.
 - Print the synthetic controls and full-route-scale Chicago specimens using the actual

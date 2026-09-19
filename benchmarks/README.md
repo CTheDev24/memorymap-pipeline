@@ -1,8 +1,12 @@
 # Footprint validation benchmark
 
 This is the baseline and evidence harness for developing building grouping. It does
-**not** group buildings or certify a 0.4 mm nozzle print. Normal generation remains
-unchanged unless diagnostic collection is requested.
+**not** group buildings or certify a 0.4 mm nozzle print. Geometry repairs discovered
+through the benchmark also apply to normal generation; diagnostic collection is optional.
+The confirmed Chicago specification is 190 × 240 mm, X1 Carbon, 0.4 mm nozzle and PLA.
+The 5 mm margin is minimum clearance between the outer edge of the 1.2 mm route
+and the model edge. It is not an extra 5 mm added outside the model dimensions;
+aspect-ratio preservation can leave more clearance on the other axis.
 
 See [initial validation findings](VALIDATION_STATUS.md) for the recorded Bambu
 slicing results and Chicago source snapshot.

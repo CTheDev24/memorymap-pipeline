@@ -17,7 +17,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 import zipfile
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
@@ -108,7 +108,15 @@ def freeze(spec_path: Path, output: Path) -> Path:
             if data.crs is None or data.crs.to_epsg() != 4326:
                 raise ValueError(f"{role} must be WGS84 / EPSG:4326 GeoJSON")
     route = load_route_from_gpx(paths["route"])
-    frame = MapFrame.fit_route(route.points, 190.0, 240.0, margin_mm=5.0, route_padding_mm=0.6)
+    fitted = MapFrame.fit_route(route.points, 190.0, 240.0, margin_mm=5.0, route_padding_mm=0.6)
+    # Keep the fitted route scale while allowing map content to reach the edge.
+    # MapFrame.margin_mm controls physical trim; route clearance is independent.
+    frame = replace(
+        fitted,
+        margin_mm=0.0,
+        coverage_width_m=fitted.coverage_width_m * 190.0 / fitted.printable_width_mm,
+        coverage_height_m=fitted.coverage_height_m * 240.0 / fitted.printable_height_mm,
+    )
     crops = []
     for crop in spec["crops"]:
         name = _name(crop["name"])
@@ -127,7 +135,7 @@ def freeze(spec_path: Path, output: Path) -> Path:
     config = deepcopy(DEFAULT_CONFIG)
     # Explicit flat terrain permits local water without any elevation service calls.
     config.update(
-        flat_border_enabled=True,
+        flat_border_enabled=False,
         terrain_enabled=True,
         terrain_grid_size=32,
         water_enabled=True,
@@ -145,6 +153,7 @@ def freeze(spec_path: Path, output: Path) -> Path:
         "created_at": datetime.now(UTC).isoformat(),
         "coverage_note": spec.get("coverage_note", "Coverage not independently verified"),
         "frame": asdict(frame),
+        "route_clearance_mm": 5.0,
         "profile": PROFILE,
         "config": config,
         "sources": sources,
@@ -195,6 +204,12 @@ def crop_mesh(mesh: Trimesh, bounds) -> Trimesh | None:
                 ([0, -1, 0], [0, y1, 0]),
             ]:
                 component = slice_mesh_plane(component, normal, origin, cap=True, engine="earcut")
+                # Plane intersections can collapse a triangle to an edge. Such
+                # zero-area faces add no surface but break edge-incidence checks.
+                # Do not use a positive size threshold: tiny real faces matter.
+                if not component.is_watertight:
+                    component.update_faces(component.nondegenerate_faces(height=0.0))
+                    component.remove_unreferenced_vertices()
                 if not len(component.faces):
                     break
         if len(component.faces):
@@ -401,8 +416,10 @@ def run(manifest_path: Path, output: Path, label: str = "baseline") -> Path:
             raise ValueError(f"Source checksum mismatch: {role}")
     frame = MapFrame(**manifest["frame"])
     config = manifest["config"]
-    if not config["flat_border_enabled"] or config["style_profile"] != "urban":
-        raise ValueError("Benchmark requires the frozen urban frame with its margin")
+    if config["style_profile"] != "urban":
+        raise ValueError("Benchmark requires the frozen urban frame")
+    if frame.margin_mm and not config["flat_border_enabled"]:
+        raise ValueError("A frame with physical trim requires flat_border_enabled")
     output.mkdir(parents=True, exist_ok=False)
     diagnostics: list[dict] = []
     lat, lon = frame.print_to_lonlat(np.array([0, 190]), np.array([0, 240]))
@@ -430,6 +447,14 @@ def run(manifest_path: Path, output: Path, label: str = "baseline") -> Path:
         progress_callback=lambda percent, message: print(f"{percent}% {message}", flush=True),
     )
     _write(output / "source-mapping.json", diagnostics)
+    np.savez_compressed(
+        output / "layer-meshes.npz",
+        **{
+            f"{layer}_{field}": getattr(mesh, field)
+            for layer, mesh in result.meshes.items()
+            for field in ("vertices", "faces")
+        },
+    )
     if result.buildings_mesh is not None:
         np.savez_compressed(
             output / "building-mesh.npz",
