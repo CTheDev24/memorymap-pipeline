@@ -63,7 +63,7 @@ def group_footprints(
     def substantial(polygon):
         return not polygon.buffer(-radius, join_style=2).is_empty
 
-    def finish_mass(hull, source_area):
+    def finish_mass(hull, source_area, members):
         # Fill only the minimum surrounding space needed for the width target.
         # This remains bounded by street/water/route and protected-building masks.
         mass = hull
@@ -84,6 +84,13 @@ def group_footprints(
             mass = mass.minimum_rotated_rectangle
         x0, y0, x1, y1 = mass.bounds
         if max(x1 - x0, y1 - y0) > span_mm or mass.area > 8 * source_area or blocked(mass):
+            return None
+        # Separate overlapping shells can cancel in a slicer even when each
+        # shell is closed. Keep growing until every touched source is a member.
+        if any(
+            int(i) not in members and mass.intersection(footprints[int(i)]).area > 1e-10
+            for i in tree.query(mass)
+        ):
             return None
         return mass if substantial(mass) else None
 
@@ -127,7 +134,7 @@ def group_footprints(
             _, _, _, i, hull = min(options, key=lambda item: item[:3])
             members.append(i)
             source_area += footprints[i].area
-            mass = finish_mass(hull, source_area)
+            mass = finish_mass(hull, source_area, members)
             if mass is not None:
                 groups.append(FootprintGroup(tuple(sorted(members)), mass))
                 available.difference_update(members)

@@ -180,3 +180,15 @@ def test_grouped_output_passes_local_width_screen():
     groups = group_footprints(footprints, range(len(footprints)))
     assert groups
     assert all(screen_footprint(group.geometry)["status"] == "not_flagged" for group in groups)
+
+
+def test_expanded_groups_do_not_overlap_retained_sources():
+    footprints = grid() + [box(0.28, 0.28, 0.32, 0.32)]
+    groups = group_footprints(footprints, range(len(footprints)))
+    assert groups
+    for group in groups:
+        assert all(
+            group.geometry.intersection(source).area <= 1e-10
+            for i, source in enumerate(footprints)
+            if i not in group.members
+        )

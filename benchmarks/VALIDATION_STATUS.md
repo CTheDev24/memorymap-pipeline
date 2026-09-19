@@ -174,6 +174,41 @@ barrier-constrained sources remain individual and are counted in diagnostics.
 Acute tips that fail the local-width opening are replaced by a containing oriented
 rectangle only when the same area, span and barrier limits permit it.
 
-The full automated suite passes **316 tests**. The final candidate benchmark and
-Bambu slicing results will be recorded below when complete. Physical acceptance
-remains pending; geometry screens alone are not proof of printable toolpaths.
+The full automated suite passes **316 tests**. Candidate
+`outputs/chicago-2025-grouping-v6/` uses the same confirmed snapshot and combines
+**1,857 source footprints into 125 masses**. All 125 masses pass the 0.8 mm local
+width screen. There are no invalid groups, overlapping group pairs, uncovered member
+footprints, missing source IDs, new omissions or unresolved source geometries.
+The full map exports with zero building faces removed.
+
+This is a conservative first pass: 8,014 retained individual footprints still have
+width-screen flags. The capability does not claim that every building is printable.
+Physical acceptance remains pending; geometry screens alone are not proof of
+printable toolpaths.
+
+
+The full model and all three final candidate crops export successfully, each with
+zero building faces removed. Same-snapshot comparison has zero missing source IDs.
+There are 163 added crop memberships because a shared group can intersect a crop
+whose original individual member lay outside it; no new OSM buildings were fetched.
+Studio's remaining-small count is 7,939 (empty 0.8 mm erosion core); the broader
+local-width opening screen flags 8,014 individual sources, including thin appendages.
+
+Windows build [35476701427](https://github.com/CTheDev24/memorymap-pipeline/actions/runs/35476701427)
+passed CI, packaging and executable smoke checks for implementation commit `edabee1`.
+Artifact: `MemoryMap-Windows-Preview-edabee19deab4bf236cd5a832544a7bf4924250a`.
+
+
+### Slicer investigation and overlap correction
+
+All three v6 crops sliced, but an endpoint-presence diagnostic found paths near the
+tops of only 55/89 interior grouped masses. An isolated affected mass sliced to its
+full height. Inspection then found that group expansion could overlap eligible
+sources left individual, despite preventing overlap with other groups. Such separate
+intersecting shells can disrupt slicing. Therefore v6 is **not accepted** as the final
+candidate. Its artifact is superseded by the overlap correction.
+
+The grouping check now rejects an expanded mass intersecting any nonmember source;
+it can keep growing to include those neighbors within the same original limits.
+A regression protects this case, and **317 tests pass**. Candidate v7 repeats the
+same frozen-data geometry and slicer checks with this correction.
