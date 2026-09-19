@@ -11,6 +11,7 @@ from shapely.ops import triangulate
 from shapely.strtree import STRtree
 from trimesh import Trimesh
 
+from .building_grouping import group_footprints
 from .building_classification import BuildingClass, classify_building, preset_for
 from .geometry import repair_polygon
 from .landmarks import (
@@ -840,6 +841,8 @@ def download_and_build_buildings(
     building_scale_mm_per_m: float | None = None,
     extend_elevated_parts_to_ground: bool = True,
     diagnostics: list[dict] | None = None,
+    grouping: dict | None = None,
+    grouping_barriers: geom.base.BaseGeometry | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
@@ -1214,12 +1217,50 @@ def download_and_build_buildings(
         ),
     )
 
+    grouped_at = {}
+    grouped_members = set()
+    if grouping is not None:
+        eligible = [
+            i for i, (poly, dims, is_part, landmark) in enumerate(elements)
+            if not is_part and landmark is None and dims.min_height_m == 0
+            and dims.building_class not in {
+                BuildingClass.LANDMARK, BuildingClass.STADIUM_ARENA,
+                BuildingClass.RELIGIOUS, BuildingClass.CIVIC_INSTITUTIONAL,
+            }
+            and poly.geom_type == "Polygon" and not poly.interiors
+            and rendered_element_heights[i] <= grouping["max_height_mm"]
+        ]
+        groups = group_footprints(
+            [element[0] for element in elements], eligible, grouping_barriers,
+            width_mm=grouping["width_mm"], gap_mm=grouping["gap_mm"],
+            span_mm=grouping["span_mm"], allowed_region=plate_box,
+        )
+        for group in groups:
+            grouped_at[group.members[0]] = group
+            grouped_members.update(group.members)
+    else:
+        groups = []
+    output_footprints = []
+
     # Extrude each building individually then concatenate into one mesh
     meshes = []
     face_cursor = 0
     surface_z = z_offset + embed_depth_mm
     for element_index, (poly, dimensions, _is_part, landmark) in enumerate(elements):
+        if element_index in grouped_members and element_index not in grouped_at:
+            continue
+        group = grouped_at.get(element_index)
         record = diagnostic_by_geometry[id(poly)]
+        group_records = []
+        group_height = None
+        if group is not None:
+            poly = group.geometry
+            group_records = [diagnostic_by_geometry[id(elements[i][0])] for i in group.members]
+            group_height = max(rendered_element_heights[i] for i in group.members)
+            group_id = "group-" + min(item["id"] for item in group_records)
+            for item in group_records:
+                item.update(group_id=group_id, group_source_ids=[r["id"] for r in group_records])
+        output_footprints.append(poly)
         first_mesh = len(meshes)
         mesh_failed = False
         if diagnostics is not None:
@@ -1300,6 +1341,9 @@ def download_and_build_buildings(
                         classified_height(dimensions, dimensions.eave_height_m, footprint_area_m2),
                     ),
                 )
+                if group_height is not None:
+                    bottom_mm = 0.0
+                    eave_mm = total_mm = group_height
                 if extend_elevated_parts_to_ground and element_index in supported_elevated:
                     # Translate a supported upper part as a unit; stretching its
                     # bottom down would turn a thin crown into a tall wall.
@@ -1349,6 +1393,15 @@ def download_and_build_buildings(
             status="retained" if face_count and not mesh_failed else "unresolved",
             reason="individual_extrusion" if face_count and not mesh_failed else "mesh_failed",
         )
+        if group_records:
+            for item in group_records:
+                item.update(
+                    status="grouped" if face_count and not mesh_failed else "unresolved",
+                    reason="bounded_neighborhood_mass" if face_count and not mesh_failed else "mesh_failed",
+                    output_print_geometry=geom.mapping(poly),
+                    output_face_ranges=[[face_cursor, face_cursor + face_count]] if face_count else [],
+                    grouped_height_mm=group_height,
+                )
         face_cursor += face_count
 
     final_mesh = None
@@ -1360,9 +1413,19 @@ def download_and_build_buildings(
         except Exception:
             final_mesh = meshes[0]
         final_mesh.metadata["building_height_distribution"] = height_distribution
+        final_mesh.metadata["building_grouping"] = {
+            "enabled": grouping is not None,
+            "groups": len(groups),
+            "grouped_sources": len(grouped_members),
+            "width_mm": grouping["width_mm"] if grouping else None,
+            "ungrouped_small_sources": sum(
+                i not in grouped_members and poly.buffer(-grouping["width_mm"] / 2, join_style=2).is_empty
+                for i, (poly, _dims, _part, _landmark) in enumerate(elements)
+            ) if grouping else 0,
+        }
 
     # Union of all clipped footprints (used for debug overlay and return value)
-    unioned = ops.unary_union([p for p, _dims, _is_part, _landmark in elements])
+    unioned = ops.unary_union(output_footprints)
 
     if debug:
         try:

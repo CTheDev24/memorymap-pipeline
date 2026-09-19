@@ -549,6 +549,7 @@ def generate_memory_map(
                         config.get("minimum_waterway_width_mm", 0.8)
                     ),
                     include_metadata=landscape_style,
+                    strict=bool(config.get("building_grouping_enabled", False)),
                 )
                 if landscape_style:
                     water_features = [
@@ -1024,6 +1025,16 @@ def generate_memory_map(
             road_smoothing_distances = config.get(
                 "road_terrain_smoothing_distances_mm", {}
             )
+        if bool(config.get("building_grouping_enabled", False)):
+            # At marathon scale the normal 1.1 mm local streets consume nearly
+            # the whole block. Keep a nozzle-width street between grouped masses.
+            road_widths = dict(road_widths)
+            for road_type in ("residential", "living_street", "unclassified", "service", "cycleway"):
+                road_widths[road_type] = min(float(road_widths.get(road_type, 0.4)), 0.4)
+            warnings.append(
+                "Building grouping uses 0.4 mm local streets and omits alleys/driveways "
+                "to preserve printable neighborhood blocks."
+            )
         collector = _WarningCollector()
         logging.getLogger().addHandler(collector)
         try:
@@ -1045,8 +1056,10 @@ def generate_memory_map(
             radius_m=radius,
             roads_file=str(request.roads_file) if request.roads_file else None,
             terrain_smoothing_types=road_smoothing_types,
-            excluded_service_types=config.get(
-                "excluded_road_service_types", ()
+            excluded_service_types=(
+                set(config.get("excluded_road_service_types", ())) | {"alley", "driveway"}
+                if bool(config.get("building_grouping_enabled", False))
+                else config.get("excluded_road_service_types", ())
             ),
             excluded_access=config.get("excluded_road_access", ()),
             priority_region=route_polygon if route_mesh is not None else None,
@@ -1098,6 +1111,37 @@ def generate_memory_map(
                 )
     progress(55, "Road mesh complete")
 
+    grouping_options = None
+    grouping_barriers = None
+    if request.include_buildings and bool(config.get("building_grouping_enabled", False)):
+        if not request.include_roads or unioned_roads is None:
+            warnings.append("Building grouping skipped: road barriers are unavailable. Enable Roads.")
+        else:
+            # Read water even when its visible layer is disabled. Missing water
+            # data must never be mistaken for permission to bridge a river.
+            try:
+                barriers_water = water_geometries
+                if not (bool(config.get("terrain_enabled")) and bool(config.get("water_enabled"))):
+                    barriers_water = request.water_polygons
+                    if barriers_water is None:
+                        barriers_water = download_water_polygons(
+                            bbox=bbox, center_lat=frame.center_lat, center_lon=frame.center_lon,
+                            transform=transform, map_width_mm=frame.print_width_mm,
+                            map_height_mm=frame.print_height_mm, radius_m=radius,
+                            water_file=request.water_file, strict=True,
+                            minimum_waterway_width_mm=float(config.get("minimum_waterway_width_mm", 0.8)),
+                        )
+                route_barrier = buffered_polygon_from_points(scaled, request.route_width_mm)
+                grouping_barriers = unary_union([unioned_roads, route_barrier, *barriers_water])
+                grouping_options = {
+                    "width_mm": float(config.get("building_grouping_width_mm", 0.8)),
+                    "gap_mm": float(config.get("building_grouping_gap_mm", 0.4)),
+                    "span_mm": float(config.get("building_grouping_span_mm", 4.0)),
+                    "max_height_mm": float(config.get("building_grouping_max_height_mm", 3.0)),
+                }
+            except ValueError as exc:
+                warnings.append(f"Building grouping skipped: {exc}")
+
     unioned_buildings = None
     buildings_mesh = None
     if request.include_buildings:
@@ -1137,12 +1181,22 @@ def generate_memory_map(
                 config.get("extend_elevated_building_parts_to_ground", True)
             ),
             diagnostics=request.building_diagnostics,
+            grouping=grouping_options,
+            grouping_barriers=grouping_barriers,
         )
         finally:
             logging.getLogger().removeHandler(collector)
         if buildings_mesh is None:
             warnings.append("No building geometry was available inside the selected frame.")
             warnings.extend(f"Building detail: {message}" for message in collector.messages[-4:])
+    if buildings_mesh is not None and grouping_options is not None:
+        grouping_stats = buildings_mesh.metadata.get("building_grouping", {})
+        warnings.append(
+            f"Building grouping: {grouping_stats.get('grouped_sources', 0)} source footprints "
+            f"combined into {grouping_stats.get('groups', 0)} masses; "
+            f"{grouping_stats.get('ungrouped_small_sources', 0)} small footprints remain individual. "
+            "Inspect the sliced result before printing."
+        )
     progress(85, "Building mesh complete")
 
     if all(
@@ -1186,12 +1240,16 @@ def generate_memory_map(
                 "profile": style_profile,
                 "types": list(road_types),
                 "height_mm": road_height_mm,
+                "widths_mm": dict(road_widths),
             }
             if request.include_roads
             else None
         ),
         "ground_cover": ground_cover_stats,
         "buildings": _geometry_count(unioned_buildings),
+        "building_grouping": (
+            buildings_mesh.metadata.get("building_grouping") if buildings_mesh is not None else None
+        ),
         "building_height_distribution": (
             buildings_mesh.metadata.get("building_height_distribution")
             if buildings_mesh is not None

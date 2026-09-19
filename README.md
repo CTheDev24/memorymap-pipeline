@@ -414,3 +414,18 @@ The tag triggers the release workflow, which tests and packages the exact tagged
 then attaches a versioned Windows executable and checksum to a permanent GitHub Release.
 Use patch tags such as `v0.1.1` for fixes, minor tags such as `v0.2.0` for compatible
 features, and major tags such as `v1.0.0` for the first stable release or breaking changes.
+
+### Small-building grouping in Memory Map Studio
+
+Enable **Group small buildings (0.4 mm nozzle)** under Layers to test neighborhood
+massing. Keep Roads enabled. The mode combines nearby low buildings into flat-topped
+masses with a 0.8 mm footprint target, omits alleys/driveways, and narrows local streets to 0.4 mm. It preserves
+known streets, the marathon route, water and protected building geometry. Generation
+reports how many sources were grouped and how many small footprints remain individual.
+This is opt-in and requires slicer inspection and a physical test print.
+
+**Route clearance (mm)** sets the buffer from the route's outer edge when fitting
+the course; **Flat trim around map** and **Trim width (mm)** control a separate blank
+border. For the Chicago benchmark use Portrait, 190 × 240 mm, route clearance 5 mm,
+route width 1.2 mm and no flat trim. Manually zooming or panning the frame changes the
+fitted clearance.

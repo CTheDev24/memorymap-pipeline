@@ -279,7 +279,14 @@ def _overlay(path: Path, bounds, records: list[dict], context_meshes: dict | Non
         for triangle in triangles[upward]:
             points = " ".join(f"{x:.5f},{h - y:.5f}" for x, y, _z in triangle)
             pieces.append(f'<polygon points="{points}" fill="{color}"/>')
+    group_numbers = {}
     for number, record in enumerate(records, 1):
+        group_id = record.get("group_id")
+        if group_id in group_numbers:
+            record["overlay_number"] = group_numbers[group_id]
+            continue
+        if group_id:
+            group_numbers[group_id] = number
         geometry = record.get("output_print_geometry") or record.get("source_print_geometry")
         if geometry is None:
             continue
@@ -401,7 +408,7 @@ def _finish(output: Path, report: dict) -> Path:
     return output / "report.json"
 
 
-def run(manifest_path: Path, output: Path, label: str = "baseline") -> Path:
+def run(manifest_path: Path, output: Path, label: str = "baseline", *, grouping: bool = False) -> Path:
     # Cap triangulation imports these lazily; fail before expensive generation.
     for dependency in ("scipy", "rtree"):
         importlib.import_module(dependency)
@@ -415,7 +422,9 @@ def run(manifest_path: Path, output: Path, label: str = "baseline") -> Path:
         if _sha(sources[role]) != entry["sha256"]:
             raise ValueError(f"Source checksum mismatch: {role}")
     frame = MapFrame(**manifest["frame"])
-    config = manifest["config"]
+    config = deepcopy(manifest["config"])
+    if grouping:
+        config["building_grouping_enabled"] = True
     if config["style_profile"] != "urban":
         raise ValueError("Benchmark requires the frozen urban frame")
     if frame.margin_mm and not config["flat_border_enabled"]:
@@ -513,6 +522,8 @@ def run(manifest_path: Path, output: Path, label: str = "baseline") -> Path:
             "frame": manifest["frame"],
             "profile": manifest["profile"],
             "warnings": result.warnings,
+            "generation_config": config,
+            "building_grouping": result.stats.get("building_grouping"),
             "unresolved_source_ids": [r["id"] for r in diagnostics if r["status"] == "unresolved"],
             "full_export_removed_building_faces": full_export["export_removed_building_faces"],
             "full_export_error": full_export["export_error"],
@@ -702,6 +713,7 @@ def main() -> None:
     p.add_argument("manifest", type=Path)
     p.add_argument("output", type=Path)
     p.add_argument("--label", default="baseline")
+    p.add_argument("--group-buildings", action="store_true")
     p = commands.add_parser("review")
     p.add_argument("directory", type=Path)
     p = commands.add_parser("compare")
@@ -713,7 +725,7 @@ def main() -> None:
     elif args.command == "freeze":
         print(freeze(args.spec, args.output))
     elif args.command == "run":
-        print(run(args.manifest, args.output, args.label))
+        print(run(args.manifest, args.output, args.label, grouping=args.group_buildings))
     elif args.command == "review":
         result = review(args.directory)
         print(json.dumps(result, indent=2))

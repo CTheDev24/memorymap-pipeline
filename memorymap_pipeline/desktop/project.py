@@ -23,6 +23,7 @@ class DesktopProject:
     gpx_path: str | None = None
     include_roads: bool = True
     include_buildings: bool = True
+    building_grouping_enabled: bool = False
     include_terrain: bool = False
     include_water: bool = False
     flat_border_enabled: bool = False
@@ -70,6 +71,7 @@ class DesktopProject:
             "gpx_path": self.gpx_path,
             "frame": asdict(self.frame),
             "flat_border_enabled": self.flat_border_enabled,
+            "building_grouping_enabled": self.building_grouping_enabled,
             "layers": {
                 "roads": self.include_roads,
                 "buildings": self.include_buildings,
@@ -115,6 +117,7 @@ class DesktopProject:
                 gpx_path=value.get("gpx_path"),
                 include_roads=bool(layers.get("roads", True)),
                 include_buildings=bool(layers.get("buildings", True)),
+                building_grouping_enabled=bool(value.get("building_grouping_enabled", False)),
                 include_terrain=bool(layers.get("terrain", False)),
                 include_water=bool(layers.get("water", False)),
                 flat_border_enabled=bool(

@@ -21,7 +21,6 @@ from .viewer_support import placeholder_html, viewer_url
 from .worker import GenerationWorker
 
 
-ROUTE_FRAME_PADDING_MM = 6.0
 FRAME_ZOOM_FACTOR = 1.1
 
 try:
@@ -158,6 +157,8 @@ class MemoryMapWindow(QMainWindow):
         self.print_width = self._spin(240, 10, 1000)
         self.print_height = self._spin(190, 10, 1000)
         self.margin = self._spin(5, 0, 100)
+        self.route_clearance = self._spin(5, 0, 100)
+        self.route_clearance.setToolTip("Minimum buffer from the outside of the route to the model edge when fitting the course.")
         self.flat_border = QCheckBox("Flat trim around map")
         self.flat_border.setChecked(False)
         self.flat_border.setToolTip(
@@ -190,7 +191,14 @@ class MemoryMapWindow(QMainWindow):
         form.addRow("Width (mm)", self.print_width)
         form.addRow("Height (mm)", self.print_height)
         form.addRow("Border", self.flat_border)
-        form.addRow("Margin (mm)", self.margin)
+        form.addRow("Route clearance (mm)", self.route_clearance)
+        form.addRow("Trim width (mm)", self.margin)
+        self.route_clearance.valueChanged.connect(
+            lambda _value: self._border_toggled(self.flat_border.isChecked())
+        )
+        self.route_width.valueChanged.connect(
+            lambda _value: self._border_toggled(self.flat_border.isChecked())
+        )
         form.addRow("Route width (mm)", self.route_width)
         form.addRow("Route height", self.route_height)
         form.addRow("Route layer height", self.route_layer_height)
@@ -292,6 +300,16 @@ class MemoryMapWindow(QMainWindow):
         self.route_layer.toggled.connect(self.finish_marker.setEnabled)
         self.roads_layer = QCheckBox("Roads"); self.roads_layer.setChecked(True)
         self.buildings_layer = QCheckBox("Buildings"); self.buildings_layer.setChecked(True)
+        self.building_grouping = QCheckBox("Group small buildings (0.4 mm nozzle)")
+        self.building_grouping.setToolTip(
+            "Combine nearby low buildings into masses with a 0.8 mm footprint target. "
+            "Omits alleys/driveways, uses 0.4 mm local streets and preserves route/water separation; "
+            "some small buildings may remain individual."
+        )
+        self.building_grouping.toggled.connect(
+            lambda enabled: self.roads_layer.setChecked(True) if enabled else None
+        )
+        self.buildings_layer.toggled.connect(self.building_grouping.setEnabled)
         self.terrain_layer = QCheckBox("Terrain (USGS 3DEP)")
         self.water_layer = QCheckBox("Water (gray, recessed)")
         self.water_mesh_body_hint = QCheckBox("Export as separate water mesh body")
@@ -304,6 +322,7 @@ class MemoryMapWindow(QMainWindow):
             self.route_layer,
             self.roads_layer,
             self.buildings_layer,
+            self.building_grouping,
             self.terrain_layer,
             self.water_layer,
             self.water_mesh_body_hint,
@@ -379,7 +398,7 @@ class MemoryMapWindow(QMainWindow):
                 self.print_width.value(),
                 self.print_height.value(),
                 MemoryMapWindow._effective_margin(self),
-                route_padding_mm=ROUTE_FRAME_PADDING_MM,
+                route_padding_mm=MemoryMapWindow._route_padding(self),
             )
             self.default_frame = {
                 "center_lat": frame.center_lat, "center_lon": frame.center_lon,
@@ -410,7 +429,7 @@ class MemoryMapWindow(QMainWindow):
                 width,
                 height,
                 MemoryMapWindow._effective_margin(self),
-                route_padding_mm=ROUTE_FRAME_PADDING_MM,
+                route_padding_mm=MemoryMapWindow._route_padding(self),
             )
             fitted = {
                 "center_lat": frame.center_lat,
@@ -471,6 +490,13 @@ class MemoryMapWindow(QMainWindow):
     def zoom_frame_out(self) -> None:
         self._zoom_frame(FRAME_ZOOM_FACTOR)
 
+    def _route_padding(self) -> float:
+        clearance = getattr(self, "route_clearance", None)
+        width = getattr(self, "route_width", None)
+        desired = float(clearance.value()) if clearance is not None else 5.0
+        radius = float(width.value()) / 2 if width is not None else 0.6
+        return max(0.0, desired - MemoryMapWindow._effective_margin(self)) + radius
+
     def _effective_margin(self) -> float:
         border = getattr(self, "flat_border", None)
         if border is not None and not border.isChecked():
@@ -487,7 +513,7 @@ class MemoryMapWindow(QMainWindow):
             self.print_width.value(),
             self.print_height.value(),
             MemoryMapWindow._effective_margin(self),
-            route_padding_mm=ROUTE_FRAME_PADDING_MM,
+            route_padding_mm=MemoryMapWindow._route_padding(self),
         )
         fitted = {
             "center_lat": frame.center_lat,
@@ -591,6 +617,9 @@ class MemoryMapWindow(QMainWindow):
             else "none"
         )
         return {
+            "building_grouping_enabled": bool(
+                getattr(self, "building_grouping", None) and self.building_grouping.isChecked()
+            ),
             "terrain_enabled": self.terrain_layer.isChecked(),
             "water_enabled": self.water_layer.isChecked(),
             "terrain_max_relief_mm": self.terrain_relief.value(),

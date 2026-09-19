@@ -90,7 +90,7 @@ substitute for per-feature toolpath inspection or physical printing.
 
 ## Confirmed course and geometry repairs
 
-The user confirmed the X1 Carbon, 0.4 mm nozzle, PLA and 190 × 240 mm model.
+The user confirmed the X1 Carbon, 0.4 mm nozzle, PLA and 190 Ã— 240 mm model.
 The supplied GPX has the same 163 ordered route coordinates as the provisional
 course. Its file SHA-256 is
 `ee42f2729d4fe337e27738effabf92a5f8632460cbc592a8af7eb5f4fd055ea1`.
@@ -157,8 +157,23 @@ inspection, omission acknowledgment and physical evidence are still required.
   separation rather than relying on layer-count summaries.
 - Print the synthetic controls and full-route-scale Chicago specimens using the actual
   printer/material. Record physical outcomes and photographs in the evidence files.
-- Develop grouping against these failures while preserving all source dispositions.
-  Compare candidate runs using the same snapshot and repeat slicing and printing.
+- Validate the opt-in grouping candidate against the same snapshot, then repeat
+  toolpath inspection and physical printing.
 
 All physical-print observations remain pending. Generated/downloaded artifacts are
 local and ignored by Git; retain the snapshot and output folders with this record.
+
+
+## Opt-in building grouping implementation
+
+Studio now exposes **Group small buildings (0.4 mm nozzle)**. Eligible low buildings
+are combined into bounded masses targeting 0.8 mm width. Public roads, route, water,
+protected buildings and existing courtyards constrain expansion. Tagged alleys and
+driveways are omitted in grouping mode; local streets use 0.4 mm width. Isolated or
+barrier-constrained sources remain individual and are counted in diagnostics.
+Acute tips that fail the local-width opening are replaced by a containing oriented
+rectangle only when the same area, span and barrier limits permit it.
+
+The full automated suite passes **316 tests**. The final candidate benchmark and
+Bambu slicing results will be recorded below when complete. Physical acceptance
+remains pending; geometry screens alone are not proof of printable toolpaths.

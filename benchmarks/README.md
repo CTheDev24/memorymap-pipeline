@@ -1,9 +1,10 @@
 # Footprint validation benchmark
 
-This is the baseline and evidence harness for developing building grouping. It does
-**not** group buildings or certify a 0.4 mm nozzle print. Geometry repairs discovered
+This is the baseline and evidence harness for building grouping. The opt-in
+`--group-buildings` candidate combines nearby small footprints; it does **not**
+certify a 0.4 mm nozzle print. Geometry repairs discovered
 through the benchmark also apply to normal generation; diagnostic collection is optional.
-The confirmed Chicago specification is 190 � 240 mm, X1 Carbon, 0.4 mm nozzle and PLA.
+The confirmed Chicago specification is 190 × 240 mm, X1 Carbon, 0.4 mm nozzle and PLA.
 The 5 mm margin is minimum clearance between the outer edge of the 1.2 mm route
 and the model edge. It is not an extra 5 mm added outside the model dimensions;
 aspect-ratio preservation can leave more clearance on the other axis.
@@ -136,12 +137,12 @@ exist. It hashes the evidence and verifies model identity. Acceptance is based o
 An empty specimen, deleted observation, changed model, or mismatched layer profile
 cannot pass. Keep failed baseline results—they are the acceptance cases for grouping.
 
-## Evaluate a future grouping implementation
+## Evaluate the grouping implementation
 
 Use the exact frozen manifest with a different output directory and `--label`:
 
 ```powershell
-python -m memorymap_pipeline.footprint_benchmark run benchmarks/downloads/chicago-v1/manifest.json benchmarks/outputs/chicago-candidate --label candidate
+python -m memorymap_pipeline.footprint_benchmark run benchmarks/downloads/chicago-v1/manifest.json benchmarks/outputs/chicago-candidate --label candidate --group-buildings
 python -m memorymap_pipeline.footprint_benchmark compare benchmarks/outputs/chicago-baseline/report.json benchmarks/outputs/chicago-candidate/report.json
 ```
 
@@ -151,7 +152,17 @@ should identify its shared output geometry and face ranges for every contributin
 source. Comparison refuses different snapshots and exposes missing source IDs.
 Rerun slicing and physical tests; fewer geometric flags alone do not establish success.
 
-Grouping itself remains subsequent work: determine safe neighboring gaps, local
-width targets, height treatment, landmark preservation, and road/route/water barriers
-from the failed baseline specimens. Do not merge the older printability-preflight
+The current candidate targets low buildings (at most 3 mm high), using a 0.8 mm
+footprint target, at most 0.4 mm between neighboring source footprints, a 4 mm
+maximum group span and at most 32 members. It fills a convex neighborhood mass and
+uses only the bounded expansion needed to reach the width target. Groups have a
+flat top at the tallest member's height. Expanded area is capped at eight times
+source area and must remain inside the plate and outside protected geometry.
+Landmarks, religious/civic buildings, stadiums, building parts, towers and courtyards
+stay separate. Grouping mode narrows local streets to 0.4 mm; arterial widths remain
+unchanged. Alleys and driveways are omitted in this mode so they do not split
+neighborhood blocks into unprintable strips. Missing road or water barriers prevent grouping rather than permit
+unverified merges. Sources that cannot form a qualifying group remain individual
+and are counted in the generation warnings. All grouped source IDs retain shared
+geometry, group IDs and face ranges in diagnostics. Do not merge the older printability-preflight
 branch wholesale: it also changes export error policy, outside this benchmark scope.

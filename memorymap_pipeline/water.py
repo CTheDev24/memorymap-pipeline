@@ -65,6 +65,7 @@ def download_water_polygons(
     minimum_waterway_width_mm: float = 0.8,
     waterway_widths_mm: dict[str, float] | None = None,
     include_metadata: bool = False,
+    strict: bool = False,
 ) -> list[BaseGeometry] | list[WaterFeature]:
     """Load OSM water areas and transform them into clipped print-space polygons."""
     if minimum_waterway_width_mm <= 0:
@@ -115,13 +116,15 @@ def download_water_polygons(
                 # Large coastal frames can exceed Overpass limits when every inland
                 # water tag is requested together.  A coastline-only bbox query is
                 # dramatically smaller and is sufficient to reconstruct the ocean.
-                if fetch_bbox is None:
+                if strict or fetch_bbox is None:
                     raise
                 logging.warning(
                     "Full water query failed; retrying coastline only: %s", exc
                 )
                 data = query_bbox(COASTLINE_TAGS)
     except Exception as exc:
+        if strict:
+            raise ValueError(f"Water barriers could not be verified for building grouping: {exc}") from exc
         logging.warning("Failed to load water polygons and coastlines: %s", exc)
         return []
 
