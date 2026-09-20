@@ -192,7 +192,7 @@ The 1.0 mm experiments reduced grouping unnecessarily and are not the selected t
 `bambu_grouping_audit` now records extrusion-width coverage, samples arcs at 0.03 mm,
 and applies the explicit single-extruder offset. Regression tests cover the offset,
 full-circle arcs, retraction, absolute extrusion resets and relative XY moves. This
-is one layer near each flat group top, not full-height or physical acceptance.
+is representative sampled-height evidence, not full physical acceptance.
 
 The final 0.8 mm neighbor-absorption candidate is
 `outputs/chicago-2025-grouping-v10/`, using the same confirmed snapshot. Final geometry,

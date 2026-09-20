@@ -1,8 +1,8 @@
 """Measure grouped-footprint path coverage in flat Bambu benchmark specimens.
 
-This checks one layer near each flat group top, not physical printability or full
-3D coverage. Deposited widths are geometric approximations. Multiple extruders
-are deliberately rejected until per-tool offsets are tracked.
+This checks representative deposited layers through each group height, not physical
+printability or full 3D coverage. Deposited widths are geometric approximations.
+Multiple extruders are deliberately rejected until per-tool offsets are tracked.
 """
 
 from __future__ import annotations
@@ -216,11 +216,15 @@ def main():
     _write(path, result)
     for specimen in result["specimens"]:
         observations = specimen["interior_groups"]
+        with_paths = sum(
+            item.get("status") == "sampled" and not item.get("any_sample_without_paths", True)
+            for item in observations
+        )
         print(
             specimen["specimen"],
             len(observations),
-            sum(r["status"] == "paths_detected" for r in observations),
-            "with paths",
+            with_paths,
+            "with sampled coverage at all representative levels",
         )
     print(path)
 
