@@ -7,7 +7,6 @@ from shapely.geometry import box
 from shapely.ops import unary_union
 from trimesh.creation import box as solid_box
 
-from memorymap_pipeline.map_frame import MapFrame
 from memorymap_pipeline.footprint_benchmark import (
     _grouping_advisory_metrics,
     _sha,
@@ -19,6 +18,7 @@ from memorymap_pipeline.footprint_benchmark import (
     screen_footprint,
     synthetic,
 )
+from memorymap_pipeline.map_frame import MapFrame
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -68,12 +68,13 @@ def test_grouping_advisory_metrics_capture_small_density_and_fragmentation_proxy
     metrics = _grouping_advisory_metrics(
         frame,
         diagnostics,
-        {"grouped_sources": 2, "ungrouped_small_sources": 1},
+        {"enabled": True, "grouped_sources": 2, "ungrouped_small_sources": 1},
     )
     assert metrics["total_source_footprints"] == 3
     assert metrics["small_footprints"]["count"] == 2
-    assert metrics["small_footprints"]["isolated_count"] == 0
-    assert metrics["estimated_grouping_eligible_footprints"] == 3
+    assert metrics["small_footprints"]["centroid_isolated_within_0_4mm_count"] == 0
+    assert metrics["grouped_source_count"] == 2
+    assert metrics["remaining_small_source_count"] == 1
     assert metrics["building_extrusion_islands"]["before_grouping"] == 3
     assert metrics["building_extrusion_islands"]["after_grouping"] == 2
     assert metrics["fragmentation_proxy"]["before_grouping"] == 3

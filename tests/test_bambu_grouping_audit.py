@@ -75,7 +75,8 @@ def test_missing_or_multiple_extruder_offsets_are_rejected(header):
         extrusion_layers(header)
 
 
-def test_audit_reports_missing_paths_on_some_sampled_levels(tmp_path):
+@pytest.mark.parametrize("empty_layer", [False, True])
+def test_audit_reports_missing_paths_on_some_sampled_levels(tmp_path, empty_layer):
     report = {
         "specimens": [
             {
@@ -104,8 +105,8 @@ def test_audit_reports_missing_paths_on_some_sampled_levels(tmp_path):
             "; extruder_offset = 0x2\nM83\nG90\n"
             "; Z_HEIGHT: 2.10\n; LINE_WIDTH: 0.4\nG1 X10 Y20\n"
             "G1 X10.8 Y20 E0.1\n"
-            "; Z_HEIGHT: 2.50\n; LINE_WIDTH: 0.4\nG1 X50 Y50\n"
-            "G1 X50.8 Y50 E0.1\n"
+            "; Z_HEIGHT: 2.50\n; LINE_WIDTH: 0.4\nG1 X50 Y50\n" +
+            ("G1 X50.8 Y50 E0.1\n" if not empty_layer else "") +
             "; Z_HEIGHT: 2.90\n; LINE_WIDTH: 0.4\nG1 X12.1 Y20.5\n"
             "G1 X12.9 Y20.5 E0.1\n",
         )

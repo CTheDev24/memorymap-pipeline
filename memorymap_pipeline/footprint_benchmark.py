@@ -408,16 +408,18 @@ def _grouping_advisory_metrics(frame: MapFrame, diagnostics: list[dict], groupin
         "total_source_footprints": len(source_polygons),
         "small_footprint_screen_width_mm": screening_width_mm,
         "small_footprints": {
+            "spacing_method": "Centroid distances among small source footprints; not grouping eligibility or edge gaps.",
             "count": len(small_polygons),
             "fraction": (
                 len(small_polygons) / len(source_polygons) if source_polygons else 0.0
             ),
-            "isolated_count": isolated_count,
-            "nearest_neighbor_spacing_mm": _metric_summary(nearest_neighbor),
-            "local_neighbors_within_1mm": _metric_summary(local_density),
+            "centroid_isolated_within_0_4mm_count": isolated_count,
+            "nearest_small_centroid_spacing_mm": _metric_summary(nearest_neighbor),
+            "small_centroid_neighbors_within_1mm": _metric_summary(local_density),
             "total_perimeter_mm": float(sum(polygon.length for polygon in small_polygons)),
         },
-        "estimated_grouping_eligible_footprints": grouped_sources + ungrouped_small,
+        "grouped_source_count": grouped_sources,
+        "remaining_small_source_count": ungrouped_small if (grouping_stats or {}).get("enabled") else None,
         "building_extrusion_islands": {
             "before_grouping": before_islands,
             "after_grouping": after_islands,

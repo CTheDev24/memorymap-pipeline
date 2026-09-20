@@ -179,7 +179,9 @@ python -m memorymap_pipeline.bambu_grouping_audit benchmarks/outputs/chicago-can
 
 This flat-benchmark diagnostic samples representative deposited layers through each
 interior group's height (lower printable section, 25%, 50%, 75%, near top), selecting
-the nearest valid deposited layer for each level. It accounts for the machine's
+the nearest recorded layer for each level, including layers with no deposited paths.
+The report includes the number of distinct sampled layers; five labels may select
+fewer than five distinct layers on short groups. It accounts for the machine's
 single-extruder offset and extrusion widths, and writes `group-toolpath-coverage.json`.
 It excludes groups cut by specimen boundaries. Coverage is approximate and does not
 replace full-height, separation or physical inspection. Missing/multiple extruder

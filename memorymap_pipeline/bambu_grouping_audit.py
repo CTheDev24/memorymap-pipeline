@@ -11,8 +11,8 @@ import argparse
 import math
 import re
 import zipfile
-from statistics import median
 from pathlib import Path
+from statistics import median
 
 import numpy as np
 from shapely.affinity import translate
@@ -21,7 +21,6 @@ from shapely.ops import unary_union
 from shapely.strtree import STRtree
 
 from .footprint_benchmark import _read, _sha, _write
-
 
 SAMPLED_HEIGHT_LEVELS = (
     ("lower_printable", 0.08),
@@ -125,7 +124,7 @@ def audit_run(run: Path) -> dict:
             if record["cut_by_crop"]:
                 continue
             top = record["grouped_height_mm"] + zshift
-            eligible = [z for z in trees if zshift + 0.4 < z < top - 0.08]
+            eligible = [z for z in layers if zshift + 0.4 < z < top - 0.08]
             if not eligible:
                 observations.append(
                     {
@@ -152,7 +151,7 @@ def audit_run(run: Path) -> dict:
             sampled_levels = []
             for label, target in _sample_targets(z_min, z_max):
                 z = min(eligible, key=lambda candidate: abs(candidate - target))
-                paths = [layers[z][int(i)] for i in trees[z].query(footprint)]
+                paths = [layers[z][int(i)] for i in trees[z].query(footprint)] if z in trees else []
                 coverage = (
                     footprint.intersection(unary_union(paths)).area / footprint.area if paths else 0.0
                 )
@@ -178,6 +177,7 @@ def audit_run(run: Path) -> dict:
                     "source_member_count": len(source_ids),
                     "group_dimensions_mm": {"width": max_x - min_x, "height": max_y - min_y},
                     "sampled_levels": sampled_levels,
+                    "distinct_sampled_layer_count": len({item["layer_z_mm"] for item in sampled_levels}),
                     "minimum_coverage_fraction": min(coverages),
                     "median_coverage_fraction": median(coverages),
                     "near_top_coverage_fraction": (

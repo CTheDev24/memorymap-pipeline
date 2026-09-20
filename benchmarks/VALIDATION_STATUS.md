@@ -196,41 +196,70 @@ is representative sampled-height evidence, not full physical acceptance.
 
 The final 0.8 mm neighbor-absorption candidate is
 `outputs/chicago-2025-grouping-v10/`, using the same confirmed snapshot. Final geometry,
-slicing and build results will be recorded here when complete. Earlier v6 overlap
+slicing and build results are recorded below. Earlier v6 overlap
 findings were real and are addressed by absorption; its larger group count alone was
 not proof of acceptable geometry. Physical printing and barrier inspection remain
 pending for every candidate.
 
-## v10 continuation status (current branch head)
+### Final 0.8 mm candidate: v10
 
-Current commit: `497a5fa`.
-Planned candidate directory: `outputs/chicago-2025-grouping-v10/`.
-Source snapshot target: `downloads/chicago-2025-confirmed/snapshot-clearance/manifest.json`.
+The candidate groups **383 source footprints into 25 masses**. All 25 pass the
+0.8 mm local-width screen. No group overlaps another group or retained building;
+all contributing source footprints remain covered, and no source IDs are missing.
+The full-scale export removes zero building faces. **323 tests pass**.
 
-Code-level validation additions completed in this pass:
+The entire benchmark model (three frozen Chicago source areas placed at the full
+190 x 240 mm marathon scale) sliced successfully with the confirmed X1 Carbon /
+0.4 mm / 0.16 mm Optimal / Generic PLA profile. Corrected G-code analysis detects
+near-top material in **all 25 groups**, with approximate deposited-width coverage
+of **87.2%-99.8%**, averaging **96.2%**. This is a geometric toolpath diagnostic,
+not proof of full-height, barrier or physical-print acceptance. Inspect the lowest
+coverage group first during the physical test.
 
-- `bambu_grouping_audit` now reports representative sampled-height coverage per interior
-  group (lower/25/50/75/near-top), including minimum/median/near-top coverage and whether
-  any sampled level has no intersecting deposited paths.
-- Existing offset-aware behavior remains required; missing or ambiguous extruder offsets
-  are still rejected.
-- Benchmark `report.json` now includes `grouping_advisory_metrics` and a geometry-only
-  fragmentation proxy (`building_island_count_delta`) to support operator guidance without
-  auto-enabling grouping.
+Grouping remains conservative: 9,500 source records remain individually extruded.
+It does not make every small building in a full-marathon model printable. The
+unclassified service-road data and exaggerated road widths are further candidates
+for investigation, without silently dropping public streets or source geometry.
 
-Local execution blockers in this workspace:
 
-- Frozen Chicago benchmark snapshot is not present locally (`manifest.json` missing at the
-  expected confirmed snapshot path), so v10 generation counts/artifacts were not executed here.
-- Bambu Studio executable is not installed in this environment, so reference slicing was not
-  executed here.
+The final Windows build for implementation commit `54ea092` passed CI, packaging,
+executable smoke checks and artifact upload:
+[build 35523024230](https://github.com/CTheDev24/memorymap-pipeline/actions/runs/35523024230).
+Use this build instead of the intermediate 1.0 mm experiment builds.
+The full-scale sliced project, G-code and corrected coverage report are archived in
+`outputs/chicago-2025-grouping-v10/full-model-check/`. The lowest measured coverage
+is `group-b005287-p1` (87.2%); inspect this mass and nearby street separation first.
 
-Completed automated checks for this pass:
 
-- `tests/test_bambu_grouping_audit.py`: 6 passed
-- `tests/test_footprint_benchmark.py`: 17 passed
+### Review and sampled-height continuation (2026-09-20)
 
-Unchanged acceptance boundary:
+Integrated remote commits `497a5fa`, `dd041c6` and `02670b3`. Their environment
+lacked the snapshot and Bambu Studio; both are available in this Windows workspace.
+The sampled audit now retains explicitly empty G-code layers instead of skipping
+them, and reports the number of distinct layers used by its five samples.
+Advisory spacing is explicitly centroid-based, not an edge-gap eligibility test.
+Protected remaining small sources are no longer mislabeled eligible.
 
-- Full physical-print requirements (strength, stringing, cleanup, and real appearance) remain
-  explicitly unverified and require operator-run physical prints.
+All three v10 specimens exported with zero building faces removed and sliced:
+downtown 124 layers, dense neighborhood 85, sparse neighborhood 41. Comparison
+with the repaired baseline has zero missing specimen source IDs; 29 added entries
+are contributors whose shared group intersects a crop boundary.
+
+The full-scale model has deposited paths at all five representative height samples
+for all 25 groups (125 observations). Sample coverage ranges from 80.2% to 99.8%; this is sampled geometry evidence, not continuous-height or physical acceptance.
+The report counts 9,413 remaining small sources; this capability does not yet
+resolve every small building at full marathon scale. Per-feature slicer inspection,
+barrier inspection and physical print observations remain pending.
+
+The specimen sampled audit found paths at every representative level for all
+15 interior dense-neighborhood groups and all 4 interior sparse-neighborhood
+groups. Downtown has no uncut groups and therefore supplies no grouped-height
+evidence. Boundary-cut groups are excluded from the specimen audit and covered
+by the full-scale audit. All 25 full-scale groups used five distinct layers.
+
+Post-review verification: **327 tests passed**, with 59 dependency warnings;
+Ruff and whitespace checks passed for the changed modules. The archived advisory
+metrics report 9,883 source records versus 9,525 distinct output footprint shapes
+(a 3.62% reduction). These are geometry counts, not measured slicer islands or a
+validated prediction of stringing. The separate advisory JSON is keyed to the
+immutable v10 report hash. No physical observations were marked as passed.
