@@ -1,5 +1,11 @@
 # Initial footprint validation — September 19, 2026
 
+
+> Current status: the implementation is available as a development preview. Chicago
+> grouping has **not** passed capability acceptance. Geometry and executable tests
+> pass, but grouping coverage and per-group slicing evidence remain under investigation.
+> Earlier successful exports and layer counts below must not be read as print proof.
+
 The validation harness is implemented. Building grouping and physical print
 acceptance remain subsequent work. The evidence already demonstrates that a
 supported, watertight building can disappear during slicing.
@@ -212,3 +218,33 @@ The grouping check now rejects an expanded mass intersecting any nonmember sourc
 it can keep growing to include those neighbors within the same original limits.
 A regression protects this case, and **317 tests pass**. Candidate v7 repeats the
 same frozen-data geometry and slicer checks with this correction.
+
+
+### v7 conservative overlap exclusion
+
+The v7 candidate groups 225 footprints into 19 masses. All masses pass the width
+screen and have no positive-area overlap with retained sources. Full export and all
+three crops pass without removed building faces or missing source IDs. Bambu slices
+all three, but the endpoint diagnostic detects near-top paths for only 7/14 interior
+groups (7/13 dense, 0/1 sparse). A dense-crop Arachne experiment improves this to
+9/13, still insufficient. Therefore **v7 is not accepted as slicing-validated**.
+The Windows build for commit `31fbc61` succeeds, but remains a development preview.
+
+Candidate v8 increases the production grouping target to 1.0 mm, keeping the
+0.8 mm diagnostic and the same geometry/barrier limits, to test extrusion headroom.
+This is an experiment until its slice results are recorded.
+
+
+### Neighbor absorption and wider groups (v9)
+
+The 1.0 mm v8 experiment yielded only one group. The v9 algorithm absorbs eligible
+sources touched by expansion, requiring connectivity within the same 0.4 mm gap,
+and allows up to 128 members within the unchanged 4 mm span and area/barrier limits.
+It groups 72 source footprints into three masses. All three pass the 1.0 mm screen,
+with no positive-area overlap against retained footprints. **318 tests pass**.
+
+The local toolpath diagnostic now includes line segments, arc interpolation and
+extrusion-width buffers. On v7 this revises presence to 9/14 groups; several remain
+absent or only partially covered. Endpoint-only misses were not definitive proof
+of omission. These diagnostics do not establish physical success or complete barrier
+separation. The production profile experiments and their artifacts remain archived.

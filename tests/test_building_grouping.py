@@ -192,3 +192,21 @@ def test_expanded_groups_do_not_overlap_retained_sources():
             for i, source in enumerate(footprints)
             if i not in group.members
         )
+
+
+def test_group_absorbs_neighbors_touched_by_expansion():
+    footprints = [
+        box(x * 0.18, y * 0.18, x * 0.18 + 0.12, y * 0.18 + 0.12)
+        for x in range(8)
+        for y in range(8)
+    ]
+    groups = group_footprints(footprints, range(len(footprints)), width_mm=1.0)
+    assert groups
+    assert any(len(group.members) > 32 for group in groups)
+    for group in groups:
+        assert not group.geometry.buffer(-0.5, join_style=2).is_empty
+        assert all(
+            group.geometry.intersection(p).area <= 1e-10
+            for i, p in enumerate(footprints)
+            if i not in group.members
+        )

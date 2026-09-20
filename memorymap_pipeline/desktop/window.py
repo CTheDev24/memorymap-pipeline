@@ -302,7 +302,7 @@ class MemoryMapWindow(QMainWindow):
         self.buildings_layer = QCheckBox("Buildings"); self.buildings_layer.setChecked(True)
         self.building_grouping = QCheckBox("Group small buildings (0.4 mm nozzle)")
         self.building_grouping.setToolTip(
-            "Combine nearby low buildings into masses with a 0.8 mm footprint target. "
+            "Combine nearby low buildings into masses with a 1.0 mm footprint target. "
             "Omits alleys/driveways, uses 0.4 mm local streets and preserves route/water separation; "
             "some small buildings may remain individual."
         )

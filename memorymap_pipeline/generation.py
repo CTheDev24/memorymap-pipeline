@@ -1134,7 +1134,7 @@ def generate_memory_map(
                 route_barrier = buffered_polygon_from_points(scaled, request.route_width_mm)
                 grouping_barriers = unary_union([unioned_roads, route_barrier, *barriers_water])
                 grouping_options = {
-                    "width_mm": float(config.get("building_grouping_width_mm", 0.8)),
+                    "width_mm": float(config.get("building_grouping_width_mm", 1.0)),
                     "gap_mm": float(config.get("building_grouping_gap_mm", 0.4)),
                     "span_mm": float(config.get("building_grouping_span_mm", 4.0)),
                     "max_height_mm": float(config.get("building_grouping_max_height_mm", 3.0)),

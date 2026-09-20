@@ -152,9 +152,9 @@ should identify its shared output geometry and face ranges for every contributin
 source. Comparison refuses different snapshots and exposes missing source IDs.
 Rerun slicing and physical tests; fewer geometric flags alone do not establish success.
 
-The current candidate targets low buildings (at most 3 mm high), using a 0.8 mm
+The current candidate targets low buildings (at most 3 mm high), using a 1.0 mm
 footprint target, at most 0.4 mm between neighboring source footprints, a 4 mm
-maximum group span and at most 32 members. It fills a convex neighborhood mass and
+maximum group span and at most 128 members. It fills a convex neighborhood mass and
 uses only the bounded expansion needed to reach the width target. Groups have a
 flat top at the tallest member's height. Expanded area is capped at eight times
 source area and must remain inside the plate and outside protected geometry.
@@ -166,3 +166,6 @@ unverified merges. Sources that cannot form a qualifying group remain individual
 and are counted in the generation warnings. All grouped source IDs retain shared
 geometry, group IDs and face ranges in diagnostics. Do not merge the older printability-preflight
 branch wholesale: it also changes export error policy, outside this benchmark scope.
+
+Expansion incorporates touched eligible neighbors through the same gap limit before
+accepting a group, preventing overlapping individual and grouped building shells.

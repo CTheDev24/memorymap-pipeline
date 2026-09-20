@@ -25,7 +25,7 @@ def group_footprints(
     width_mm=0.8,
     gap_mm=0.4,
     span_mm=4.0,
-    maximum_members=32,
+    maximum_members=128,
     allowed_region=None,
 ):
     """Grow bounded neighborhood masses; never add area across a known barrier.
@@ -64,35 +64,55 @@ def group_footprints(
         return not polygon.buffer(-radius, join_style=2).is_empty
 
     def finish_mass(hull, source_area, members):
-        # Fill only the minimum surrounding space needed for the width target.
-        # This remains bounded by street/water/route and protected-building masks.
-        mass = hull
-        if not substantial(mass):
-            low, high = 0.0, radius + 1e-4
-            for _ in range(14):
-                middle = (low + high) / 2
-                if substantial(hull.buffer(middle, join_style=2)):
-                    high = middle
-                else:
-                    low = middle
-            mass = hull.buffer(high, join_style=2)
-        screen_radius = max(radius - 1e-4, radius * 0.999)
-        core = mass.buffer(-screen_radius, join_style=2)
-        opened = core.buffer(screen_radius, join_style=2).intersection(mass)
-        if opened.area < mass.area * (1 - 1e-5):
-            # Acute hull tips can disappear despite a broad central core.
-            mass = mass.minimum_rotated_rectangle
-        x0, y0, x1, y1 = mass.bounds
-        if max(x1 - x0, y1 - y0) > span_mm or mass.area > 8 * source_area or blocked(mass):
-            return None
-        # Separate overlapping shells can cancel in a slicer even when each
-        # shell is closed. Keep growing until every touched source is a member.
-        if any(
-            int(i) not in members and mass.intersection(footprints[int(i)]).area > 1e-10
-            for i in tree.query(mass)
-        ):
-            return None
-        return mass if substantial(mass) else None
+        members = list(members)
+        while True:
+            # Fill only the minimum surrounding space needed for the width target.
+            # This remains bounded by street/water/route and protected-building masks.
+            mass = hull
+            if not substantial(mass):
+                low, high = 0.0, radius + 1e-4
+                for _ in range(14):
+                    middle = (low + high) / 2
+                    if substantial(hull.buffer(middle, join_style=2)):
+                        high = middle
+                    else:
+                        low = middle
+                mass = hull.buffer(high, join_style=2)
+            screen_radius = max(radius - 1e-4, radius * 0.999)
+            core = mass.buffer(-screen_radius, join_style=2)
+            opened = core.buffer(screen_radius, join_style=2).intersection(mass)
+            if opened.area < mass.area * (1 - 1e-5):
+                # Acute hull tips can disappear despite a broad central core.
+                mass = mass.minimum_rotated_rectangle
+            x0, y0, x1, y1 = mass.bounds
+            if max(x1 - x0, y1 - y0) > span_mm or blocked(mass):
+                return None
+            extras = {
+                int(i)
+                for i in tree.query(mass)
+                if int(i) not in members and mass.intersection(footprints[int(i)]).area > 1e-10
+            }
+            if not extras:
+                return (
+                    (mass, members) if substantial(mass) and mass.area <= 8 * source_area else None
+                )
+            if len(members) + len(extras) > maximum_members or not extras <= available:
+                return None
+            # Absorb every touched source rather than creating intersecting shells.
+            # Every added source must connect through the same neighbor-gap limit.
+            pending = set(extras)
+            while pending:
+                connected = [
+                    i
+                    for i in sorted(pending, key=order)
+                    if any(footprints[i].distance(footprints[j]) <= gap_mm for j in members)
+                ]
+                if not connected:
+                    return None
+                members.extend(connected)
+                pending.difference_update(connected)
+            source_area += sum(footprints[i].area for i in extras)
+            hull = unary_union([hull, *(footprints[i] for i in extras)]).convex_hull
 
     def order(i):
         p = footprints[i]
@@ -134,8 +154,9 @@ def group_footprints(
             _, _, _, i, hull = min(options, key=lambda item: item[:3])
             members.append(i)
             source_area += footprints[i].area
-            mass = finish_mass(hull, source_area, members)
-            if mass is not None:
+            finished = finish_mass(hull, source_area, members)
+            if finished is not None:
+                mass, members = finished
                 groups.append(FootprintGroup(tuple(sorted(members)), mass))
                 available.difference_update(members)
                 accepted_shapes.append(mass)
