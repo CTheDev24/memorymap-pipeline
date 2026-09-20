@@ -191,7 +191,7 @@ DEFAULT_CONFIG = {
     # prevent unsupported min_height volumes in support-free map prints
     "extend_elevated_building_parts_to_ground": True,
     "building_grouping_enabled": False,
-    "building_grouping_width_mm": 1.0,
+    "building_grouping_width_mm": 0.8,
     "building_grouping_gap_mm": 0.4,
     "building_grouping_span_mm": 4.0,
     "building_grouping_max_height_mm": 3.0,

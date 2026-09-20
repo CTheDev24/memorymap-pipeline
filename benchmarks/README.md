@@ -152,7 +152,7 @@ should identify its shared output geometry and face ranges for every contributin
 source. Comparison refuses different snapshots and exposes missing source IDs.
 Rerun slicing and physical tests; fewer geometric flags alone do not establish success.
 
-The current candidate targets low buildings (at most 3 mm high), using a 1.0 mm
+The current candidate targets low buildings (at most 3 mm high), using a 0.8 mm
 footprint target, at most 0.4 mm between neighboring source footprints, a 4 mm
 maximum group span and at most 128 members. It fills a convex neighborhood mass and
 uses only the bounded expansion needed to reach the width target. Groups have a
@@ -169,3 +169,16 @@ branch wholesale: it also changes export error policy, outside this benchmark sc
 
 Expansion incorporates touched eligible neighbors through the same gap limit before
 accepting a group, preventing overlapping individual and grouped building shells.
+
+
+After Bambu slicing, measure grouped footprints against deposited paths with:
+
+```powershell
+python -m memorymap_pipeline.bambu_grouping_audit benchmarks/outputs/chicago-candidate
+```
+
+This flat-benchmark diagnostic samples a layer near each interior group's top,
+accounts for the machine's single-extruder offset and extrusion widths, and writes
+`group-toolpath-coverage.json`. It excludes groups cut by specimen boundaries.
+Coverage is approximate and does not replace full-height, separation or physical
+inspection. Missing/multiple extruder offsets are rejected instead of guessed.

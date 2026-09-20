@@ -1,10 +1,9 @@
 # Initial footprint validation — September 19, 2026
 
 
-> Current status: the implementation is available as a development preview. Chicago
-> grouping has **not** passed capability acceptance. Geometry and executable tests
-> pass, but grouping coverage and per-group slicing evidence remain under investigation.
-> Earlier successful exports and layer counts below must not be read as print proof.
+> Current status: grouping is implemented as an opt-in development capability.
+> Geometry, slicing diagnostics and physical acceptance are separate gates; physical
+> printing remains pending. See the current grouping validation section below.
 
 The validation harness is implemented. Building grouping and physical print
 acceptance remain subsequent work. The evidence already demonstrates that a
@@ -170,81 +169,34 @@ All physical-print observations remain pending. Generated/downloaded artifacts a
 local and ignored by Git; retain the snapshot and output folders with this record.
 
 
-## Opt-in building grouping implementation
+## Current grouping implementation and validation
 
-Studio now exposes **Group small buildings (0.4 mm nozzle)**. Eligible low buildings
-are combined into bounded masses targeting 0.8 mm width. Public roads, route, water,
+Studio exposes **Group small buildings (0.4 mm nozzle)**. Nearby low buildings are
+combined into bounded masses targeting 0.8 mm width. Public roads, route, water,
 protected buildings and existing courtyards constrain expansion. Tagged alleys and
 driveways are omitted in grouping mode; local streets use 0.4 mm width. Isolated or
 barrier-constrained sources remain individual and are counted in diagnostics.
-Acute tips that fail the local-width opening are replaced by a containing oriented
-rectangle only when the same area, span and barrier limits permit it.
 
-The full automated suite passes **316 tests**. Candidate
-`outputs/chicago-2025-grouping-v6/` uses the same confirmed snapshot and combines
-**1,857 source footprints into 125 masses**. All 125 masses pass the 0.8 mm local
-width screen. There are no invalid groups, overlapping group pairs, uncovered member
-footprints, missing source IDs, new omissions or unresolved source geometries.
-The full map exports with zero building faces removed.
+Groups absorb eligible neighboring footprints touched by expansion, with connectivity
+through the same 0.4 mm neighbor-gap limit. This prevents separate overlapping building
+shells. Groups allow up to 128 members within a 4 mm span and eight-times-source-area
+limit. Acute tips can use a containing oriented rectangle only within these limits.
 
-This is a conservative first pass: 8,014 retained individual footprints still have
-width-screen flags. The capability does not claim that every building is printable.
-Physical acceptance remains pending; geometry screens alone are not proof of
-printable toolpaths.
+A diagnostic error initially suggested missing grouped tops: the X1 Carbon profile
+has a **2 mm Y extruder offset**, which must be subtracted when matching model
+footprints to G-code. The original endpoint checks and uncorrected coverage reports
+are superseded. With the corrected alignment, all **14 interior groups in v7** have
+near-top deposited-path coverage, ranging from approximately **95.5% to 99.7%**.
+The 1.0 mm experiments reduced grouping unnecessarily and are not the selected target.
 
+`bambu_grouping_audit` now records extrusion-width coverage, samples arcs at 0.03 mm,
+and applies the explicit single-extruder offset. Regression tests cover the offset,
+full-circle arcs, retraction, absolute extrusion resets and relative XY moves. This
+is one layer near each flat group top, not full-height or physical acceptance.
 
-The full model and all three final candidate crops export successfully, each with
-zero building faces removed. Same-snapshot comparison has zero missing source IDs.
-There are 163 added crop memberships because a shared group can intersect a crop
-whose original individual member lay outside it; no new OSM buildings were fetched.
-Studio's remaining-small count is 7,939 (empty 0.8 mm erosion core); the broader
-local-width opening screen flags 8,014 individual sources, including thin appendages.
-
-Windows build [35476701427](https://github.com/CTheDev24/memorymap-pipeline/actions/runs/35476701427)
-passed CI, packaging and executable smoke checks for implementation commit `edabee1`.
-Artifact: `MemoryMap-Windows-Preview-edabee19deab4bf236cd5a832544a7bf4924250a`.
-
-
-### Slicer investigation and overlap correction
-
-All three v6 crops sliced, but an endpoint-presence diagnostic found paths near the
-tops of only 55/89 interior grouped masses. An isolated affected mass sliced to its
-full height. Inspection then found that group expansion could overlap eligible
-sources left individual, despite preventing overlap with other groups. Such separate
-intersecting shells can disrupt slicing. Therefore v6 is **not accepted** as the final
-candidate. Its artifact is superseded by the overlap correction.
-
-The grouping check now rejects an expanded mass intersecting any nonmember source;
-it can keep growing to include those neighbors within the same original limits.
-A regression protects this case, and **317 tests pass**. Candidate v7 repeats the
-same frozen-data geometry and slicer checks with this correction.
-
-
-### v7 conservative overlap exclusion
-
-The v7 candidate groups 225 footprints into 19 masses. All masses pass the width
-screen and have no positive-area overlap with retained sources. Full export and all
-three crops pass without removed building faces or missing source IDs. Bambu slices
-all three, but the endpoint diagnostic detects near-top paths for only 7/14 interior
-groups (7/13 dense, 0/1 sparse). A dense-crop Arachne experiment improves this to
-9/13, still insufficient. Therefore **v7 is not accepted as slicing-validated**.
-The Windows build for commit `31fbc61` succeeds, but remains a development preview.
-
-Candidate v8 increases the production grouping target to 1.0 mm, keeping the
-0.8 mm diagnostic and the same geometry/barrier limits, to test extrusion headroom.
-This is an experiment until its slice results are recorded.
-
-
-### Neighbor absorption and wider groups (v9)
-
-The 1.0 mm v8 experiment yielded only one group. The v9 algorithm absorbs eligible
-sources touched by expansion, requiring connectivity within the same 0.4 mm gap,
-and allows up to 128 members within the unchanged 4 mm span and area/barrier limits.
-It groups 72 source footprints into three masses. All three pass the 1.0 mm screen,
-with no positive-area overlap against retained footprints. **318 tests pass**.
-
-The local toolpath diagnostic now includes line segments, arc interpolation and
-extrusion-width buffers. On v7 this revises presence to 9/14 groups; several remain
-absent or only partially covered. Endpoint-only misses were not definitive proof
-of omission. These diagnostics do not establish physical success or complete barrier
-separation. The production profile experiments and their artifacts remain archived.
+The final 0.8 mm neighbor-absorption candidate is
+`outputs/chicago-2025-grouping-v10/`, using the same confirmed snapshot. Final geometry,
+slicing and build results will be recorded here when complete. Earlier v6 overlap
+findings were real and are addressed by absorption; its larger group count alone was
+not proof of acceptable geometry. Physical printing and barrier inspection remain
+pending for every candidate.

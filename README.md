@@ -419,7 +419,7 @@ features, and major tags such as `v1.0.0` for the first stable release or breaki
 
 Enable **Group small buildings (0.4 mm nozzle)** under Layers to test neighborhood
 massing. Keep Roads enabled. The mode combines nearby low buildings into flat-topped
-masses with a 1.0 mm footprint target, omits alleys/driveways, and narrows local streets to 0.4 mm. It preserves
+masses with a 0.8 mm footprint target, omits alleys/driveways, and narrows local streets to 0.4 mm. It preserves
 known streets, the marathon route, water and protected building geometry. Generation
 reports how many sources were grouped and how many small footprints remain individual.
 This is opt-in and requires slicer inspection and a physical test print.
