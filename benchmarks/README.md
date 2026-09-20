@@ -177,8 +177,14 @@ After Bambu slicing, measure grouped footprints against deposited paths with:
 python -m memorymap_pipeline.bambu_grouping_audit benchmarks/outputs/chicago-candidate
 ```
 
-This flat-benchmark diagnostic samples a layer near each interior group's top,
-accounts for the machine's single-extruder offset and extrusion widths, and writes
-`group-toolpath-coverage.json`. It excludes groups cut by specimen boundaries.
-Coverage is approximate and does not replace full-height, separation or physical
-inspection. Missing/multiple extruder offsets are rejected instead of guessed.
+This flat-benchmark diagnostic samples representative deposited layers through each
+interior group's height (lower printable section, 25%, 50%, 75%, near top), selecting
+the nearest valid deposited layer for each level. It accounts for the machine's
+single-extruder offset and extrusion widths, and writes `group-toolpath-coverage.json`.
+It excludes groups cut by specimen boundaries. Coverage is approximate and does not
+replace full-height, separation or physical inspection. Missing/multiple extruder
+offsets are rejected instead of guessed.
+
+Benchmark `report.json` also includes `grouping_advisory_metrics` so operators can
+review scale/density/fragmentation indicators before enabling grouping. These metrics
+are advisory diagnostics only; they do not auto-enable grouping or modify geometry.

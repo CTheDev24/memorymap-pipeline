@@ -200,3 +200,37 @@ slicing and build results will be recorded here when complete. Earlier v6 overla
 findings were real and are addressed by absorption; its larger group count alone was
 not proof of acceptable geometry. Physical printing and barrier inspection remain
 pending for every candidate.
+
+## v10 continuation status (current branch head)
+
+Current commit: `497a5fa`.
+Planned candidate directory: `outputs/chicago-2025-grouping-v10/`.
+Source snapshot target: `downloads/chicago-2025-confirmed/snapshot-clearance/manifest.json`.
+
+Code-level validation additions completed in this pass:
+
+- `bambu_grouping_audit` now reports representative sampled-height coverage per interior
+  group (lower/25/50/75/near-top), including minimum/median/near-top coverage and whether
+  any sampled level has no intersecting deposited paths.
+- Existing offset-aware behavior remains required; missing or ambiguous extruder offsets
+  are still rejected.
+- Benchmark `report.json` now includes `grouping_advisory_metrics` and a geometry-only
+  fragmentation proxy (`building_island_count_delta`) to support operator guidance without
+  auto-enabling grouping.
+
+Local execution blockers in this workspace:
+
+- Frozen Chicago benchmark snapshot is not present locally (`manifest.json` missing at the
+  expected confirmed snapshot path), so v10 generation counts/artifacts were not executed here.
+- Bambu Studio executable is not installed in this environment, so reference slicing was not
+  executed here.
+
+Completed automated checks for this pass:
+
+- `tests/test_bambu_grouping_audit.py`: 6 passed
+- `tests/test_footprint_benchmark.py`: 17 passed
+
+Unchanged acceptance boundary:
+
+- Full physical-print requirements (strength, stringing, cleanup, and real appearance) remain
+  explicitly unverified and require operator-run physical prints.
