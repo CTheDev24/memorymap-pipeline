@@ -11,6 +11,7 @@ import argparse
 import math
 import re
 import zipfile
+from statistics import median
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,15 @@ from shapely.ops import unary_union
 from shapely.strtree import STRtree
 
 from .footprint_benchmark import _read, _sha, _write
+
+
+SAMPLED_HEIGHT_LEVELS = (
+    ("lower_printable", 0.08),
+    ("height_25pct", 0.25),
+    ("height_50pct", 0.50),
+    ("height_75pct", 0.75),
+    ("near_top", 0.92),
+)
 
 
 def extrusion_layers(text: str):
@@ -84,6 +94,13 @@ def extrusion_layers(text: str):
     return offset, layers
 
 
+def _sample_targets(z_min: float, z_max: float) -> list[tuple[str, float]]:
+    if z_max <= z_min:
+        return [(label, z_min) for label, _fraction in SAMPLED_HEIGHT_LEVELS]
+    span = z_max - z_min
+    return [(label, z_min + fraction * span) for label, fraction in SAMPLED_HEIGHT_LEVELS]
+
+
 def audit_run(run: Path) -> dict:
     report = _read(run / "report.json")
     with np.load(run / "layer-meshes.npz") as meshes:
@@ -110,22 +127,65 @@ def audit_run(run: Path) -> dict:
             top = record["grouped_height_mm"] + zshift
             eligible = [z for z in trees if zshift + 0.4 < z < top - 0.08]
             if not eligible:
-                observations.append({"group_id": group_id, "status": "no_test_layer"})
+                observations.append(
+                    {
+                        "group_id": group_id,
+                        "status": "no_test_layer",
+                        "source_member_count": len(record.get("group_source_ids") or []),
+                        "group_dimensions_mm": {
+                            "width": shape(record["output_print_geometry"]).bounds[2]
+                            - shape(record["output_print_geometry"]).bounds[0],
+                            "height": shape(record["output_print_geometry"]).bounds[3]
+                            - shape(record["output_print_geometry"]).bounds[1],
+                        },
+                        "grouped_height_mm": record["grouped_height_mm"],
+                    }
+                )
                 continue
-            z = min(eligible, key=lambda z: abs(z - (top - 0.24)))
             footprint = translate(
                 shape(record["output_print_geometry"]),
                 bbox[0] - x0 - offset[0],
                 bbox[1] - y0 - offset[1],
             )
-            paths = [layers[z][int(i)] for i in trees[z].query(footprint)]
-            coverage = footprint.intersection(unary_union(paths)).area / footprint.area
+            z_min = min(eligible)
+            z_max = max(eligible)
+            sampled_levels = []
+            for label, target in _sample_targets(z_min, z_max):
+                z = min(eligible, key=lambda candidate: abs(candidate - target))
+                paths = [layers[z][int(i)] for i in trees[z].query(footprint)]
+                coverage = (
+                    footprint.intersection(unary_union(paths)).area / footprint.area if paths else 0.0
+                )
+                sampled_levels.append(
+                    {
+                        "level": label,
+                        "target_z_mm": target,
+                        "layer_z_mm": z,
+                        "covered_area_fraction": coverage,
+                        "status": "paths_detected" if coverage > 0 else "no_paths_detected",
+                    }
+                )
+            near_top = next((item for item in sampled_levels if item["level"] == "near_top"), None)
+            coverages = [item["covered_area_fraction"] for item in sampled_levels]
+            source_ids = record.get("group_source_ids") or []
+            min_x, min_y, max_x, max_y = shape(record["output_print_geometry"]).bounds
             observations.append(
                 {
                     "group_id": group_id,
-                    "layer_z_mm": z,
-                    "covered_area_fraction": coverage,
-                    "status": "paths_detected" if coverage > 0 else "no_paths_detected",
+                    "status": "sampled",
+                    "expected_footprint_area_mm2": footprint.area,
+                    "grouped_height_mm": record["grouped_height_mm"],
+                    "source_member_count": len(source_ids),
+                    "group_dimensions_mm": {"width": max_x - min_x, "height": max_y - min_y},
+                    "sampled_levels": sampled_levels,
+                    "minimum_coverage_fraction": min(coverages),
+                    "median_coverage_fraction": median(coverages),
+                    "near_top_coverage_fraction": (
+                        near_top["covered_area_fraction"] if near_top is not None else None
+                    ),
+                    "any_sample_without_paths": any(
+                        item["status"] == "no_paths_detected" for item in sampled_levels
+                    ),
                 }
             )
         specimens.append(
@@ -139,8 +199,9 @@ def audit_run(run: Path) -> dict:
         )
     return {
         "report_sha256": _sha(run / "report.json"),
-        "method": "Near-top layer coverage using extrusion widths, 0.03 mm arc interpolation, "
-        "and the single-extruder machine offset. Flat benchmark frames only.",
+        "method": "Representative sampled-height coverage (lower/25/50/75/near-top) using "
+        "extrusion widths, 0.03 mm arc interpolation, and the single-extruder machine offset. "
+        "Flat benchmark frames only.",
         "acceptance": "Physical print, complete-height and barrier validation remain pending",
         "specimens": specimens,
     }

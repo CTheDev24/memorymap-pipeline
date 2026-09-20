@@ -60,8 +60,11 @@ def test_audit_aligns_paths_with_x1_extruder_offset(tmp_path):
         )
     result = audit_run(tmp_path)
     observation = result["specimens"][0]["interior_groups"][0]
-    assert observation["status"] == "paths_detected"
-    assert observation["covered_area_fraction"] > 0.35
+    assert observation["status"] == "sampled"
+    assert observation["near_top_coverage_fraction"] > 0.35
+    assert observation["minimum_coverage_fraction"] > 0
+    assert len(observation["sampled_levels"]) == 5
+    assert all(level["status"] == "paths_detected" for level in observation["sampled_levels"])
     assert result["specimens"][0]["extruder_offset_mm"] == (0, 2)
 
 
@@ -69,3 +72,46 @@ def test_audit_aligns_paths_with_x1_extruder_offset(tmp_path):
 def test_missing_or_multiple_extruder_offsets_are_rejected(header):
     with pytest.raises(ValueError, match="single-extruder offset"):
         extrusion_layers(header)
+
+
+def test_audit_reports_missing_paths_on_some_sampled_levels(tmp_path):
+    report = {
+        "specimens": [
+            {
+                "name": "control",
+                "bounds_mm": [0, 0, 4, 4],
+                "records": [
+                    {
+                        "group_id": "group-1",
+                        "group_source_ids": ["b1", "b2"],
+                        "cut_by_crop": False,
+                        "grouped_height_mm": 2.0,
+                        "output_print_geometry": mapping(box(2, 2, 3, 3)),
+                    }
+                ],
+            }
+        ]
+    }
+    (tmp_path / "report.json").write_text(json.dumps(report))
+    np.savez(tmp_path / "layer-meshes.npz", base_vertices=np.array([[0, 0, -1.6]]))
+    directory = tmp_path / "bambu-x1c-pla" / "control"
+    directory.mkdir(parents=True)
+    with zipfile.ZipFile(directory / "sliced.3mf", "w") as archive:
+        archive.writestr("Metadata/plate_1.json", json.dumps({"bbox_all": [10, 20, 14, 24]}))
+        archive.writestr(
+            "Metadata/plate_1.gcode",
+            "; extruder_offset = 0x2\nM83\nG90\n"
+            "; Z_HEIGHT: 2.10\n; LINE_WIDTH: 0.4\nG1 X10 Y20\n"
+            "G1 X10.8 Y20 E0.1\n"
+            "; Z_HEIGHT: 2.50\n; LINE_WIDTH: 0.4\nG1 X50 Y50\n"
+            "G1 X50.8 Y50 E0.1\n"
+            "; Z_HEIGHT: 2.90\n; LINE_WIDTH: 0.4\nG1 X12.1 Y20.5\n"
+            "G1 X12.9 Y20.5 E0.1\n",
+        )
+    result = audit_run(tmp_path)
+    observation = result["specimens"][0]["interior_groups"][0]
+    assert observation["status"] == "sampled"
+    assert observation["source_member_count"] == 2
+    assert observation["any_sample_without_paths"] is True
+    assert any(level["status"] == "no_paths_detected" for level in observation["sampled_levels"])
+    assert observation["near_top_coverage_fraction"] > 0

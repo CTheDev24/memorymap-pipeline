@@ -21,6 +21,7 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
+from statistics import median
 
 import numpy as np
 from shapely.geometry import box, mapping, shape
@@ -338,6 +339,107 @@ def _provenance() -> dict:
     }
 
 
+def _metric_summary(values: list[float]) -> dict | None:
+    if not values:
+        return None
+    ordered = sorted(float(v) for v in values)
+    return {
+        "min": ordered[0],
+        "median": median(ordered),
+        "p90": ordered[min(len(ordered) - 1, max(0, math.ceil(0.9 * len(ordered)) - 1))],
+        "max": ordered[-1],
+    }
+
+
+def _grouping_advisory_metrics(frame: MapFrame, diagnostics: list[dict], grouping_stats: dict | None) -> dict:
+    from scipy.spatial import cKDTree
+
+    scale_mm_per_m = min(
+        frame.printable_width_mm / frame.coverage_width_m,
+        frame.printable_height_mm / frame.coverage_height_m,
+    )
+    source_polygons = []
+    retained_or_grouped = []
+    output_shapes = []
+    for record in diagnostics:
+        source_geometry = record.get("source_print_geometry")
+        if source_geometry is not None:
+            polygon = shape(source_geometry)
+            if not polygon.is_empty and polygon.area > 0:
+                source_polygons.append(polygon)
+        if record.get("status") in {"retained", "grouped"}:
+            retained_or_grouped.append(record)
+            output_geometry = record.get("output_print_geometry")
+            if output_geometry is not None:
+                polygon = shape(output_geometry)
+                if not polygon.is_empty and polygon.area > 0:
+                    output_shapes.append(polygon)
+
+    screening_width_mm = float(PROFILE["screening_width_mm"])
+    small_polygons = [
+        polygon
+        for polygon in source_polygons
+        if polygon.buffer(-screening_width_mm / 2, join_style=2).is_empty
+    ]
+
+    nearest_neighbor = []
+    local_density = []
+    isolated_count = 0
+    if small_polygons:
+        points = np.asarray([[p.centroid.x, p.centroid.y] for p in small_polygons], dtype=float)
+        if len(points) > 1:
+            tree = cKDTree(points)
+            distances, _indices = tree.query(points, k=2)
+            nearest_neighbor = [float(value) for value in distances[:, 1]]
+            local_density = [len(items) - 1 for items in tree.query_ball_point(points, r=1.0)]
+            isolated_count = sum(
+                len(items) <= 1 for items in tree.query_ball_point(points, r=0.4)
+            )
+        else:
+            isolated_count = 1
+
+    output_islands = {polygon.wkb for polygon in output_shapes}
+    before_islands = len(retained_or_grouped)
+    after_islands = len(output_islands)
+    grouped_sources = int((grouping_stats or {}).get("grouped_sources", 0))
+    ungrouped_small = int((grouping_stats or {}).get("ungrouped_small_sources", 0))
+    return {
+        "scale_mm_per_real_meter": scale_mm_per_m,
+        "total_source_footprints": len(source_polygons),
+        "small_footprint_screen_width_mm": screening_width_mm,
+        "small_footprints": {
+            "count": len(small_polygons),
+            "fraction": (
+                len(small_polygons) / len(source_polygons) if source_polygons else 0.0
+            ),
+            "isolated_count": isolated_count,
+            "nearest_neighbor_spacing_mm": _metric_summary(nearest_neighbor),
+            "local_neighbors_within_1mm": _metric_summary(local_density),
+            "total_perimeter_mm": float(sum(polygon.length for polygon in small_polygons)),
+        },
+        "estimated_grouping_eligible_footprints": grouped_sources + ungrouped_small,
+        "building_extrusion_islands": {
+            "before_grouping": before_islands,
+            "after_grouping": after_islands,
+            "reduction_fraction": (
+                (before_islands - after_islands) / before_islands if before_islands else 0.0
+            ),
+        },
+        "fragmentation_proxy": {
+            "name": "building_island_count_delta",
+            "description": "Geometry-only proxy for fragmented building extrusion islands; "
+            "not a validated stringing predictor.",
+            "before_grouping": before_islands,
+            "after_grouping": after_islands,
+        },
+        "advisory": (
+            "High small-building density at this map scale. Grouping may be beneficial."
+            if len(small_polygons) >= 100 and len(small_polygons) / max(len(source_polygons), 1) >= 0.25
+            else "Expose metrics to operator; enable grouping based on map-specific review."
+        ),
+    }
+
+
 def _finish(output: Path, report: dict) -> Path:
     report.update(
         schema_version=1,
@@ -524,6 +626,11 @@ def run(manifest_path: Path, output: Path, label: str = "baseline", *, grouping:
             "warnings": result.warnings,
             "generation_config": config,
             "building_grouping": result.stats.get("building_grouping"),
+            "grouping_advisory_metrics": _grouping_advisory_metrics(
+                frame,
+                diagnostics,
+                result.stats.get("building_grouping"),
+            ),
             "unresolved_source_ids": [r["id"] for r in diagnostics if r["status"] == "unresolved"],
             "full_export_removed_building_faces": full_export["export_removed_building_faces"],
             "full_export_error": full_export["export_error"],

@@ -7,7 +7,9 @@ from shapely.geometry import box
 from shapely.ops import unary_union
 from trimesh.creation import box as solid_box
 
+from memorymap_pipeline.map_frame import MapFrame
 from memorymap_pipeline.footprint_benchmark import (
+    _grouping_advisory_metrics,
     _sha,
     compare,
     crop_mesh,
@@ -31,6 +33,51 @@ def test_local_width_detects_neck_despite_large_global_dimensions():
     assert screen_footprint(box(0, 0, 0.8, 0.8))["status"] == "not_flagged"
     courtyard = box(0, 0, 7, 7).difference(box(0.3, 0.3, 6.7, 6.7))
     assert screen_footprint(courtyard)["core_empty"]
+
+
+def test_grouping_advisory_metrics_capture_small_density_and_fragmentation_proxy():
+    frame = MapFrame(
+        center_lat=41.88,
+        center_lon=-87.63,
+        coverage_width_m=2000,
+        coverage_height_m=2000,
+        print_width_mm=190,
+        print_height_mm=240,
+    )
+    shared_group = box(0, 0, 1.1, 0.9)
+    diagnostics = [
+        {
+            "id": "b1",
+            "status": "grouped",
+            "source_print_geometry": box(0, 0, 0.2, 0.2).__geo_interface__,
+            "output_print_geometry": shared_group.__geo_interface__,
+        },
+        {
+            "id": "b2",
+            "status": "grouped",
+            "source_print_geometry": box(0.35, 0, 0.55, 0.2).__geo_interface__,
+            "output_print_geometry": shared_group.__geo_interface__,
+        },
+        {
+            "id": "b3",
+            "status": "retained",
+            "source_print_geometry": box(2, 2, 3, 3).__geo_interface__,
+            "output_print_geometry": box(2, 2, 3, 3).__geo_interface__,
+        },
+    ]
+    metrics = _grouping_advisory_metrics(
+        frame,
+        diagnostics,
+        {"grouped_sources": 2, "ungrouped_small_sources": 1},
+    )
+    assert metrics["total_source_footprints"] == 3
+    assert metrics["small_footprints"]["count"] == 2
+    assert metrics["small_footprints"]["isolated_count"] == 0
+    assert metrics["estimated_grouping_eligible_footprints"] == 3
+    assert metrics["building_extrusion_islands"]["before_grouping"] == 3
+    assert metrics["building_extrusion_islands"]["after_grouping"] == 2
+    assert metrics["fragmentation_proxy"]["before_grouping"] == 3
+    assert metrics["fragmentation_proxy"]["after_grouping"] == 2
 
 
 def test_crop_preserves_z_scale_caps_cut_and_does_not_mutate_input():
