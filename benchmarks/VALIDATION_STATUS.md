@@ -317,3 +317,22 @@ partner recovery, reversed source order and the single-member limit.
 Local comparison: `outputs/chicago-search-comparison.json`; captured inputs:
 `outputs/chicago-grouping-inputs.json`. These files permit future search-only
 comparisons without repeating road/building preparation.
+
+
+The v11 full-scale candidate exported with zero building faces removed and sliced
+successfully using the X1 Carbon / 0.4 mm / 0.16 mm Optimal / Generic PLA profile:
+124 layers, last layer Z 19.88 mm. All **44 groups have deposited paths at all five
+representative height samples** (220 observations). Approximate sampled area
+coverage ranges from 80.2% to 99.8%. Physical strength, cleanup and
+visual barrier acceptance remain unverified.
+
+Full-scale artifacts are in `outputs/chicago-2025-grouping-v11-full/`. To avoid
+repeating the search, this export replayed the validated grouping decisions after
+checking regenerated footprint, eligibility, barrier and option inputs against the
+captured inputs. It used the normal extrusion/export pipeline. Existing group
+source membership was matched to captured footprints within 1e-7 mm Hausdorff
+and 1e-9 square-mm area tolerance; no unmatched or ambiguous records were accepted.
+This pass did not regenerate the smaller specimen crops.
+
+Windows test build for implementation `95e87e0`:
+[build 35557399373](https://github.com/CTheDev24/memorymap-pipeline/actions/runs/35557399373).
