@@ -246,3 +246,31 @@ def test_remaining_small_reasons_reconcile_and_do_not_change_groups(eligible):
             "no_valid_group_found": 0,
         }
     )
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_failed_chain_member_can_join_alternative_anchor(reverse):
+    # Left and center form a narrow failed chain. Adding the anchor to that
+    # chain crosses the barrier, but center plus anchor is printable on its own.
+    footprints = [box(-0.25, 0, -0.05, 0.2), box(0, 0, 0.2, 0.2), box(0.3, 0, 1.3, 1)]
+    barrier = box(-1, 0.21, -0.01, 2)
+    if reverse:
+        footprints.reverse()
+    diagnostics = {}
+    groups = group_footprints(footprints, range(3), barrier, diagnostics=diagnostics)
+    assert len(groups) == 1
+    assert diagnostics["rescued_groups"] == 1
+    group = groups[0]
+    assert group.geometry.intersection(barrier).area < 1e-10
+    assert not group.geometry.buffer(-0.4, join_style=2).is_empty
+    assert len(group.members) == 2
+    for i, source in enumerate(footprints):
+        if i in group.members:
+            assert source.difference(group.geometry).area < 1e-10
+        else:
+            assert source.intersection(group.geometry).area < 1e-10
+
+
+def test_rescue_respects_single_member_limit():
+    footprints = [box(0, 0, 0.2, 0.2), box(0.3, 0, 1.3, 1)]
+    assert group_footprints(footprints, [0, 1], maximum_members=1) == []

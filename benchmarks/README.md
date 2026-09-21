@@ -203,3 +203,11 @@ counts reconcile with `ungrouped_small_sources` at the configured grouping width
 The final category includes search limitations; it does not prove grouping is
 impossible. Counts describe remaining sources and do not authorize removal or
 relaxation of protection rules. Collecting them leaves grouping geometry unchanged.
+
+
+After its original greedy pass, grouping preserves accepted masses and retries
+remaining small sources with up to eight alternative nearby partners, ordered by
+distance, hull area and source geometry. Each candidate passes the same width,
+span, member-count, source-coverage, barrier and overlap checks. The second pass
+can recover sources previously skipped after a failed chain; it is not exhaustive
+search. Statistics record the number of added masses as `rescued_groups`.

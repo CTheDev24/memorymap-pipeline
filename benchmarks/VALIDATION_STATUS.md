@@ -290,3 +290,30 @@ The diagnostic change does not modify accepted grouping geometry. Verification:
 329 tests passed (59 dependency warnings); Ruff passed for the grouping module
 and its tests. Existing unrelated lint findings in buildings.py remain unchanged.
 Local replay evidence: `outputs/chicago-grouping-reasons.json`.
+
+
+### Alternative-partner retry (2026-09-20)
+
+A failed greedy chain previously suppressed other members as seeds even when
+one could join an alternative neighbor. A bounded second pass preserves the
+original accepted groups and tries up to eight candidate partners for each
+remaining small source. It uses the same finish/absorption and protection checks.
+
+On identical captured Chicago grouping inputs, the candidate produced **44 groups
+from 817 sources**, versus **25 groups from 383 sources**. The 19 additional groups
+absorb 434 additional sources. All original groups retain identical membership
+and geometry. All 44 pass the local-width screen, source containment, plate
+boundary, barrier separation and group/retained-source overlap checks.
+
+Grouping-only runtime on this machine increased from 230.3 to 498.0 seconds.
+This is a measured quality/runtime tradeoff, not a performance improvement. The
+remaining-small breakdown is 1,110 protected buildings, 4,106 initial obstacle or
+boundary conflicts, 33 without a nearby eligible partner and 3,730 where the
+bounded search found no valid group (8,979 total).
+
+Verification: **332 tests passed** (59 dependency warnings); grouping-module/test
+Ruff and whitespace checks passed. Added regression coverage exercises alternate
+partner recovery, reversed source order and the single-member limit.
+Local comparison: `outputs/chicago-search-comparison.json`; captured inputs:
+`outputs/chicago-grouping-inputs.json`. These files permit future search-only
+comparisons without repeating road/building preparation.

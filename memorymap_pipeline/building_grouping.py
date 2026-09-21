@@ -118,6 +118,26 @@ def group_footprints(
         p = footprints[i]
         return (p.area, *p.bounds, p.wkb_hex)
 
+    def candidates(members, hull, source_area):
+        options = []
+        for candidate in tree.query(hull.buffer(gap_mm)):
+            i = int(candidate)
+            if i not in available or i in members:
+                continue
+            distance = min(footprints[j].distance(footprints[i]) for j in members)
+            if distance > gap_mm:
+                continue
+            candidate_hull = hull.union(footprints[i]).convex_hull
+            x0, y0, x1, y1 = candidate_hull.bounds
+            if max(x1 - x0, y1 - y0) > span_mm:
+                continue
+            if candidate_hull.area > 8 * (source_area + footprints[i].area):
+                continue
+            if blocked(candidate_hull):
+                continue
+            options.append((distance, candidate_hull.area, order(i), i, candidate_hull))
+        return sorted(options, key=lambda item: item[:3])
+
     groups = []
     failed_seeds = set()
     for seed in sorted(available, key=order):
@@ -132,23 +152,7 @@ def group_footprints(
         hull = footprints[seed]
         source_area = hull.area
         while len(members) < maximum_members:
-            options = []
-            for candidate in tree.query(hull.buffer(gap_mm)):
-                i = int(candidate)
-                if i not in available or i in members:
-                    continue
-                distance = min(footprints[j].distance(footprints[i]) for j in members)
-                if distance > gap_mm:
-                    continue
-                candidate_hull = hull.union(footprints[i]).convex_hull
-                x0, y0, x1, y1 = candidate_hull.bounds
-                if max(x1 - x0, y1 - y0) > span_mm:
-                    continue
-                if candidate_hull.area > 8 * (source_area + footprints[i].area):
-                    continue
-                if blocked(candidate_hull):
-                    continue
-                options.append((distance, candidate_hull.area, order(i), i, candidate_hull))
+            options = candidates(members, hull, source_area)
             if not options:
                 break
             _, _, _, i, hull = min(options, key=lambda item: item[:3])
@@ -166,6 +170,30 @@ def group_footprints(
             failed_seeds.update(members)
         if seed in available:
             failed_seeds.update(members)
+    # Preserve the first pass, then reconsider remaining seeds independently.
+    # A failed chain does not prove its members cannot join another partner.
+    # Limit alternate partners to bound extra work in dense neighborhoods.
+    rescued_groups = 0
+    for seed in sorted(available, key=order):
+        if maximum_members < 2:
+            break
+        if seed not in available or substantial(footprints[seed]) or blocked(footprints[seed]):
+            continue
+        for _, _, _, partner, hull in candidates([seed], footprints[seed], footprints[seed].area)[
+            :8
+        ]:
+            finished = finish_mass(
+                hull, footprints[seed].area + footprints[partner].area, [seed, partner]
+            )
+            if finished is None:
+                continue
+            mass, members = finished
+            groups.append(FootprintGroup(tuple(sorted(members)), mass))
+            available.difference_update(members)
+            accepted_shapes.append(mass)
+            accepted_tree = STRtree(accepted_shapes)
+            rescued_groups += 1
+            break
     if diagnostics is not None:
         grouped = {i for group in groups for i in group.members}
         reasons = {
@@ -193,5 +221,5 @@ def group_footprints(
                 # feasible group exists under the constraints.
                 reason = "no_valid_group_found"
             reasons[reason] += 1
-        diagnostics.update(remaining_small_by_reason=reasons)
+        diagnostics.update(remaining_small_by_reason=reasons, rescued_groups=rescued_groups)
     return groups
