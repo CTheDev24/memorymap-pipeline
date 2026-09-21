@@ -190,3 +190,16 @@ offsets are rejected instead of guessed.
 Benchmark `report.json` also includes `grouping_advisory_metrics` so operators can
 review scale/density/fragmentation indicators before enabling grouping. These metrics
 are advisory diagnostics only; they do not auto-enable grouping or modify geometry.
+
+
+Grouping statistics include `remaining_small_by_reason`. These mutually exclusive
+counts reconcile with `ungrouped_small_sources` at the configured grouping width:
+
+- `protected_building`: excluded by height, building type, courtyard or part rules.
+- `barrier_or_boundary`: the source overlaps a protected obstacle or extends outside the plate.
+- `no_nearby_eligible_partner`: no initially unobstructed eligible source is within the edge-gap limit.
+- `no_valid_group_found`: a partner exists, but the bounded greedy search found no accepted mass.
+
+The final category includes search limitations; it does not prove grouping is
+impossible. Counts describe remaining sources and do not authorize removal or
+relaxation of protection rules. Collecting them leaves grouping geometry unchanged.

@@ -1217,6 +1217,7 @@ def download_and_build_buildings(
         ),
     )
 
+    grouping_diagnostics = {}
     grouped_at = {}
     grouped_members = set()
     if grouping is not None:
@@ -1234,6 +1235,7 @@ def download_and_build_buildings(
             [element[0] for element in elements], eligible, grouping_barriers,
             width_mm=grouping["width_mm"], gap_mm=grouping["gap_mm"],
             span_mm=grouping["span_mm"], allowed_region=plate_box,
+            diagnostics=grouping_diagnostics,
         )
         for group in groups:
             grouped_at[group.members[0]] = group
@@ -1414,6 +1416,7 @@ def download_and_build_buildings(
             final_mesh = meshes[0]
         final_mesh.metadata["building_height_distribution"] = height_distribution
         final_mesh.metadata["building_grouping"] = {
+            **grouping_diagnostics,
             "enabled": grouping is not None,
             "groups": len(groups),
             "grouped_sources": len(grouped_members),

@@ -106,6 +106,8 @@ def test_grouping_integrates_extrusion_and_source_mapping(tmp_path):
     grouped = [r for r in records if r["status"] == "grouped"]
     assert len(grouped) >= 2
     assert mesh.metadata["building_grouping"]["grouped_sources"] == len(grouped)
+    stats = mesh.metadata["building_grouping"]
+    assert sum(stats["remaining_small_by_reason"].values()) == stats["ungrouped_small_sources"]
     for r in grouped:
         assert r["output_face_ranges"]
         assert r["grouped_height_mm"] <= 3
@@ -210,3 +212,37 @@ def test_group_absorbs_neighbors_touched_by_expansion():
             for i, p in enumerate(footprints)
             if i not in group.members
         )
+
+
+@pytest.mark.parametrize("eligible", [[], [1, 2, 3, 4]])
+def test_remaining_small_reasons_reconcile_and_do_not_change_groups(eligible):
+    footprints = [
+        box(0, 0, 0.2, 0.2),
+        box(2, 0, 2.2, 0.2),
+        box(4, 0, 4.2, 0.2),
+        box(6, 0, 6.2, 0.2),
+        box(6.3, 0, 6.5, 0.2),
+    ]
+    barriers = unary_union(
+        [box(2.05, -0.1, 2.15, 0.3), box(5.8, -0.5, 7, -0.001), box(5.8, 0.201, 7, 0.7)]
+    )
+    diagnostics = {}
+    groups = group_footprints(footprints, eligible, barriers, diagnostics=diagnostics)
+    assert groups == group_footprints(footprints, eligible, barriers) == []
+    reasons = diagnostics["remaining_small_by_reason"]
+    assert sum(reasons.values()) == 5
+    assert reasons == (
+        {
+            "protected_building": 1,
+            "barrier_or_boundary": 1,
+            "no_nearby_eligible_partner": 1,
+            "no_valid_group_found": 2,
+        }
+        if eligible
+        else {
+            "protected_building": 5,
+            "barrier_or_boundary": 0,
+            "no_nearby_eligible_partner": 0,
+            "no_valid_group_found": 0,
+        }
+    )

@@ -27,6 +27,7 @@ def group_footprints(
     span_mm=4.0,
     maximum_members=128,
     allowed_region=None,
+    diagnostics=None,
 ):
     """Grow bounded neighborhood masses; never add area across a known barrier.
 
@@ -36,8 +37,6 @@ def group_footprints(
     if not all(math.isfinite(v) and v > 0 for v in (width_mm, gap_mm, span_mm)):
         raise ValueError("Grouping dimensions must be positive and finite")
     eligible = set(eligible)
-    if not eligible:
-        return []
     obstacles = [p for i, p in enumerate(footprints) if i not in eligible]
     if barriers is not None and not barriers.is_empty:
         obstacles.append(barriers)
@@ -57,6 +56,7 @@ def group_footprints(
         )
 
     available = {i for i in eligible if not blocked(footprints[i])}
+    initially_available = available.copy()
     tree = STRtree(footprints)
     radius = width_mm / 2
 
@@ -166,4 +166,32 @@ def group_footprints(
             failed_seeds.update(members)
         if seed in available:
             failed_seeds.update(members)
+    if diagnostics is not None:
+        grouped = {i for group in groups for i in group.members}
+        reasons = {
+            "protected_building": 0,
+            "barrier_or_boundary": 0,
+            "no_nearby_eligible_partner": 0,
+            "no_valid_group_found": 0,
+        }
+        for i, polygon in enumerate(footprints):
+            if i in grouped or substantial(polygon):
+                continue
+            if i not in eligible:
+                reason = "protected_building"
+            elif i not in initially_available:
+                reason = "barrier_or_boundary"
+            elif not any(
+                int(j) != i
+                and int(j) in initially_available
+                and polygon.distance(footprints[int(j)]) <= gap_mm
+                for j in tree.query(polygon.buffer(gap_mm))
+            ):
+                reason = "no_nearby_eligible_partner"
+            else:
+                # Includes greedy search limitations; this is not proof that no
+                # feasible group exists under the constraints.
+                reason = "no_valid_group_found"
+            reasons[reason] += 1
+        diagnostics.update(remaining_small_by_reason=reasons)
     return groups
