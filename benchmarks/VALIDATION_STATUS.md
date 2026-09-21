@@ -263,3 +263,30 @@ metrics report 9,883 source records versus 9,525 distinct output footprint shape
 (a 3.62% reduction). These are geometry counts, not measured slicer islands or a
 validated prediction of stringing. The separate advisory JSON is keyed to the
 immutable v10 report hash. No physical observations were marked as passed.
+
+
+### Remaining-small diagnostic (2026-09-20)
+
+The generation-stage replay of the confirmed snapshot (SHA-256
+`cf060dffb36fca5d403318f9fe338a1a3aff67dc8976c8a52de78c7d86672aa6`)
+reproduced 383 sources in 25 groups. It stopped after grouping, without repeating
+extrusion/export/slicing. The 9,413 remaining small footprints reconcile as follows:
+
+| Reason | Sources |
+| --- | ---: |
+| Protected building classification, height, part or courtyard | 1,110 |
+| Initial protected-obstacle overlap or plate boundary | 4,106 |
+| No initially unobstructed eligible partner within the edge-gap limit | 33 |
+| Nearby partner exists, but bounded greedy search found no valid group | 4,164 |
+
+The last category includes constraint failures and search limitations; it is not
+proof that all 4,164 can be grouped. Investigate alternate candidate growth paths
+before considering any relaxation of public-street protections. Barrier counts
+combine roads, route, water, excluded buildings and plate boundaries; they must
+not be reported as road-only failures.
+
+Diagnostics are recorded in mesh metadata and generation/benchmark statistics.
+The diagnostic change does not modify accepted grouping geometry. Verification:
+329 tests passed (59 dependency warnings); Ruff passed for the grouping module
+and its tests. Existing unrelated lint findings in buildings.py remain unchanged.
+Local replay evidence: `outputs/chicago-grouping-reasons.json`.
