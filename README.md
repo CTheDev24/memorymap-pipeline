@@ -1,4 +1,4 @@
-# memorymap-pipeline
+# Trace Studio
 
 This project converts a GPX track into a Bambu-ready 3MF memory map.
 
@@ -49,8 +49,11 @@ Notes:
 - Export now stops when a component is non-manifold, has inconsistent face winding or
   non-positive volume, or has no geometric support path to the base. Roofs may be supported
   through their building body; mutually touching floating shells do not satisfy the check.
-- The production printability profile assumes a 0.4 mm nozzle, 0.16 mm layer height,
-  0.8 mm minimum structural XY feature, and a 1.6 mm structural base.
+- The intended printability profile assumes a 0.4 mm nozzle, 0.16 mm layer height,
+  0.8 mm structural XY target, and a 1.6 mm structural base. The export audit checks
+  topology and support; it does not enforce minimum building width or guarantee
+  toolpath survival. See the [footprint benchmark](benchmarks/README.md) for
+  reproducible specimens, Chicago snapshots, and slicing/physical-print validation.
 - Debug plots for roads can be enabled by setting `roads_debug` to `true` in the config.
 
 ```bash
@@ -116,7 +119,7 @@ ratio and rotation. Do not stretch the provider rectangle directly over the plat
 coastal routes, its corner and ocean cells otherwise become large false sea-level shelves
 inside the land surface.
 
-Terrain is disabled by default. MemoryMap Studio exposes Terrain and Water layer toggles,
+Terrain is disabled by default. Trace Studio exposes Terrain and Water layer toggles,
 maximum relief, water recess, and an Urban/Landscape style selector. Its initial terrain and
 landscape configuration is:
 
@@ -169,7 +172,7 @@ This prevents isolated terrain needles from propagating into routes, water, and 
 skins. The default `terrain_detail_gamma` gently expands lowland elevation differences
 while preserving both the minimum and the selected maximum relief.
 
-The flat border is optional and unchecked when MemoryMap Studio launches. With
+The flat border is optional and unchecked when Trace Studio launches. With
 `flat_border_enabled` set to `false`, terrain and map layers use the full plate extents.
 When enabled, the configured margin becomes the trim width: terrain grid lines are inserted
 at its exact inner boundary, the outer annulus remains coplanar, and route, road, building,
@@ -284,7 +287,7 @@ that integration is completed.
 
 ## Windows desktop application
 
-Install the desktop dependencies and launch MemoryMap Studio as a native window:
+Install the desktop dependencies and launch Trace Studio as a native window:
 
 ```powershell
 python -m pip install -e ".[desktop]"
@@ -381,7 +384,7 @@ python -m pip install -e ".[desktop,package]"
 pyinstaller --noconfirm --clean memorymap-desktop.spec
 ```
 
-The finished executable is written to `dist\MemoryMap.exe`. The `build/`, `dist/`, and
+The finished executable is written to `dist\Trace Studio.exe`. The `build/`, `dist/`, and
 `*.exe` paths remain ignored by Git: source code, dependencies, and the PyInstaller spec
 are versioned, while generated binaries are distributed through Actions and Releases.
 
@@ -392,11 +395,11 @@ If you trust the commit that produced the build, select **More info** and **Run 
 
 1. Open the repository's **Actions** tab on GitHub.
 2. Select a successful **Build Windows desktop app** run for the desired commit.
-3. Under **Artifacts**, download `MemoryMap-Windows-<commit SHA>`.
-4. Extract the ZIP and run `MemoryMap.exe`.
+3. Under **Artifacts**, download `Trace-Studio-Windows-Preview-<commit SHA>`.
+4. Extract the ZIP and run `Trace Studio.exe`.
 
 Workflow artifacts are temporary, commit-specific test builds. The accompanying
-`MemoryMap.exe.sha256` file can be used to verify the download.
+`Trace Studio.exe.sha256` file can be used to verify the download.
 
 ### Publish a tagged release
 
@@ -411,3 +414,18 @@ The tag triggers the release workflow, which tests and packages the exact tagged
 then attaches a versioned Windows executable and checksum to a permanent GitHub Release.
 Use patch tags such as `v0.1.1` for fixes, minor tags such as `v0.2.0` for compatible
 features, and major tags such as `v1.0.0` for the first stable release or breaking changes.
+
+### Small-building grouping in Trace Studio
+
+Enable **Group small buildings (0.4 mm nozzle)** under Layers to test neighborhood
+massing. Keep Roads enabled. The mode combines nearby low buildings into flat-topped
+masses with a 0.8 mm footprint target, omits alleys/driveways, and narrows local streets to 0.4 mm. It preserves
+known streets, the marathon route, water and protected building geometry. Generation
+reports how many sources were grouped and how many small footprints remain individual.
+This is opt-in and requires slicer inspection and a physical test print.
+
+**Route clearance (mm)** sets the buffer from the route's outer edge when fitting
+the course; **Flat trim around map** and **Trim width (mm)** control a separate blank
+border. For the Chicago benchmark use Portrait, 190 × 240 mm, route clearance 5 mm,
+route width 1.2 mm and no flat trim. Manually zooming or panning the frame changes the
+fitted clearance.

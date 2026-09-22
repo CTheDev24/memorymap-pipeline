@@ -291,6 +291,8 @@ def test_supported_elevated_crown_keeps_open_sides(tmp_path: Path) -> None:
     components = list(mesh.split(only_watertight=False))
     crown = max(components, key=lambda component: component.bounds[1, 2])
     assert crown.bounds[0, 2] > 10.0
+    support = min(components, key=lambda component: component.bounds[0, 2])
+    assert crown.bounds[0, 2] <= support.bounds[1, 2]
     assert crown.bounds[1, 2] - crown.bounds[0, 2] < 2.0
     assert len(crown.split()) == 1
     assert crown.is_watertight

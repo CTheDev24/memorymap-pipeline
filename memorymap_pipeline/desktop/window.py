@@ -1,4 +1,4 @@
-"""Native MemoryMap window and bridge to the embedded map view.
+"""Native Trace Studio window and bridge to the embedded map view.
 
 Generation is deliberately exposed as a Qt signal so the application can wire the
 existing in-process pipeline to a worker thread without running a localhost API.
@@ -15,13 +15,13 @@ from pathlib import Path
 from ..config import ROUTE_LAYER_HEIGHT_SLOPES, route_slope_for_layer_height
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
-from ..palettes import LAYER_KEYS, PALETTE_PRESETS, default_preset, resolve_palette
+from ..palettes import default_preset, resolve_palette
 from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN
 from .viewer_support import placeholder_html, viewer_url
 from .worker import GenerationWorker
+from .print_settings import ACCENTS, ROAD_CATEGORIES, finish_colors
 
 
-ROUTE_FRAME_PADDING_MM = 6.0
 FRAME_ZOOM_FACTOR = 1.1
 
 try:
@@ -55,7 +55,7 @@ try:
 except ImportError as exc:  # pragma: no cover - depends on optional desktop extras
     if exc.name and exc.name.startswith("PySide6"):
         raise ImportError(
-            "MemoryMap desktop requires PySide6 (including the Qt WebEngine add-ons)"
+            "Trace Studio requires PySide6 (including the Qt WebEngine add-ons)"
         ) from exc
     raise
 
@@ -86,7 +86,7 @@ class MemoryMapWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("MemoryMap Studio")
+        self.setWindowTitle("Trace Studio")
         self.resize(1220, 780)
         self.gpx_path: Path | None = None
         self.route: Route | None = None
@@ -158,6 +158,8 @@ class MemoryMapWindow(QMainWindow):
         self.print_width = self._spin(240, 10, 1000)
         self.print_height = self._spin(190, 10, 1000)
         self.margin = self._spin(5, 0, 100)
+        self.route_clearance = self._spin(5, 0, 100)
+        self.route_clearance.setToolTip("Minimum buffer from the outside of the route to the model edge when fitting the course.")
         self.flat_border = QCheckBox("Flat trim around map")
         self.flat_border.setChecked(False)
         self.flat_border.setToolTip(
@@ -184,13 +186,20 @@ class MemoryMapWindow(QMainWindow):
             self.route_layer_height.findData(0.16)
         )
         self.route_layer_height.setToolTip(
-            "Select the slicer layer height used for the route. MemoryMap chooses "
+            "Select the slicer layer height used for the route. Trace Studio chooses "
             "a matching maximum elevation slope to limit visible stair-stepping."
         )
         form.addRow("Width (mm)", self.print_width)
         form.addRow("Height (mm)", self.print_height)
         form.addRow("Border", self.flat_border)
-        form.addRow("Margin (mm)", self.margin)
+        form.addRow("Route clearance (mm)", self.route_clearance)
+        form.addRow("Trim width (mm)", self.margin)
+        self.route_clearance.valueChanged.connect(
+            lambda _value: self._border_toggled(self.flat_border.isChecked())
+        )
+        self.route_width.valueChanged.connect(
+            lambda _value: self._border_toggled(self.flat_border.isChecked())
+        )
         form.addRow("Route width (mm)", self.route_width)
         form.addRow("Route height", self.route_height)
         form.addRow("Route layer height", self.route_layer_height)
@@ -256,34 +265,20 @@ class MemoryMapWindow(QMainWindow):
 
         palette_box = QGroupBox("Layer colors")
         palette_form = QFormLayout(palette_box)
-        self.color_preset = QComboBox()
-        preset_labels = {
-            "urban-classic": "Urban Classic",
-            "landscape-classic": "Landscape Classic",
-            "heritage": "Heritage",
-            "gallery-concrete": "Gallery Concrete",
-            "nocturne": "Nocturne",
-            "ridgeline-sage": "Ridgeline Sage",
-            "desert-archive": "Desert Archive",
-            "coastal-limestone": "Coastal Limestone",
-            "deco-after-dark": "Deco After Dark",
-            "meridian-atlas": "Meridian Atlas",
-            "vector-lab": "Vector Lab",
-        }
-        for preset in PALETTE_PRESETS:
-            self.color_preset.addItem(preset_labels[preset], preset)
-        self.color_preset.addItem("Custom", None)
-        self.color_preset.currentIndexChanged.connect(self._palette_preset_changed)
-        palette_form.addRow("Collection", self.color_preset)
-        for layer in LAYER_KEYS:
-            button = QPushButton()
-            button.clicked.connect(
-                lambda _checked=False, selected=layer: self._choose_layer_color(selected)
-            )
-            self.color_buttons[layer] = button
-            palette_form.addRow(layer.title(), button)
+        self.finish = QComboBox()
+        for label in ("Gallery", "Nocturne"):
+            self.finish.addItem(label, label)
+        self.route_accent = QComboBox()
+        for label in (*ACCENTS, "Neutral", "Color Wheel"):
+            self.route_accent.addItem(label, label)
+        self.custom_route_color = "#F7591F"
+        self.previous_route_accent = "Signal Orange"
+        self.finish.currentIndexChanged.connect(self._finish_changed)
+        self.route_accent.activated.connect(self._route_accent_activated)
+        palette_form.addRow("Finish", self.finish)
+        palette_form.addRow("Route", self.route_accent)
         outer.addWidget(palette_box)
-        self._refresh_color_buttons()
+        self._finish_changed()
 
         layers = QGroupBox("Layers")
         layer_layout = QVBoxLayout(layers)
@@ -292,6 +287,16 @@ class MemoryMapWindow(QMainWindow):
         self.route_layer.toggled.connect(self.finish_marker.setEnabled)
         self.roads_layer = QCheckBox("Roads"); self.roads_layer.setChecked(True)
         self.buildings_layer = QCheckBox("Buildings"); self.buildings_layer.setChecked(True)
+        self.building_grouping = QCheckBox("Group small buildings (0.4 mm nozzle)")
+        self.building_grouping.setToolTip(
+            "Combine nearby low buildings into masses with a 0.8 mm footprint target. "
+            "Omits alleys/driveways, uses 0.4 mm local streets and preserves route/water separation; "
+            "some small buildings may remain individual."
+        )
+        self.building_grouping.toggled.connect(
+            lambda enabled: self.roads_layer.setChecked(True) if enabled else None
+        )
+        self.buildings_layer.toggled.connect(self.building_grouping.setEnabled)
         self.terrain_layer = QCheckBox("Terrain (USGS 3DEP)")
         self.water_layer = QCheckBox("Water (gray, recessed)")
         self.water_mesh_body_hint = QCheckBox("Export as separate water mesh body")
@@ -304,12 +309,36 @@ class MemoryMapWindow(QMainWindow):
             self.route_layer,
             self.roads_layer,
             self.buildings_layer,
+            self.building_grouping,
             self.terrain_layer,
             self.water_layer,
             self.water_mesh_body_hint,
         ):
             layer_layout.addWidget(control)
         outer.addWidget(layers)
+
+        road_box = QGroupBox("Road types")
+        road_layout = QVBoxLayout(road_box)
+        self.road_categories = {}
+        for label in ROAD_CATEGORIES:
+            control = QCheckBox(label)
+            control.setChecked(label != "Footpaths / tracks")
+            self.road_categories[label] = control
+            road_layout.addWidget(control)
+        road_box.setToolTip("Choose exported roads. Public streets remain barriers when grouping buildings.")
+        self.roads_layer.toggled.connect(road_box.setEnabled)
+        outer.addWidget(road_box)
+        building_box = QGroupBox("Building filter")
+        building_form = QFormLayout(building_box)
+        self.filter_residential = QCheckBox("Omit narrow residential buildings")
+        self.residential_width = self._spin(0.8, 0.1, 5.0)
+        self.residential_width.setEnabled(False)
+        self.filter_residential.toggled.connect(self.residential_width.setEnabled)
+        building_box.setToolTip("Applied after grouping at the final map scale. Removes identified residential footprints with no core this wide. Unclassified buildings, landmarks, parts and courtyards are retained. This is geometric screening, not slicer certification.")
+        building_form.addRow(self.filter_residential)
+        building_form.addRow("Minimum footprint width", self.residential_width)
+        self.buildings_layer.toggled.connect(building_box.setEnabled)
+        outer.addWidget(building_box)
 
         terrain_box = QGroupBox("Terrain settings")
         terrain_form = QFormLayout(terrain_box)
@@ -379,7 +408,7 @@ class MemoryMapWindow(QMainWindow):
                 self.print_width.value(),
                 self.print_height.value(),
                 MemoryMapWindow._effective_margin(self),
-                route_padding_mm=ROUTE_FRAME_PADDING_MM,
+                route_padding_mm=MemoryMapWindow._route_padding(self),
             )
             self.default_frame = {
                 "center_lat": frame.center_lat, "center_lon": frame.center_lon,
@@ -410,7 +439,7 @@ class MemoryMapWindow(QMainWindow):
                 width,
                 height,
                 MemoryMapWindow._effective_margin(self),
-                route_padding_mm=ROUTE_FRAME_PADDING_MM,
+                route_padding_mm=MemoryMapWindow._route_padding(self),
             )
             fitted = {
                 "center_lat": frame.center_lat,
@@ -471,6 +500,13 @@ class MemoryMapWindow(QMainWindow):
     def zoom_frame_out(self) -> None:
         self._zoom_frame(FRAME_ZOOM_FACTOR)
 
+    def _route_padding(self) -> float:
+        clearance = getattr(self, "route_clearance", None)
+        width = getattr(self, "route_width", None)
+        desired = float(clearance.value()) if clearance is not None else 5.0
+        radius = float(width.value()) / 2 if width is not None else 0.6
+        return max(0.0, desired - MemoryMapWindow._effective_margin(self)) + radius
+
     def _effective_margin(self) -> float:
         border = getattr(self, "flat_border", None)
         if border is not None and not border.isChecked():
@@ -487,7 +523,7 @@ class MemoryMapWindow(QMainWindow):
             self.print_width.value(),
             self.print_height.value(),
             MemoryMapWindow._effective_margin(self),
-            route_padding_mm=ROUTE_FRAME_PADDING_MM,
+            route_padding_mm=MemoryMapWindow._route_padding(self),
         )
         fitted = {
             "center_lat": frame.center_lat,
@@ -527,47 +563,30 @@ class MemoryMapWindow(QMainWindow):
         self.minimum_waterway_width.setEnabled(landscape)
         self.ground_cover_mode.setEnabled(landscape)
         self.ground_cover_sensitivity.setEnabled(landscape)
-        if hasattr(self, "color_preset") and self.color_preset.currentData() is not None:
-            preset = default_preset(self.style_profile.currentData())
-            index = self.color_preset.findData(preset)
-            if index >= 0:
-                self.color_preset.setCurrentIndex(index)
 
     @Slot(int)
-    def _palette_preset_changed(self, _index: int = -1) -> None:
-        preset = self.color_preset.currentData()
-        if preset is None:
-            return
-        self.color_preset_name = preset
-        self.layer_colors = resolve_palette(
-            self.style_profile.currentData(), preset
-        )
-        self._refresh_color_buttons()
+    def _finish_changed(self, _index: int = -1) -> None:
+        self.color_preset_name = "urban-classic"
+        self.layer_colors = finish_colors(self.finish.currentData(), self.route_accent.currentData(), self.custom_route_color)
         self._apply_palette_to_preview()
+        if self.result_path is not None and hasattr(self, "save"):
+            self.save.setEnabled(False)
+            self.add_warning("Regenerate the map to save the changed finish or route color.")
 
-    def _refresh_color_buttons(self) -> None:
-        for layer, button in self.color_buttons.items():
-            color = self.layer_colors[layer]
-            foreground = "#000000" if sum(int(color[i:i + 2], 16) for i in (1, 3, 5)) > 400 else "#FFFFFF"
-            button.setText(color)
-            button.setStyleSheet(
-                f"QPushButton {{ background: {color}; color: {foreground}; }}"
+    @Slot(int)
+    def _route_accent_activated(self, _index: int = -1) -> None:
+        if self.route_accent.currentData() == "Color Wheel":
+            from PySide6.QtGui import QColor
+            selected = QColorDialog.getColor(
+                QColor(self.custom_route_color), self, "Choose route color",
+                QColorDialog.ColorDialogOption.DontUseNativeDialog,
             )
-
-    @Slot()
-    def _choose_layer_color(self, layer: str) -> None:
-        selected = QColorDialog.getColor(
-            parent=self, title=f"Choose {layer.title()} color"
-        )
-        if not selected.isValid():
-            return
-        self.layer_colors[layer] = selected.name().upper()
-        custom_index = self.color_preset.count() - 1
-        self.color_preset.blockSignals(True)
-        self.color_preset.setCurrentIndex(custom_index)
-        self.color_preset.blockSignals(False)
-        self._refresh_color_buttons()
-        self._apply_palette_to_preview()
+            if not selected.isValid():
+                self.route_accent.setCurrentIndex(self.route_accent.findData(self.previous_route_accent))
+                return
+            self.custom_route_color = selected.name().upper()
+        self.previous_route_accent = self.route_accent.currentData()
+        self._finish_changed()
 
     @Slot(bool)
     def _apply_palette_to_preview(self, _loaded: bool = True) -> None:
@@ -590,7 +609,16 @@ class MemoryMapWindow(QMainWindow):
             else "finish" if finish_marker
             else "none"
         )
+        selected_roads = [t for label, control in getattr(self, "road_categories", {}).items()
+                          if control.isChecked() for t in ROAD_CATEGORIES[label]]
         return {
+            **({"road_types": selected_roads, "landscape_road_types": selected_roads}
+               if hasattr(self, "road_categories") else {}),
+            "residential_min_width_mm": (self.residential_width.value()
+                if getattr(self, "filter_residential", None) and self.filter_residential.isChecked() else 0.0),
+            "building_grouping_enabled": bool(
+                getattr(self, "building_grouping", None) and self.building_grouping.isChecked()
+            ),
             "terrain_enabled": self.terrain_layer.isChecked(),
             "water_enabled": self.water_layer.isChecked(),
             "terrain_max_relief_mm": self.terrain_relief.value(),
@@ -627,6 +655,9 @@ class MemoryMapWindow(QMainWindow):
         if not self.gpx_path or not self.route or not self.current_frame:
             return
         self.progress.setValue(0); self.warnings.clear(); self.generate.setEnabled(False)
+        self.generate.setText("Generating…")
+        self.finish.setEnabled(False)
+        self.route_accent.setEnabled(False)
         try:
             frame_data = dict(self.current_frame)
             frame_data.update(
@@ -658,11 +689,16 @@ class MemoryMapWindow(QMainWindow):
 
     @Slot(str)
     def _generation_failed(self, message: str) -> None:
+        self.generate.setText("Retry generation")
         QMessageBox.critical(self, "Generation failed", message); self.add_warning(message)
 
     @Slot()
     def _generation_finished(self) -> None:
         self.generate.setEnabled(self.gpx_path is not None)
+        for name in ("finish", "route_accent"):
+            control = getattr(self, name, None)
+            if control is not None:
+                control.setEnabled(True)
         self.generation_thread = None; self.generation_worker = None
 
     @Slot(int, str)
@@ -672,6 +708,7 @@ class MemoryMapWindow(QMainWindow):
 
     @Slot(str, str)
     def set_result(self, path: str, preview_path: str = "") -> None:
+        self.generate.setText("Regenerate map")
         self.result_path = Path(path)
         self.save.setEnabled(self.result_path.is_file())
         self.progress.setValue(100)
@@ -702,7 +739,7 @@ class MemoryMapWindow(QMainWindow):
     @Slot()
     def save_result(self) -> None:
         if not self.result_path or not self.result_path.is_file(): return
-        name, _ = QFileDialog.getSaveFileName(self, "Save MemoryMap", self.result_path.name, "3MF (*.3mf)")
+        name, _ = QFileDialog.getSaveFileName(self, "Save Trace Studio model", self.result_path.name, "3MF (*.3mf)")
         if name:
             try: shutil.copy2(self.result_path, name)
             except OSError as exc: QMessageBox.critical(self, "Save failed", str(exc))

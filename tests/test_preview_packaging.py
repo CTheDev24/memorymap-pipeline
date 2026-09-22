@@ -60,7 +60,19 @@ def test_desktop_workflow_labels_and_checks_preview_artifact() -> None:
         PROJECT_ROOT / ".github" / "workflows" / "build-desktop.yml"
     ).read_text(encoding="utf-8")
 
-    assert "MemoryMap-Windows-Preview-${{ github.sha }}" in workflow
+    assert "Trace-Studio-Windows-Preview-${{ github.sha }}" in workflow
     assert r"memorymap_pipeline\.desktop\.preview" in workflow
     assert r"memorymap_pipeline[\\/]desktop[\\/]viewer[\\/]index\.html" in workflow
     assert r"PySide6[\\/]QtWebEngineWidgets\.(pyd|dll)" in workflow
+
+
+def test_trace_studio_icon_and_executable_branding():
+    from PIL import Image
+    assets = PROJECT_ROOT / "memorymap_pipeline" / "desktop" / "assets"
+    with Image.open(assets / "trace-studio.ico") as icon:
+        assert {(16,16),(32,32),(48,48),(256,256)} <= icon.ico.sizes()
+        assert icon.convert("RGBA").getchannel("A").getbbox() is not None
+    spec = (PROJECT_ROOT / "memorymap-desktop.spec").read_text(encoding="utf-8")
+    assert 'name="Trace Studio"' in spec
+    assert 'icon=str(' in spec and '"trace-studio.ico"' in spec
+    assert '"memorymap_pipeline/desktop/assets"' in spec

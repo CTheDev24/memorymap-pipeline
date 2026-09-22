@@ -27,7 +27,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["httpx>=0.27", "pytest>=8.0", "ruff>=0.5"]
+benchmark = ["scipy>=1.11", "rtree>=1.0"]
+dev = ["httpx>=0.27", "pytest>=8.0", "ruff>=0.5", "scipy>=1.11", "rtree>=1.0"]
 desktop = ["PySide6>=6.8"]
 package = ["PyInstaller>=6.0"]
 
@@ -42,6 +43,9 @@ include = ["memorymap_pipeline*"]
 [tool.setuptools.package-data]
 memorymap_pipeline = [
   "data/*.json",
+  "desktop/assets/*.svg",
+  "desktop/assets/*.png",
+  "desktop/assets/*.ico",
   "desktop/viewer/*.css",
   "desktop/viewer/*.html",
   "desktop/viewer/*.js",

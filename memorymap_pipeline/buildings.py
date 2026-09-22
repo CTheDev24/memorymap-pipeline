@@ -12,6 +12,8 @@ from shapely.strtree import STRtree
 from trimesh import Trimesh
 
 from .building_classification import BuildingClass, classify_building, preset_for
+from .building_filtering import residential_omissions
+from .building_grouping import group_footprints
 from .geometry import repair_polygon
 from .landmarks import (
     LandmarkDefinition,
@@ -750,6 +752,16 @@ def _stadium_recipe_for_landmark(
     )
 
 
+def _is_numerical_fragment(polygon: geom.Polygon) -> bool:
+    """Identify boolean-operation residue at coordinate roundoff precision."""
+    x0, y0, x1, y1 = polygon.bounds
+    precision = 8 * np.spacing(max(1.0, abs(x0), abs(y0), abs(x1), abs(y1)))
+    return (
+        polygon.minimum_clearance <= precision
+        and polygon.area <= precision * max(x1 - x0, y1 - y0)
+    )
+
+
 def _supported_elevated_elements(
     elements: list[
         tuple[
@@ -759,12 +771,15 @@ def _supported_elevated_elements(
             LandmarkDefinition | None,
         ]
     ],
-) -> set[int]:
-    """Find elevated parts with a footprint and height support path to ground."""
+    vertical_bounds: list[tuple[float, float]] | None = None,
+) -> dict[int, float]:
+    """Map supported parts to bottoms that retain contact after height mapping."""
+    if vertical_bounds is not None:
+        vertical_bounds = list(vertical_bounds)
     footprints = [element[0] for element in elements]
     tree = STRtree(footprints)
     supported = {
-        index
+        index: 0.0
         for index, (_poly, dimensions, _is_part, _landmark) in enumerate(elements)
         if dimensions.min_height_m <= 1e-9
     }
@@ -774,7 +789,7 @@ def _supported_elevated_elements(
         if dimensions.min_height_m > 1e-9
     }
     while pending:
-        newly_supported: set[int] = set()
+        newly_supported: dict[int, float] = {}
         for index in pending:
             footprint, dimensions, _is_part, _landmark = elements[index]
             for candidate in tree.query(footprint, predicate="intersects"):
@@ -786,10 +801,17 @@ def _supported_elevated_elements(
                     continue
                 if footprint.intersection(support_footprint).area <= 1e-8:
                     continue
-                newly_supported.add(index)
-                break
+                bottom = (
+                    dimensions.min_height_m if vertical_bounds is None else
+                    min(vertical_bounds[index][0], vertical_bounds[support_index][1])
+                )
+                newly_supported[index] = max(newly_supported.get(index, 0.0), bottom)
         if not newly_supported:
             break
+        if vertical_bounds is not None:
+            for index, bottom in newly_supported.items():
+                old_bottom, old_top = vertical_bounds[index]
+                vertical_bounds[index] = (bottom, old_top - (old_bottom - bottom))
         supported.update(newly_supported)
         pending.difference_update(newly_supported)
     return supported
@@ -819,6 +841,11 @@ def download_and_build_buildings(
     terrain_height_at: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None,
     building_scale_mm_per_m: float | None = None,
     extend_elevated_parts_to_ground: bool = True,
+    diagnostics: list[dict] | None = None,
+    grouping: dict | None = None,
+    grouping_barriers: geom.base.BaseGeometry | None = None,
+    residential_min_width_mm: float = 0.0,
+    filter_stats: dict | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
@@ -841,8 +868,6 @@ def download_and_build_buildings(
             cols = list(df.columns)
             for _, row in df.iterrows():
                 g = row.geometry
-                if g is None:
-                    continue
                 geo_with_tags.append((g, _tags_from_gdf_row(row, cols)))
         except Exception as exc:
             logging.warning("Failed to read local buildings file %s: %s", buildings_file, exc)
@@ -994,14 +1019,20 @@ def download_and_build_buildings(
         tuple[geom.base.BaseGeometry, BuildingDimensions, bool, LandmarkDefinition | None]
     ] = []
 
-    for g, tags in geo_with_tags:
-        if g is None:
-            continue
-        if g.geom_type == "Polygon":
+    diagnostic_by_geometry: dict[int, dict] = {}
+    for source_index, (g, tags) in enumerate(geo_with_tags, 1):
+        if g is not None and g.geom_type == "Polygon":
             polys = [g]
-        elif g.geom_type == "MultiPolygon":
+        elif g is not None and g.geom_type == "MultiPolygon":
             polys = list(g.geoms)
         else:
+            if diagnostics is not None:
+                diagnostics.append({
+                    "id": f"b{source_index:06d}-p0",
+                    "source_id": str(tags.get("_osm_id", tags.get("id", source_index))),
+                    "status": "unresolved", "reason": "unsupported_or_null_geometry",
+                    "output_face_ranges": [],
+                })
             continue
 
         landmark = None
@@ -1025,7 +1056,16 @@ def download_and_build_buildings(
             max_height_m=building_max_real_height_m,
         )
 
-        for p in polys:
+        for polygon_index, p in enumerate(polys, 1):
+            record = {
+                "id": f"b{source_index:06d}-p{polygon_index}",
+                "source_id": str(tags.get("_osm_id", tags.get("id", source_index))),
+                "status": "unresolved",
+                "reason": "empty_or_invalid_geometry",
+                "output_face_ranges": [],
+            }
+            if diagnostics is not None:
+                diagnostics.append(record)
             if p.is_empty:
                 continue
 
@@ -1034,6 +1074,7 @@ def download_and_build_buildings(
                     p, center_lat=center_lat, center_lon=center_lon, transform=transform
                 )
             except Exception:
+                record.update(status="unresolved", reason="transform_failed")
                 continue
 
             if not tp.is_valid:
@@ -1042,6 +1083,8 @@ def download_and_build_buildings(
                 continue
 
             original_area = tp.area
+            if diagnostics is not None:
+                record["source_print_geometry"] = geom.mapping(tp)
             if original_area <= 0.0:
                 continue
             element_dimensions = replace(
@@ -1053,9 +1096,11 @@ def download_and_build_buildings(
             try:
                 clipped = tp.intersection(plate_box)
             except Exception:
+                record["reason"] = "frame_intersection_failed"
                 continue
 
             if clipped.is_empty:
+                record.update(status="omitted", reason="outside_frame")
                 continue
 
             fraction_inside = clipped.area / original_area
@@ -1063,6 +1108,7 @@ def download_and_build_buildings(
             # less than (1 - building_clip_threshold).  With a threshold of 0.5 this
             # discards any building that has more than 50 % of its area outside.
             if fraction_inside < (1.0 - building_clip_threshold):
+                record.update(status="omitted", reason="frame_clip_threshold")
                 continue
 
             if not clipped.is_valid:
@@ -1073,6 +1119,8 @@ def download_and_build_buildings(
             elements.append(
                 (clipped, element_dimensions, "building:part" in effective_tags, landmark)
             )
+            diagnostic_by_geometry[id(clipped)] = record
+            record.update(status="unresolved", reason="not_meshed")
 
     if not elements:
         return None, None
@@ -1084,11 +1132,13 @@ def download_and_build_buildings(
         ] = []
         for poly, dims, is_part, landmark in elements:
             remainder = poly if is_part else poly.difference(part_union)
+            record = diagnostic_by_geometry[id(poly)]
             if not remainder.is_empty:
                 resolved.append((remainder, dims, is_part, landmark))
+                diagnostic_by_geometry[id(remainder)] = record
+            else:
+                record.update(status="omitted", reason="replaced_by_building_parts")
         elements = resolved
-
-    supported_elevated = _supported_elevated_elements(elements)
 
     # Architectural relief uses explicit low/mid/high visual tiers. Horizontal map
     # scale remains useful for recovering each footprint's real-world area.
@@ -1127,6 +1177,26 @@ def download_and_build_buildings(
         classified_height(dims, dims.total_height_m, dims.footprint_area_m2)
         for _poly, dims, _is_part, _landmark in elements
     ]
+    # Real-world support does not guarantee contact after visual height mapping:
+    # each building's tier and footprint can change its vertical scale.
+    vertical_bounds = []
+    for poly, dims, _is_part, _landmark in elements:
+        area_m2 = dims.footprint_area_m2 or real_area_m2(poly)
+        total = classified_height(dims, dims.total_height_m, area_m2)
+        minimum_body = min(0.6, total)
+        bottom = min(
+            classified_height(dims, dims.min_height_m, area_m2),
+            max(0.0, total - minimum_body),
+        )
+        eave = min(
+            total,
+            max(bottom + minimum_body, classified_height(dims, dims.eave_height_m, area_m2)),
+        )
+        vertical_bounds.append((bottom, eave))
+    supported_elevated = _supported_elevated_elements(elements, vertical_bounds)
+    if extend_elevated_parts_to_ground:
+        for index, bottom in supported_elevated.items():
+            rendered_element_heights[index] -= max(0.0, vertical_bounds[index][0] - bottom)
     height_distribution = _height_distribution_stats(
         [dims for _poly, dims, _is_part, _landmark in elements],
         rendered_element_heights,
@@ -1150,11 +1220,90 @@ def download_and_build_buildings(
         ),
     )
 
+    grouping_diagnostics = {}
+    grouped_at = {}
+    grouped_members = set()
+    if grouping is not None:
+        eligible = [
+            i for i, (poly, dims, is_part, landmark) in enumerate(elements)
+            if not is_part and landmark is None and dims.min_height_m == 0
+            and dims.building_class not in {
+                BuildingClass.LANDMARK, BuildingClass.STADIUM_ARENA,
+                BuildingClass.RELIGIOUS, BuildingClass.CIVIC_INSTITUTIONAL,
+            }
+            and poly.geom_type == "Polygon" and not poly.interiors
+            and rendered_element_heights[i] <= grouping["max_height_mm"]
+        ]
+        groups = group_footprints(
+            [element[0] for element in elements], eligible, grouping_barriers,
+            width_mm=grouping["width_mm"], gap_mm=grouping["gap_mm"],
+            span_mm=grouping["span_mm"], allowed_region=plate_box,
+            diagnostics=grouping_diagnostics,
+        )
+        for group in groups:
+            grouped_at[group.members[0]] = group
+            grouped_members.update(group.members)
+    else:
+        groups = []
+    omitted_residential = residential_omissions(elements, groups, residential_min_width_mm)
+    if filter_stats is not None:
+        filter_stats.update(
+            minimum_width_mm=residential_min_width_mm,
+            omitted_sources=len(omitted_residential),
+        )
+    if omitted_residential:
+        groups = [g for g in groups if not set(g.members) & omitted_residential]
+        grouped_at = {g.members[0]: g for g in groups}
+        grouped_members = {i for g in groups for i in g.members}
+        if "remaining_small_by_reason" in grouping_diagnostics:
+            grouping_diagnostics["remaining_small_by_reason_before_filter"] = (
+                grouping_diagnostics.pop("remaining_small_by_reason")
+            )
+        for i in omitted_residential:
+            diagnostic_by_geometry[id(elements[i][0])].update(
+                status="omitted", reason="residential_below_minimum_print_width",
+                minimum_print_width_mm=residential_min_width_mm, output_print_geometry=None,
+            )
+    output_footprints = []
+
     # Extrude each building individually then concatenate into one mesh
     meshes = []
+    face_cursor = 0
     surface_z = z_offset + embed_depth_mm
     for element_index, (poly, dimensions, _is_part, landmark) in enumerate(elements):
+        if element_index in omitted_residential:
+            continue
+        if element_index in grouped_members and element_index not in grouped_at:
+            continue
+        group = grouped_at.get(element_index)
+        record = diagnostic_by_geometry[id(poly)]
+        group_records = []
+        group_height = None
+        if group is not None:
+            poly = group.geometry
+            group_records = [diagnostic_by_geometry[id(elements[i][0])] for i in group.members]
+            group_height = max(rendered_element_heights[i] for i in group.members)
+            group_id = "group-" + min(item["id"] for item in group_records)
+            for item in group_records:
+                item.update(group_id=group_id, group_source_ids=[r["id"] for r in group_records])
+        output_footprints.append(poly)
+        first_mesh = len(meshes)
+        mesh_failed = False
+        if diagnostics is not None:
+            record["output_print_geometry"] = geom.mapping(poly)
         parts: list[geom.Polygon] = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
+        numerical = [part for part in parts if _is_numerical_fragment(part)]
+        if numerical:
+            parts = [part for part in parts if not _is_numerical_fragment(part)]
+            if diagnostics is not None:
+                record["numerical_fragments_removed"] = [
+                    {"area_mm2": part.area, "reason": "coordinate_roundoff_boolean_residue"}
+                    for part in numerical
+                ]
+                record["output_print_geometry"] = geom.mapping(ops.unary_union(parts))
+            if not parts:
+                record.update(status="omitted", reason="coordinate_roundoff_boolean_residue")
+                continue
         parts.sort(key=lambda candidate: candidate.area, reverse=True)
         for part_index, part in enumerate(parts):
             if part.is_empty:
@@ -1218,6 +1367,22 @@ def download_and_build_buildings(
                         classified_height(dimensions, dimensions.eave_height_m, footprint_area_m2),
                     ),
                 )
+                if group_height is not None:
+                    bottom_mm = 0.0
+                    eave_mm = total_mm = group_height
+                if extend_elevated_parts_to_ground and element_index in supported_elevated:
+                    # Translate a supported upper part as a unit; stretching its
+                    # bottom down would turn a thin crown into a tall wall.
+                    shift = max(0.0, bottom_mm - supported_elevated[element_index])
+                    bottom_mm -= shift
+                    eave_mm -= shift
+                    total_mm -= shift
+                    if diagnostics is not None and shift > 1e-9:
+                        record.setdefault("support_adjustments", []).append({
+                            "part_index": part_index,
+                            "downward_translation_mm": shift,
+                            "reason": "preserve_contact_after_height_mapping",
+                        })
                 effective_embed = (
                     embed_depth_mm if bottom_mm <= 1e-9 else min(embed_depth_mm, bottom_mm)
                 )
@@ -1242,7 +1407,28 @@ def download_and_build_buildings(
                 if roof is not None:
                     meshes.append(roof)
             except Exception as exc:
+                mesh_failed = True
+                if diagnostics is not None:
+                    record.setdefault("mesh_errors", []).append(str(exc))
                 logging.warning("Failed creating building mesh: %s", exc)
+
+        face_count = sum(len(mesh.faces) for mesh in meshes[first_mesh:])
+        if face_count:
+            record["output_face_ranges"].append([face_cursor, face_cursor + face_count])
+        record.update(
+            status="retained" if face_count and not mesh_failed else "unresolved",
+            reason="individual_extrusion" if face_count and not mesh_failed else "mesh_failed",
+        )
+        if group_records:
+            for item in group_records:
+                item.update(
+                    status="grouped" if face_count and not mesh_failed else "unresolved",
+                    reason="bounded_neighborhood_mass" if face_count and not mesh_failed else "mesh_failed",
+                    output_print_geometry=geom.mapping(poly),
+                    output_face_ranges=[[face_cursor, face_cursor + face_count]] if face_count else [],
+                    grouped_height_mm=group_height,
+                )
+        face_cursor += face_count
 
     final_mesh = None
     if meshes:
@@ -1253,9 +1439,22 @@ def download_and_build_buildings(
         except Exception:
             final_mesh = meshes[0]
         final_mesh.metadata["building_height_distribution"] = height_distribution
+        final_mesh.metadata["building_grouping"] = {
+            **grouping_diagnostics,
+            "enabled": grouping is not None,
+            "groups": len(groups),
+            "grouped_sources": len(grouped_members),
+            "width_mm": grouping["width_mm"] if grouping else None,
+            "ungrouped_small_sources": sum(
+                i not in grouped_members
+                and i not in omitted_residential
+                and poly.buffer(-grouping["width_mm"] / 2, join_style=2).is_empty
+                for i, (poly, _dims, _part, _landmark) in enumerate(elements)
+            ) if grouping else 0,
+        }
 
     # Union of all clipped footprints (used for debug overlay and return value)
-    unioned = ops.unary_union([p for p, _dims, _is_part, _landmark in elements])
+    unioned = ops.unary_union(output_footprints)
 
     if debug:
         try:

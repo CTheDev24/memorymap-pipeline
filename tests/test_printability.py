@@ -59,6 +59,15 @@ def test_roof_can_reach_base_through_supported_body() -> None:
     assert report.printable
 
 
+def test_mutually_overlapping_floating_shells_do_not_support_each_other() -> None:
+    base = build_base_plate(40.0, 30.0, 1.6)
+    first = _solid((4.0, 4.0, 2.0), (10.0, 10.0, 4.0))
+    second = _solid((4.0, 4.0, 2.0), (11.0, 10.0, 4.0))
+    report = audit_printability({"base": base, "buildings": concatenate((first, second))})
+    assert not report.printable
+    assert any(issue.code == "floating_components" for issue in report.issues)
+
+
 def test_only_tiny_proven_floating_building_shells_are_removed() -> None:
     base = build_base_plate(40.0, 30.0, 1.6)
     grounded = _solid((4.0, 4.0, 2.2), (10.0, 10.0, 0.9))
@@ -175,3 +184,32 @@ def test_inconsistent_face_winding_is_rejected() -> None:
 
     assert not report.printable
     assert any(issue.code == "inconsistent_winding" for issue in report.issues)
+
+
+def test_deeply_embedded_part_has_real_volume_support():
+    base = build_base_plate(40.0, 30.0, 1.6)
+    body = _solid((8, 8, 14.2), (20, 15, 6.9))
+    part = _solid((4, 4, 4), (20, 15, 5))
+    buildings = concatenate((body, part))
+    report = audit_printability({"base": base, "buildings": buildings})
+    assert report.printable
+    _, removed = remove_small_floating_components(
+        {"base": base, "buildings": buildings}, "buildings", maximum_faces=12
+    )
+    assert removed == 0
+
+
+def test_deep_overlap_with_overhead_arch_is_not_volume_support():
+    # A connected, grounded arch has its roof over the floating box, but its
+    # cavity contains no supporting material at the box's bottom.
+    profile = Polygon([(0, -.2), (1, -.2), (1, 8), (7, 8), (7, -.2),
+                       (8, -.2), (8, 10), (0, 10)])
+    arch = route_mesh_from_polygon(profile, 8)
+    from trimesh.transformations import rotation_matrix
+    arch.apply_transform(rotation_matrix(np.pi / 2, [1, 0, 0]))
+    arch.apply_translation((16, 19, 0))
+    floating = _solid((2, 2, 2), (20, 15, 3))
+    base = build_base_plate(40.0, 30.0, 1.6)
+    report = audit_printability({"base": base, "buildings": concatenate((arch, floating))})
+    assert not report.printable
+    assert any(issue.code == "floating_components" for issue in report.issues)

@@ -6,6 +6,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy
 project_root = Path(SPECPATH)
 package_root = project_root / "memorymap_pipeline"
 datas = [
+    (str(package_root / "desktop" / "assets"), "memorymap_pipeline/desktop/assets"),
     (str(package_root / "data" / "landmarks.v1.json"), "memorymap_pipeline/data"),
     (str(package_root / "desktop" / "viewer"), "memorymap_pipeline/desktop/viewer"),
 ]
@@ -22,5 +23,6 @@ a = Analysis(
     hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=[], noarchive=False,
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name="MemoryMap", debug=False,
+exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name="Trace Studio",
+          icon=str(package_root / "desktop" / "assets" / "trace-studio.ico"), debug=False,
           bootloader_ignore_signals=False, strip=False, upx=True, console=False)

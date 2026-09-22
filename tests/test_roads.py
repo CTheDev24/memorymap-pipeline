@@ -494,3 +494,13 @@ def test_large_connected_road_polygon_is_subdivided_after_extrusion_failure(
     assert len(meshes) == 16
     assert len(successful_areas) == len(meshes)
     assert all(area <= 600.0 for area in successful_areas)
+
+
+def test_hidden_residential_street_remains_a_grouping_barrier(tmp_path):
+    file=tmp_path/"roads.geojson"
+    file.write_text(json.dumps({"type":"FeatureCollection","features":[{"type":"Feature","properties":{"highway":"residential"},"geometry":{"type":"LineString","coordinates":[[-95.371,29.760],[-95.369,29.760]]}}]}),encoding="utf-8")
+    frame=MapFrame(center_lat=29.760,center_lon=-95.370,coverage_width_m=300,coverage_height_m=200,print_width_mm=120,print_height_mm=90,margin_mm=0)
+    barriers=[]
+    visible,mesh=download_and_build_roads(bbox=None,center_lat=frame.center_lat,center_lon=frame.center_lon,transform={"map_frame":frame},road_types=[],road_widths={"residential":.4},road_height_mm=.4,map_width_mm=120,map_height_mm=90,margin_mm=0,roads_file=str(file),barrier_types=["residential"],barrier_polygons=barriers)
+    assert visible is None and mesh is None
+    assert len(barriers)==1 and barriers[0].covers(Point(60,45))

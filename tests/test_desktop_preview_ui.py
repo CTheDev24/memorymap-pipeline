@@ -148,6 +148,7 @@ def test_window_result_loads_preview_and_selects_tab(tmp_path):
 
     window = SimpleNamespace(
         result_path=None,
+        generate=SimpleNamespace(setText=lambda text: None),
         preview_path=None,
         save=SimpleNamespace(setEnabled=lambda enabled: None),
         progress=SimpleNamespace(setValue=lambda value: None),
@@ -163,3 +164,16 @@ def test_window_result_loads_preview_and_selects_tab(tmp_path):
     assert window.preview_path == preview
     assert loaded and loaded[0].startswith(viewer_directory().as_uri())
     assert selected == [1]
+
+
+def test_retry_action_is_labeled_and_reenabled(monkeypatch):
+    pytest.importorskip("PySide6")
+    from memorymap_pipeline.desktop import window as module
+    labels,enabled,warnings=[],[],[]
+    monkeypatch.setattr(module.QMessageBox,"critical",lambda *args: None)
+    window=SimpleNamespace(generate=SimpleNamespace(setText=labels.append,setEnabled=enabled.append),gpx_path=Path("route.gpx"),add_warning=warnings.append)
+    module.MemoryMapWindow._generation_failed(window,"offline")
+    module.MemoryMapWindow._generation_finished(window)
+    assert labels==["Retry generation"]
+    assert enabled==[True]
+    assert warnings==["offline"]

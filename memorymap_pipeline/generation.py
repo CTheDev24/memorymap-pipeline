@@ -121,6 +121,9 @@ class GenerationRequest:
     water_file: str | Path | None = None
     landcover_file: str | Path | None = None
     landcover_grid: LandCoverGrid | None = None
+    building_diagnostics: list[dict] | None = None
+    # Internal analysis may inspect meshes before the normal audited export.
+    export_model: bool = True
 
 
 @dataclass
@@ -546,6 +549,7 @@ def generate_memory_map(
                         config.get("minimum_waterway_width_mm", 0.8)
                     ),
                     include_metadata=landscape_style,
+                    strict=bool(config.get("building_grouping_enabled", False)),
                 )
                 if landscape_style:
                     water_features = [
@@ -982,6 +986,7 @@ def generate_memory_map(
             else:
                 finish_marker_mesh = marker_mesh
 
+    grouping_road_polygons = []
     unioned_roads = None
     roads_mesh = None
     if request.include_roads:
@@ -1021,6 +1026,16 @@ def generate_memory_map(
             road_smoothing_distances = config.get(
                 "road_terrain_smoothing_distances_mm", {}
             )
+        if bool(config.get("building_grouping_enabled", False)):
+            # At marathon scale the normal 1.1 mm local streets consume nearly
+            # the whole block. Keep a nozzle-width street between grouped masses.
+            road_widths = dict(road_widths)
+            for road_type in ("residential", "living_street", "unclassified", "service", "cycleway"):
+                road_widths[road_type] = min(float(road_widths.get(road_type, 0.4)), 0.4)
+            warnings.append(
+                "Building grouping uses 0.4 mm local streets and omits alleys/driveways "
+                "to preserve printable neighborhood blocks."
+            )
         collector = _WarningCollector()
         logging.getLogger().addHandler(collector)
         try:
@@ -1030,6 +1045,11 @@ def generate_memory_map(
             center_lon=frame.center_lon,
             transform=transform,
             road_types=road_types,
+            barrier_types=(
+                set(DEFAULT_CONFIG["road_types"]) - set(road_types)
+                if config.get("building_grouping_enabled") else ()
+            ),
+            barrier_polygons=grouping_road_polygons,
             road_widths=road_widths,
             road_height_mm=road_height_mm,
             network_type=str(config.get("road_network_type", "all")),
@@ -1042,8 +1062,10 @@ def generate_memory_map(
             radius_m=radius,
             roads_file=str(request.roads_file) if request.roads_file else None,
             terrain_smoothing_types=road_smoothing_types,
-            excluded_service_types=config.get(
-                "excluded_road_service_types", ()
+            excluded_service_types=(
+                set(config.get("excluded_road_service_types", ())) | {"alley", "driveway"}
+                if bool(config.get("building_grouping_enabled", False))
+                else config.get("excluded_road_service_types", ())
             ),
             excluded_access=config.get("excluded_road_access", ()),
             priority_region=route_polygon if route_mesh is not None else None,
@@ -1095,6 +1117,41 @@ def generate_memory_map(
                 )
     progress(55, "Road mesh complete")
 
+    grouping_options = None
+    grouping_barriers = None
+    if request.include_buildings and bool(config.get("building_grouping_enabled", False)):
+        if not request.include_roads or (unioned_roads is None and not grouping_road_polygons):
+            warnings.append("Building grouping skipped: road barriers are unavailable. Enable Roads.")
+        else:
+            # Read water even when its visible layer is disabled. Missing water
+            # data must never be mistaken for permission to bridge a river.
+            try:
+                barriers_water = water_geometries
+                if not (bool(config.get("terrain_enabled")) and bool(config.get("water_enabled"))):
+                    barriers_water = request.water_polygons
+                    if barriers_water is None:
+                        barriers_water = download_water_polygons(
+                            bbox=bbox, center_lat=frame.center_lat, center_lon=frame.center_lon,
+                            transform=transform, map_width_mm=frame.print_width_mm,
+                            map_height_mm=frame.print_height_mm, radius_m=radius,
+                            water_file=request.water_file, strict=True,
+                            minimum_waterway_width_mm=float(config.get("minimum_waterway_width_mm", 0.8)),
+                        )
+                route_barrier = buffered_polygon_from_points(scaled, request.route_width_mm)
+                grouping_barriers = unary_union([
+                    p for p in [unioned_roads, *grouping_road_polygons, route_barrier, *barriers_water]
+                    if p is not None
+                ])
+                grouping_options = {
+                    "width_mm": float(config.get("building_grouping_width_mm", 0.8)),
+                    "gap_mm": float(config.get("building_grouping_gap_mm", 0.4)),
+                    "span_mm": float(config.get("building_grouping_span_mm", 4.0)),
+                    "max_height_mm": float(config.get("building_grouping_max_height_mm", 3.0)),
+                }
+            except ValueError as exc:
+                warnings.append(f"Building grouping skipped: {exc}")
+
+    building_filter_stats = {}
     unioned_buildings = None
     buildings_mesh = None
     if request.include_buildings:
@@ -1133,12 +1190,31 @@ def generate_memory_map(
             extend_elevated_parts_to_ground=bool(
                 config.get("extend_elevated_building_parts_to_ground", True)
             ),
+            diagnostics=request.building_diagnostics,
+            grouping=grouping_options,
+            grouping_barriers=grouping_barriers,
+            residential_min_width_mm=float(config.get("residential_min_width_mm", 0.0)),
+            filter_stats=building_filter_stats,
         )
         finally:
             logging.getLogger().removeHandler(collector)
         if buildings_mesh is None:
             warnings.append("No building geometry was available inside the selected frame.")
             warnings.extend(f"Building detail: {message}" for message in collector.messages[-4:])
+    if buildings_mesh is not None and grouping_options is not None:
+        grouping_stats = buildings_mesh.metadata.get("building_grouping", {})
+        warnings.append(
+            f"Building grouping: {grouping_stats.get('grouped_sources', 0)} source footprints "
+            f"combined into {grouping_stats.get('groups', 0)} masses; "
+            f"{grouping_stats.get('ungrouped_small_sources', 0)} small footprints remain individual. "
+            "Inspect the sliced result before printing."
+        )
+    if building_filter_stats.get("minimum_width_mm", 0) > 0:
+        warnings.append(
+            f"Residential width filter omitted {building_filter_stats.get('omitted_sources', 0)} "
+            f"source footprints below {building_filter_stats['minimum_width_mm']:g} mm after grouping. "
+            "Unclassified and protected buildings are retained; inspect the sliced model."
+        )
     progress(85, "Building mesh complete")
 
     if all(
@@ -1155,20 +1231,21 @@ def generate_memory_map(
         )
     ):
         raise ValueError("No printable layers were generated")
-    export_3mf(
-        output_path,
-        base_mesh,
-        route_mesh,
-        roads_mesh,
-        buildings_mesh,
-        water_mesh,
-        landscape_mesh=landscape_mesh,
-        style_profile=style_profile,
-        color_preset=config.get("color_preset"),
-        layer_colors=config.get("layer_colors"),
-        start_marker_mesh=start_marker_mesh,
-        finish_marker_mesh=finish_marker_mesh,
-    )
+    if request.export_model:
+        export_3mf(
+            output_path,
+            base_mesh,
+            route_mesh,
+            roads_mesh,
+            buildings_mesh,
+            water_mesh,
+            landscape_mesh=landscape_mesh,
+            style_profile=style_profile,
+            color_preset=config.get("color_preset"),
+            layer_colors=config.get("layer_colors"),
+            start_marker_mesh=start_marker_mesh,
+            finish_marker_mesh=finish_marker_mesh,
+        )
     stats = {
         "route_points": len(request.route.points),
         "style_profile": style_profile,
@@ -1181,12 +1258,17 @@ def generate_memory_map(
                 "profile": style_profile,
                 "types": list(road_types),
                 "height_mm": road_height_mm,
+                "widths_mm": dict(road_widths),
             }
             if request.include_roads
             else None
         ),
         "ground_cover": ground_cover_stats,
         "buildings": _geometry_count(unioned_buildings),
+        "building_filter": building_filter_stats,
+        "building_grouping": (
+            buildings_mesh.metadata.get("building_grouping") if buildings_mesh is not None else None
+        ),
         "building_height_distribution": (
             buildings_mesh.metadata.get("building_height_distribution")
             if buildings_mesh is not None
@@ -1228,7 +1310,7 @@ def generate_memory_map(
             "finish_marker": _mesh_stats(finish_marker_mesh),
         },
     }
-    progress(100, "3MF export complete")
+    progress(100, "3MF export complete" if request.export_model else "Meshes ready for analysis")
     return GenerationResult(
         output_path=output_path,
         warnings=warnings,

@@ -19,6 +19,7 @@ def test_project_json_and_file_round_trip(tmp_path):
         frame=project().frame,
         gpx_path="sample.gpx",
         include_buildings=False,
+        building_grouping_enabled=True,
         route_width_mm=1.5,
         route_layer_height_mm=0.20,
         route_markers="both",
@@ -36,6 +37,7 @@ def test_project_json_and_file_round_trip(tmp_path):
     expected.save(path)
     assert DesktopProject.load(path) == expected
     assert expected.to_dict()["flat_border_enabled"] is True
+    assert expected.to_dict()["building_grouping_enabled"] is True
     assert expected.to_dict()["style"]["layer_colors"]["route"] == "#AA5500"
     assert expected.to_dict()["route"]["layer_height_mm"] == pytest.approx(0.20)
     assert expected.to_dict()["route"]["height_mm"] is None
@@ -100,6 +102,7 @@ def test_launcher_initializes_and_shows_window(monkeypatch):
         def __init__(self, argv): Application.current = self; events.append(("app", argv))
         def setOrganizationName(self, name): events.append(("organization", name))
         def setApplicationName(self, name): events.append(("application", name))
+        def setWindowIcon(self, icon): events.append(("icon", icon))
         def exec(self): events.append(("exec",)); return 7
 
     class Window:
@@ -107,6 +110,9 @@ def test_launcher_initializes_and_shows_window(monkeypatch):
 
     qtwidgets = types.ModuleType("PySide6.QtWidgets")
     qtwidgets.QApplication = Application
+    qtgui = types.ModuleType("PySide6.QtGui")
+    qtgui.QIcon = lambda path: path
+    monkeypatch.setitem(sys.modules, "PySide6.QtGui", qtgui)
     pyside = types.ModuleType("PySide6")
     window = types.ModuleType("memorymap_pipeline.desktop.window")
     window.MemoryMapWindow = Window
@@ -115,6 +121,9 @@ def test_launcher_initializes_and_shows_window(monkeypatch):
     monkeypatch.setitem(sys.modules, "memorymap_pipeline.desktop.window", window)
     from memorymap_pipeline.desktop.launcher import main
     assert main(["memorymap"]) == 7
+    assert ("application", "Trace Studio") in events
+    assert ("organization", "Teklo Studio") in events
+    assert any(event[0] == "icon" and event[1].endswith("trace-studio.ico") for event in events)
     assert ("show",) in events
     assert events[-1] == ("exec",)
 
@@ -256,6 +265,9 @@ def test_generation_config_includes_style_profile_and_landscape_dimensions():
     assert payload["route_markers"] == "start"
     assert payload["ground_cover_mode"] == "auto"
     assert payload["ground_cover_sensitivity"] == "balanced"
+    assert payload["building_grouping_enabled"] is False
+    window.building_grouping = Check(True)
+    assert MemoryMapWindow._generation_config_payload(window)["building_grouping_enabled"] is True
 
 
 def test_optional_border_defaults_to_full_extent_and_enables_margin_when_checked():
@@ -292,3 +304,19 @@ def test_optional_border_defaults_to_full_extent_and_enables_margin_when_checked
     assert MemoryMapWindow._effective_margin(window) == pytest.approx(5.0)
     MemoryMapWindow._border_toggled(window, True)
     assert window.margin.enabled is True
+
+
+def test_route_clearance_is_independent_of_blank_trim():
+    pytest.importorskip("PySide6")
+    from memorymap_pipeline.desktop.window import MemoryMapWindow
+
+    class Value:
+        def __init__(self, value): self.number = value
+        def value(self): return self.number
+        def isChecked(self): return bool(self.number)
+
+    window = types.SimpleNamespace(route_clearance=Value(5), route_width=Value(1.2),
+                                   margin=Value(5), flat_border=Value(False))
+    assert MemoryMapWindow._route_padding(window) == pytest.approx(5.6)
+    window.flat_border = Value(True)
+    assert MemoryMapWindow._route_padding(window) == pytest.approx(.6)
