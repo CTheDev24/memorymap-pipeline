@@ -11,8 +11,9 @@ from shapely.ops import triangulate
 from shapely.strtree import STRtree
 from trimesh import Trimesh
 
-from .building_grouping import group_footprints
 from .building_classification import BuildingClass, classify_building, preset_for
+from .building_filtering import residential_omissions
+from .building_grouping import group_footprints
 from .geometry import repair_polygon
 from .landmarks import (
     LandmarkDefinition,
@@ -843,6 +844,8 @@ def download_and_build_buildings(
     diagnostics: list[dict] | None = None,
     grouping: dict | None = None,
     grouping_barriers: geom.base.BaseGeometry | None = None,
+    residential_min_width_mm: float = 0.0,
+    filter_stats: dict | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
@@ -1242,6 +1245,25 @@ def download_and_build_buildings(
             grouped_members.update(group.members)
     else:
         groups = []
+    omitted_residential = residential_omissions(elements, groups, residential_min_width_mm)
+    if filter_stats is not None:
+        filter_stats.update(
+            minimum_width_mm=residential_min_width_mm,
+            omitted_sources=len(omitted_residential),
+        )
+    if omitted_residential:
+        groups = [g for g in groups if not set(g.members) & omitted_residential]
+        grouped_at = {g.members[0]: g for g in groups}
+        grouped_members = {i for g in groups for i in g.members}
+        if "remaining_small_by_reason" in grouping_diagnostics:
+            grouping_diagnostics["remaining_small_by_reason_before_filter"] = (
+                grouping_diagnostics.pop("remaining_small_by_reason")
+            )
+        for i in omitted_residential:
+            diagnostic_by_geometry[id(elements[i][0])].update(
+                status="omitted", reason="residential_below_minimum_print_width",
+                minimum_print_width_mm=residential_min_width_mm, output_print_geometry=None,
+            )
     output_footprints = []
 
     # Extrude each building individually then concatenate into one mesh
@@ -1249,6 +1271,8 @@ def download_and_build_buildings(
     face_cursor = 0
     surface_z = z_offset + embed_depth_mm
     for element_index, (poly, dimensions, _is_part, landmark) in enumerate(elements):
+        if element_index in omitted_residential:
+            continue
         if element_index in grouped_members and element_index not in grouped_at:
             continue
         group = grouped_at.get(element_index)
@@ -1422,7 +1446,9 @@ def download_and_build_buildings(
             "grouped_sources": len(grouped_members),
             "width_mm": grouping["width_mm"] if grouping else None,
             "ungrouped_small_sources": sum(
-                i not in grouped_members and poly.buffer(-grouping["width_mm"] / 2, join_style=2).is_empty
+                i not in grouped_members
+                and i not in omitted_residential
+                and poly.buffer(-grouping["width_mm"] / 2, join_style=2).is_empty
                 for i, (poly, _dims, _part, _landmark) in enumerate(elements)
             ) if grouping else 0,
         }

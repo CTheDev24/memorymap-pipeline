@@ -257,6 +257,8 @@ def download_and_build_roads(
     excluded_service_types: Iterable[str] = (),
     excluded_access: Iterable[str] = (),
     priority_region: geom.base.BaseGeometry | None = None,
+    barrier_types: Iterable[str] = (),
+    barrier_polygons: list | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download OSM drivable roads within bbox (lat_min, lat_max, lon_min, lon_max), buffer them
     using widths from road_widths (mm). ``road_height_mm`` is the visible height above
@@ -305,6 +307,8 @@ def download_and_build_roads(
         if edges is None:
             return None, None
 
+    road_types = set(road_types)
+    barrier_types = set(barrier_types)
     buffered_polys = []
     smoothing_polys = []
     smoothing_corridors = []
@@ -327,7 +331,7 @@ def download_and_build_roads(
         if hw is None:
             continue
         hw_norm = _normalize_highway_value(hw)
-        if hw_norm not in road_types:
+        if hw_norm not in road_types | barrier_types:
             continue
         if (
             hw_norm == "service"
@@ -363,6 +367,10 @@ def download_and_build_roads(
             try:
                 clipped = poly.intersection(clip_box)
                 if not clipped.is_empty:
+                    if barrier_polygons is not None and hw_norm in barrier_types:
+                        barrier_polygons.append(clipped)
+                    if hw_norm not in road_types:
+                        continue
                     buffered_polys.append(clipped)
                     if hw_norm in smoothing_types:
                         smoothing_polys.append(clipped)
@@ -374,6 +382,10 @@ def download_and_build_roads(
                             )
             except Exception:
                 # If clipping fails, keep unclipped
+                if barrier_polygons is not None and hw_norm in barrier_types:
+                    raise ValueError("Road barrier clipping failed")
+                if hw_norm not in road_types:
+                    continue
                 buffered_polys.append(poly)
                 if hw_norm in smoothing_types:
                     smoothing_polys.append(poly)

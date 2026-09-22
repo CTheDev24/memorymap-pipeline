@@ -986,6 +986,7 @@ def generate_memory_map(
             else:
                 finish_marker_mesh = marker_mesh
 
+    grouping_road_polygons = []
     unioned_roads = None
     roads_mesh = None
     if request.include_roads:
@@ -1044,6 +1045,11 @@ def generate_memory_map(
             center_lon=frame.center_lon,
             transform=transform,
             road_types=road_types,
+            barrier_types=(
+                set(DEFAULT_CONFIG["road_types"]) - set(road_types)
+                if config.get("building_grouping_enabled") else ()
+            ),
+            barrier_polygons=grouping_road_polygons,
             road_widths=road_widths,
             road_height_mm=road_height_mm,
             network_type=str(config.get("road_network_type", "all")),
@@ -1114,7 +1120,7 @@ def generate_memory_map(
     grouping_options = None
     grouping_barriers = None
     if request.include_buildings and bool(config.get("building_grouping_enabled", False)):
-        if not request.include_roads or unioned_roads is None:
+        if not request.include_roads or (unioned_roads is None and not grouping_road_polygons):
             warnings.append("Building grouping skipped: road barriers are unavailable. Enable Roads.")
         else:
             # Read water even when its visible layer is disabled. Missing water
@@ -1132,7 +1138,10 @@ def generate_memory_map(
                             minimum_waterway_width_mm=float(config.get("minimum_waterway_width_mm", 0.8)),
                         )
                 route_barrier = buffered_polygon_from_points(scaled, request.route_width_mm)
-                grouping_barriers = unary_union([unioned_roads, route_barrier, *barriers_water])
+                grouping_barriers = unary_union([
+                    p for p in [unioned_roads, *grouping_road_polygons, route_barrier, *barriers_water]
+                    if p is not None
+                ])
                 grouping_options = {
                     "width_mm": float(config.get("building_grouping_width_mm", 0.8)),
                     "gap_mm": float(config.get("building_grouping_gap_mm", 0.4)),
@@ -1142,6 +1151,7 @@ def generate_memory_map(
             except ValueError as exc:
                 warnings.append(f"Building grouping skipped: {exc}")
 
+    building_filter_stats = {}
     unioned_buildings = None
     buildings_mesh = None
     if request.include_buildings:
@@ -1183,6 +1193,8 @@ def generate_memory_map(
             diagnostics=request.building_diagnostics,
             grouping=grouping_options,
             grouping_barriers=grouping_barriers,
+            residential_min_width_mm=float(config.get("residential_min_width_mm", 0.0)),
+            filter_stats=building_filter_stats,
         )
         finally:
             logging.getLogger().removeHandler(collector)
@@ -1196,6 +1208,12 @@ def generate_memory_map(
             f"combined into {grouping_stats.get('groups', 0)} masses; "
             f"{grouping_stats.get('ungrouped_small_sources', 0)} small footprints remain individual. "
             "Inspect the sliced result before printing."
+        )
+    if building_filter_stats.get("minimum_width_mm", 0) > 0:
+        warnings.append(
+            f"Residential width filter omitted {building_filter_stats.get('omitted_sources', 0)} "
+            f"source footprints below {building_filter_stats['minimum_width_mm']:g} mm after grouping. "
+            "Unclassified and protected buildings are retained; inspect the sliced model."
         )
     progress(85, "Building mesh complete")
 
@@ -1247,6 +1265,7 @@ def generate_memory_map(
         ),
         "ground_cover": ground_cover_stats,
         "buildings": _geometry_count(unioned_buildings),
+        "building_filter": building_filter_stats,
         "building_grouping": (
             buildings_mesh.metadata.get("building_grouping") if buildings_mesh is not None else None
         ),

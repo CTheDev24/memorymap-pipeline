@@ -190,6 +190,8 @@ DEFAULT_CONFIG = {
     "building_vertical_exaggeration": 1.0,
     # prevent unsupported min_height volumes in support-free map prints
     "extend_elevated_building_parts_to_ground": True,
+    # Zero disables residential footprint filtering; positive values are print-space mm.
+    "residential_min_width_mm": 0.0,
     "building_grouping_enabled": False,
     "building_grouping_width_mm": 0.8,
     "building_grouping_gap_mm": 0.4,

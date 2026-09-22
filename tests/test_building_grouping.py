@@ -65,7 +65,8 @@ def test_group_geometry_is_deterministic_under_source_reordering():
     )
 
 
-def test_grouping_integrates_extrusion_and_source_mapping(tmp_path):
+@pytest.mark.parametrize("filter_width", [0.0, 0.8, 5.0])
+def test_grouping_integrates_extrusion_and_source_mapping(tmp_path, filter_width):
     frame = MapFrame(
         center_lat=41.88,
         center_lon=-87.63,
@@ -88,6 +89,7 @@ def test_grouping_integrates_extrusion_and_source_mapping(tmp_path):
     file = tmp_path / "buildings.geojson"
     file.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
     records = []
+    filter_stats = {}
     _, mesh = download_and_build_buildings(
         bbox=None,
         center_lat=frame.center_lat,
@@ -99,15 +101,25 @@ def test_grouping_integrates_extrusion_and_source_mapping(tmp_path):
         buildings_file=str(file),
         diagnostics=records,
         embed_depth_mm=0.2,
+        residential_min_width_mm=filter_width, filter_stats=filter_stats,
         grouping={"width_mm": 0.8, "gap_mm": 0.4, "span_mm": 4, "max_height_mm": 3},
     )
+    if filter_width == 5.0:
+        assert mesh is None
+        assert filter_stats["omitted_sources"] == 9
+        assert all(r["status"] == "omitted" and r["reason"] == "residential_below_minimum_print_width" for r in records)
+        return
     assert mesh.is_watertight
     assert len(records) == 9
     grouped = [r for r in records if r["status"] == "grouped"]
     assert len(grouped) >= 2
     assert mesh.metadata["building_grouping"]["grouped_sources"] == len(grouped)
     stats = mesh.metadata["building_grouping"]
-    assert sum(stats["remaining_small_by_reason"].values()) == stats["ungrouped_small_sources"]
+    if filter_width:
+        assert filter_stats["omitted_sources"] > 0
+        assert sum(stats["remaining_small_by_reason_before_filter"].values()) == stats["ungrouped_small_sources"] + filter_stats["omitted_sources"]
+    else:
+        assert sum(stats["remaining_small_by_reason"].values()) == stats["ungrouped_small_sources"]
     for r in grouped:
         assert r["output_face_ranges"]
         assert r["grouped_height_mm"] <= 3
@@ -274,3 +286,28 @@ def test_failed_chain_member_can_join_alternative_anchor(reverse):
 def test_rescue_respects_single_member_limit():
     footprints = [box(0, 0, 0.2, 0.2), box(0.3, 0, 1.3, 1)]
     assert group_footprints(footprints, [0, 1], maximum_members=1) == []
+
+
+def test_generation_keeps_hidden_roads_as_grouping_barriers(tmp_path, monkeypatch):
+    from memorymap_pipeline import generation
+    from memorymap_pipeline.gpx_loader import load_route_from_gpx
+    fixtures = Path(__file__).parent / "fixtures"
+    route = load_route_from_gpx(fixtures / "frame_route.gpx")
+    frame = MapFrame.fit_route(route.points,190,240,route_padding_mm=5.6)
+    captured = []
+    original = generation.download_and_build_buildings
+    def capture(**kwargs):
+        captured.append(kwargs)
+        return original(**kwargs)
+    monkeypatch.setattr(generation,"download_and_build_buildings",capture)
+    result = generation.generate_memory_map(generation.GenerationRequest(
+        route=route,frame=frame,output_path=tmp_path/"filtered.3mf",
+        roads_file=fixtures/"frame_roads.geojson", buildings_file=fixtures/"frame_buildings.geojson",
+        water_polygons=[],export_model=False,
+        config={"building_grouping_enabled":True,"road_types":[],"residential_min_width_mm":.8},
+    ))
+    assert result.meshes.get("roads") is None
+    assert captured[0]["grouping"] is not None
+    assert captured[0]["grouping_barriers"].area > 0
+    assert captured[0]["residential_min_width_mm"] == .8
+    assert result.stats["building_filter"]["minimum_width_mm"] == .8

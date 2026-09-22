@@ -15,10 +15,11 @@ from pathlib import Path
 from ..config import ROUTE_LAYER_HEIGHT_SLOPES, route_slope_for_layer_height
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
-from ..palettes import LAYER_KEYS, PALETTE_PRESETS, default_preset, resolve_palette
+from ..palettes import default_preset, resolve_palette
 from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN
 from .viewer_support import placeholder_html, viewer_url
 from .worker import GenerationWorker
+from .print_settings import ACCENTS, ROAD_CATEGORIES, finish_colors
 
 
 FRAME_ZOOM_FACTOR = 1.1
@@ -264,34 +265,20 @@ class MemoryMapWindow(QMainWindow):
 
         palette_box = QGroupBox("Layer colors")
         palette_form = QFormLayout(palette_box)
-        self.color_preset = QComboBox()
-        preset_labels = {
-            "urban-classic": "Urban Classic",
-            "landscape-classic": "Landscape Classic",
-            "heritage": "Heritage",
-            "gallery-concrete": "Gallery Concrete",
-            "nocturne": "Nocturne",
-            "ridgeline-sage": "Ridgeline Sage",
-            "desert-archive": "Desert Archive",
-            "coastal-limestone": "Coastal Limestone",
-            "deco-after-dark": "Deco After Dark",
-            "meridian-atlas": "Meridian Atlas",
-            "vector-lab": "Vector Lab",
-        }
-        for preset in PALETTE_PRESETS:
-            self.color_preset.addItem(preset_labels[preset], preset)
-        self.color_preset.addItem("Custom", None)
-        self.color_preset.currentIndexChanged.connect(self._palette_preset_changed)
-        palette_form.addRow("Collection", self.color_preset)
-        for layer in LAYER_KEYS:
-            button = QPushButton()
-            button.clicked.connect(
-                lambda _checked=False, selected=layer: self._choose_layer_color(selected)
-            )
-            self.color_buttons[layer] = button
-            palette_form.addRow(layer.title(), button)
+        self.finish = QComboBox()
+        for label in ("Gallery", "Nocturne"):
+            self.finish.addItem(label, label)
+        self.route_accent = QComboBox()
+        for label in (*ACCENTS, "Neutral", "Color Wheel"):
+            self.route_accent.addItem(label, label)
+        self.custom_route_color = "#F7591F"
+        self.previous_route_accent = "Signal Orange"
+        self.finish.currentIndexChanged.connect(self._finish_changed)
+        self.route_accent.activated.connect(self._route_accent_activated)
+        palette_form.addRow("Finish", self.finish)
+        palette_form.addRow("Route", self.route_accent)
         outer.addWidget(palette_box)
-        self._refresh_color_buttons()
+        self._finish_changed()
 
         layers = QGroupBox("Layers")
         layer_layout = QVBoxLayout(layers)
@@ -329,6 +316,29 @@ class MemoryMapWindow(QMainWindow):
         ):
             layer_layout.addWidget(control)
         outer.addWidget(layers)
+
+        road_box = QGroupBox("Road types")
+        road_layout = QVBoxLayout(road_box)
+        self.road_categories = {}
+        for label in ROAD_CATEGORIES:
+            control = QCheckBox(label)
+            control.setChecked(label != "Footpaths / tracks")
+            self.road_categories[label] = control
+            road_layout.addWidget(control)
+        road_box.setToolTip("Choose exported roads. Public streets remain barriers when grouping buildings.")
+        self.roads_layer.toggled.connect(road_box.setEnabled)
+        outer.addWidget(road_box)
+        building_box = QGroupBox("Building filter")
+        building_form = QFormLayout(building_box)
+        self.filter_residential = QCheckBox("Omit narrow residential buildings")
+        self.residential_width = self._spin(0.8, 0.1, 5.0)
+        self.residential_width.setEnabled(False)
+        self.filter_residential.toggled.connect(self.residential_width.setEnabled)
+        building_box.setToolTip("Applied after grouping at the final map scale. Removes identified residential footprints with no core this wide. Unclassified buildings, landmarks, parts and courtyards are retained. This is geometric screening, not slicer certification.")
+        building_form.addRow(self.filter_residential)
+        building_form.addRow("Minimum footprint width", self.residential_width)
+        self.buildings_layer.toggled.connect(building_box.setEnabled)
+        outer.addWidget(building_box)
 
         terrain_box = QGroupBox("Terrain settings")
         terrain_form = QFormLayout(terrain_box)
@@ -553,47 +563,30 @@ class MemoryMapWindow(QMainWindow):
         self.minimum_waterway_width.setEnabled(landscape)
         self.ground_cover_mode.setEnabled(landscape)
         self.ground_cover_sensitivity.setEnabled(landscape)
-        if hasattr(self, "color_preset") and self.color_preset.currentData() is not None:
-            preset = default_preset(self.style_profile.currentData())
-            index = self.color_preset.findData(preset)
-            if index >= 0:
-                self.color_preset.setCurrentIndex(index)
 
     @Slot(int)
-    def _palette_preset_changed(self, _index: int = -1) -> None:
-        preset = self.color_preset.currentData()
-        if preset is None:
-            return
-        self.color_preset_name = preset
-        self.layer_colors = resolve_palette(
-            self.style_profile.currentData(), preset
-        )
-        self._refresh_color_buttons()
+    def _finish_changed(self, _index: int = -1) -> None:
+        self.color_preset_name = "urban-classic"
+        self.layer_colors = finish_colors(self.finish.currentData(), self.route_accent.currentData(), self.custom_route_color)
         self._apply_palette_to_preview()
+        if self.result_path is not None and hasattr(self, "save"):
+            self.save.setEnabled(False)
+            self.add_warning("Regenerate the map to save the changed finish or route color.")
 
-    def _refresh_color_buttons(self) -> None:
-        for layer, button in self.color_buttons.items():
-            color = self.layer_colors[layer]
-            foreground = "#000000" if sum(int(color[i:i + 2], 16) for i in (1, 3, 5)) > 400 else "#FFFFFF"
-            button.setText(color)
-            button.setStyleSheet(
-                f"QPushButton {{ background: {color}; color: {foreground}; }}"
+    @Slot(int)
+    def _route_accent_activated(self, _index: int = -1) -> None:
+        if self.route_accent.currentData() == "Color Wheel":
+            from PySide6.QtGui import QColor
+            selected = QColorDialog.getColor(
+                QColor(self.custom_route_color), self, "Choose route color",
+                QColorDialog.ColorDialogOption.DontUseNativeDialog,
             )
-
-    @Slot()
-    def _choose_layer_color(self, layer: str) -> None:
-        selected = QColorDialog.getColor(
-            parent=self, title=f"Choose {layer.title()} color"
-        )
-        if not selected.isValid():
-            return
-        self.layer_colors[layer] = selected.name().upper()
-        custom_index = self.color_preset.count() - 1
-        self.color_preset.blockSignals(True)
-        self.color_preset.setCurrentIndex(custom_index)
-        self.color_preset.blockSignals(False)
-        self._refresh_color_buttons()
-        self._apply_palette_to_preview()
+            if not selected.isValid():
+                self.route_accent.setCurrentIndex(self.route_accent.findData(self.previous_route_accent))
+                return
+            self.custom_route_color = selected.name().upper()
+        self.previous_route_accent = self.route_accent.currentData()
+        self._finish_changed()
 
     @Slot(bool)
     def _apply_palette_to_preview(self, _loaded: bool = True) -> None:
@@ -616,7 +609,13 @@ class MemoryMapWindow(QMainWindow):
             else "finish" if finish_marker
             else "none"
         )
+        selected_roads = [t for label, control in getattr(self, "road_categories", {}).items()
+                          if control.isChecked() for t in ROAD_CATEGORIES[label]]
         return {
+            **({"road_types": selected_roads, "landscape_road_types": selected_roads}
+               if hasattr(self, "road_categories") else {}),
+            "residential_min_width_mm": (self.residential_width.value()
+                if getattr(self, "filter_residential", None) and self.filter_residential.isChecked() else 0.0),
             "building_grouping_enabled": bool(
                 getattr(self, "building_grouping", None) and self.building_grouping.isChecked()
             ),
@@ -656,6 +655,9 @@ class MemoryMapWindow(QMainWindow):
         if not self.gpx_path or not self.route or not self.current_frame:
             return
         self.progress.setValue(0); self.warnings.clear(); self.generate.setEnabled(False)
+        self.generate.setText("Generating…")
+        self.finish.setEnabled(False)
+        self.route_accent.setEnabled(False)
         try:
             frame_data = dict(self.current_frame)
             frame_data.update(
@@ -687,11 +689,16 @@ class MemoryMapWindow(QMainWindow):
 
     @Slot(str)
     def _generation_failed(self, message: str) -> None:
+        self.generate.setText("Retry generation")
         QMessageBox.critical(self, "Generation failed", message); self.add_warning(message)
 
     @Slot()
     def _generation_finished(self) -> None:
         self.generate.setEnabled(self.gpx_path is not None)
+        for name in ("finish", "route_accent"):
+            control = getattr(self, name, None)
+            if control is not None:
+                control.setEnabled(True)
         self.generation_thread = None; self.generation_worker = None
 
     @Slot(int, str)
@@ -701,6 +708,7 @@ class MemoryMapWindow(QMainWindow):
 
     @Slot(str, str)
     def set_result(self, path: str, preview_path: str = "") -> None:
+        self.generate.setText("Regenerate map")
         self.result_path = Path(path)
         self.save.setEnabled(self.result_path.is_file())
         self.progress.setValue(100)
