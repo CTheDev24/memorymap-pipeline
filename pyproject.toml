@@ -43,6 +43,9 @@ include = ["memorymap_pipeline*"]
 [tool.setuptools.package-data]
 memorymap_pipeline = [
   "data/*.json",
+  "desktop/assets/*.svg",
+  "desktop/assets/*.png",
+  "desktop/assets/*.ico",
   "desktop/viewer/*.css",
   "desktop/viewer/*.html",
   "desktop/viewer/*.js",

@@ -51,7 +51,7 @@ jobs:
       - name: Smoke-check packaged executable
         shell: pwsh
         run: |
-          $exe = Resolve-Path "dist/MemoryMap.exe"
+          $exe = Resolve-Path "dist/Trace Studio.exe"
           if ((Get-Item $exe).Length -lt 1MB) {
             throw "Packaged executable is unexpectedly small."
           }
@@ -64,6 +64,7 @@ jobs:
             throw "The executable is missing OSMnx package metadata."
           }
           $previewEntries = @(
+            "memorymap_pipeline[\\/]desktop[\\/]assets[\\/]trace-studio\.ico",
             "memorymap_pipeline\.desktop\.preview",
             "memorymap_pipeline\.desktop\.viewer_support",
             "memorymap_pipeline[\\/]desktop[\\/]viewer[\\/]index\.html",
@@ -76,15 +77,15 @@ jobs:
           }
 
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash *MemoryMap.exe" | Set-Content -Encoding ascii "dist/MemoryMap.exe.sha256"
-          Write-Host "MemoryMap.exe SHA-256: $hash"
+          "$hash *Trace Studio.exe" | Set-Content -Encoding ascii "dist/Trace Studio.exe.sha256"
+          Write-Host "Trace Studio.exe SHA-256: $hash"
 
       - name: Upload Windows executable
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: MemoryMap-Windows-Preview-${{ github.sha }}
+          name: Trace-Studio-Windows-Preview-${{ github.sha }}
           path: |
-            dist/MemoryMap.exe
-            dist/MemoryMap.exe.sha256
+            dist/Trace Studio.exe
+            dist/Trace Studio.exe.sha256
           if-no-files-found: error
           retention-days: 14

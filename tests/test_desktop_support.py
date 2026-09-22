@@ -102,6 +102,7 @@ def test_launcher_initializes_and_shows_window(monkeypatch):
         def __init__(self, argv): Application.current = self; events.append(("app", argv))
         def setOrganizationName(self, name): events.append(("organization", name))
         def setApplicationName(self, name): events.append(("application", name))
+        def setWindowIcon(self, icon): events.append(("icon", icon))
         def exec(self): events.append(("exec",)); return 7
 
     class Window:
@@ -109,6 +110,9 @@ def test_launcher_initializes_and_shows_window(monkeypatch):
 
     qtwidgets = types.ModuleType("PySide6.QtWidgets")
     qtwidgets.QApplication = Application
+    qtgui = types.ModuleType("PySide6.QtGui")
+    qtgui.QIcon = lambda path: path
+    monkeypatch.setitem(sys.modules, "PySide6.QtGui", qtgui)
     pyside = types.ModuleType("PySide6")
     window = types.ModuleType("memorymap_pipeline.desktop.window")
     window.MemoryMapWindow = Window
@@ -117,6 +121,9 @@ def test_launcher_initializes_and_shows_window(monkeypatch):
     monkeypatch.setitem(sys.modules, "memorymap_pipeline.desktop.window", window)
     from memorymap_pipeline.desktop.launcher import main
     assert main(["memorymap"]) == 7
+    assert ("application", "Trace Studio") in events
+    assert ("organization", "Teklo Studio") in events
+    assert any(event[0] == "icon" and event[1].endswith("trace-studio.ico") for event in events)
     assert ("show",) in events
     assert events[-1] == ("exec",)
 

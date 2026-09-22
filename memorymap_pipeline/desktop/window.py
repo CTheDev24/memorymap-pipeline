@@ -1,4 +1,4 @@
-"""Native MemoryMap window and bridge to the embedded map view.
+"""Native Trace Studio window and bridge to the embedded map view.
 
 Generation is deliberately exposed as a Qt signal so the application can wire the
 existing in-process pipeline to a worker thread without running a localhost API.
@@ -55,7 +55,7 @@ try:
 except ImportError as exc:  # pragma: no cover - depends on optional desktop extras
     if exc.name and exc.name.startswith("PySide6"):
         raise ImportError(
-            "MemoryMap desktop requires PySide6 (including the Qt WebEngine add-ons)"
+            "Trace Studio requires PySide6 (including the Qt WebEngine add-ons)"
         ) from exc
     raise
 
@@ -86,7 +86,7 @@ class MemoryMapWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("MemoryMap Studio")
+        self.setWindowTitle("Trace Studio")
         self.resize(1220, 780)
         self.gpx_path: Path | None = None
         self.route: Route | None = None
@@ -186,7 +186,7 @@ class MemoryMapWindow(QMainWindow):
             self.route_layer_height.findData(0.16)
         )
         self.route_layer_height.setToolTip(
-            "Select the slicer layer height used for the route. MemoryMap chooses "
+            "Select the slicer layer height used for the route. Trace Studio chooses "
             "a matching maximum elevation slope to limit visible stair-stepping."
         )
         form.addRow("Width (mm)", self.print_width)
@@ -739,7 +739,7 @@ class MemoryMapWindow(QMainWindow):
     @Slot()
     def save_result(self) -> None:
         if not self.result_path or not self.result_path.is_file(): return
-        name, _ = QFileDialog.getSaveFileName(self, "Save MemoryMap", self.result_path.name, "3MF (*.3mf)")
+        name, _ = QFileDialog.getSaveFileName(self, "Save Trace Studio model", self.result_path.name, "3MF (*.3mf)")
         if name:
             try: shutil.copy2(self.result_path, name)
             except OSError as exc: QMessageBox.critical(self, "Save failed", str(exc))

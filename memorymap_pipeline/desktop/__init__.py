@@ -9,7 +9,7 @@ def run() -> int:
     except ImportError as exc:
         if exc.name and exc.name.startswith("PySide6"):
             raise RuntimeError(
-                "MemoryMap desktop requires PySide6 and PySide6-WebEngine"
+                "Trace Studio requires PySide6 and PySide6-WebEngine"
             ) from exc
         raise
     return int(run_window())

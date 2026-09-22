@@ -65,15 +65,15 @@ jobs:
       - name: Prepare release files
         shell: pwsh
         run: |
-          if (-not (Test-Path -LiteralPath "dist/MemoryMap.exe")) {
-            throw "PyInstaller did not produce dist/MemoryMap.exe."
+          if (-not (Test-Path -LiteralPath "dist/Trace Studio.exe")) {
+            throw "PyInstaller did not produce dist/Trace Studio.exe."
           }
-          $archive = & pyi-archive_viewer -r -b "dist/MemoryMap.exe" 2>&1 | Out-String
+          $archive = & pyi-archive_viewer -r -b "dist/Trace Studio.exe" 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0 -or $archive -notmatch "osmnx-[^\\/]+\.dist-info[\\/]METADATA") {
             throw "The executable archive is invalid or missing OSMnx package metadata."
           }
-          $asset = "MemoryMap-Studio-$env:RELEASE_TAG-windows-x64.exe"
-          Copy-Item -LiteralPath "dist/MemoryMap.exe" -Destination $asset
+          $asset = "Trace-Studio-$env:RELEASE_TAG-windows-x64.exe"
+          Copy-Item -LiteralPath "dist/Trace Studio.exe" -Destination $asset
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $asset).Hash.ToLowerInvariant()
           "$hash  $asset" | Set-Content -Encoding ascii "$asset.sha256"
           "RELEASE_ASSET=$asset" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -81,7 +81,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: MemoryMap-Studio-${{ env.RELEASE_TAG }}-windows-x64
+          name: Trace-Studio-${{ env.RELEASE_TAG }}-windows-x64
           path: |
             ${{ env.RELEASE_ASSET }}
             ${{ env.RELEASE_ASSET }}.sha256
@@ -101,7 +101,7 @@ jobs:
             $arguments = @(
               "release", "create", $env:RELEASE_TAG,
               $env:RELEASE_ASSET, "$env:RELEASE_ASSET.sha256",
-              "--verify-tag", "--generate-notes", "--title", "MemoryMap Studio $env:RELEASE_TAG",
+              "--verify-tag", "--generate-notes", "--title", "Trace Studio $env:RELEASE_TAG",
               "--repo", $env:GITHUB_REPOSITORY
             )
             if ($prerelease) { $arguments += "--prerelease" }
