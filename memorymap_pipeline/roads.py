@@ -12,6 +12,7 @@ import numpy as np
 from .projection import apply_transform, project_lonlat_array
 from .geometry import repair_polygon
 from .mesh import route_mesh_from_polygon
+from .overpass import MapDataDownloadError, graph_from_bounds, overpass_settings
 
 
 @dataclass(frozen=True)
@@ -111,8 +112,6 @@ OVERPASS_ENDPOINTS = [
     "https://lz4.overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 ]
-
-OVERPASS_TIMEOUT = 60
 
 _ROAD_EXTRUSION_MAX_SPLIT_DEPTH = 8
 _ROAD_EXTRUSION_MIN_AREA_MM2 = 0.01
@@ -291,13 +290,11 @@ def download_and_build_roads(
         edges = None
         for endpoint in OVERPASS_ENDPOINTS:
             try:
-                ox.settings.overpass_endpoint = endpoint
-                if radius_m is not None:
-                    G = ox.graph_from_point((center_lat, center_lon), dist=radius_m, network_type=network_type)
-                else:
-                    lat_min, lat_max, lon_min, lon_max = bbox
-                    bbox_tuple = (lat_max, lat_min, lon_max, lon_min)
-                    G = ox.graph_from_bbox(bbox_tuple, network_type=network_type)
+                with overpass_settings(ox, endpoint):
+                    if radius_m is not None:
+                        G = ox.graph_from_point((center_lat, center_lon), dist=radius_m, network_type=network_type)
+                    else:
+                        G = graph_from_bounds(ox, bbox, network_type)
                 edges = ox.graph_to_gdfs(G, nodes=False, edges=True, fill_edge_geometry=True)
                 break
             except Exception as exc:
@@ -305,7 +302,10 @@ def download_and_build_roads(
                 edges = None
 
         if edges is None:
-            return None, None
+            raise MapDataDownloadError(
+                "Road download failed on all map-data servers. Check your connection "
+                "and retry generation. No model was exported."
+            )
 
     road_types = set(road_types)
     barrier_types = set(barrier_types)

@@ -343,5 +343,5 @@ def test_overpass_configuration_supports_osmnx_2_settings() -> None:
 
     _configure_overpass(osmnx, "https://example.test/interpreter")
 
-    assert settings.overpass_url == "https://example.test/interpreter"
-    assert settings.requests_timeout == OVERPASS_TIMEOUT == 20
+    assert settings.overpass_url == "https://example.test"
+    assert settings.requests_timeout == OVERPASS_TIMEOUT == 120

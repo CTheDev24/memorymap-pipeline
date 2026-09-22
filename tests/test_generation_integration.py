@@ -306,3 +306,23 @@ def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
     assert result.buildings_mesh.bounds[1, 2] <= (
         request.config["max_print_height_mm"] + tolerance
     )
+
+
+@pytest.mark.parametrize("failed_layer", ["roads", "buildings"])
+def test_download_failure_prevents_partial_export(tmp_path, monkeypatch, failed_layer):
+    from memorymap_pipeline.overpass import MapDataDownloadError
+
+    def failed_download(**kwargs):
+        raise MapDataDownloadError("Download failed; retry generation")
+
+    monkeypatch.setattr(generation, f"download_and_build_{failed_layer}", failed_download)
+    monkeypatch.setattr(generation, "export_3mf", lambda *a, **kw: pytest.fail("Partial model exported"))
+    frame = MapFrame(center_lat=29.76, center_lon=-95.37, coverage_width_m=180,
+                     coverage_height_m=140, print_width_mm=120, print_height_mm=90, margin_mm=5)
+    output = tmp_path / "failed.3mf"
+    with pytest.raises(MapDataDownloadError, match="retry generation"):
+        generation.generate_memory_map(generation.GenerationRequest(
+            route=load_route_from_gpx(FIXTURES / "frame_route.gpx"), frame=frame,
+            output_path=output, include_roads=failed_layer == "roads",
+            include_buildings=failed_layer == "buildings"))
+    assert not output.exists()

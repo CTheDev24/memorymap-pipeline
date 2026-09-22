@@ -23,6 +23,10 @@ from .landmarks import (
 from .mesh import route_mesh_from_polygon
 from .projection import apply_transform, project_lonlat_array
 from .stadiums import StadiumRecipe, build_stadium_mesh
+from .overpass import (
+    OVERPASS_TIMEOUT, MapDataDownloadError,
+    configure_overpass as _configure_overpass, overpass_settings,
+)
 
 
 SUPPORTED_ROOF_SHAPES = {"flat", "gabled", "hipped", "pyramidal", "skillion"}
@@ -445,20 +449,6 @@ OVERPASS_ENDPOINTS = [
     "https://lz4.overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 ]
-
-OVERPASS_TIMEOUT = 20
-
-
-def _configure_overpass(osmnx: object, endpoint: str) -> None:
-    """Configure both legacy and current OSMnx Overpass settings."""
-    settings = osmnx.settings
-    if hasattr(settings, "overpass_url"):
-        settings.overpass_url = endpoint
-    if hasattr(settings, "overpass_endpoint"):
-        settings.overpass_endpoint = endpoint
-    if hasattr(settings, "requests_timeout"):
-        settings.requests_timeout = OVERPASS_TIMEOUT
-
 
 def _overpass_geometry(element: dict) -> geom.base.BaseGeometry | None:
     """Build polygon geometry from an Overpass way or multipolygon relation."""
@@ -883,64 +873,67 @@ def download_and_build_buildings(
 
         for endpoint in OVERPASS_ENDPOINTS:
             try:
-                _configure_overpass(ox, endpoint)
-
-                if radius_m is not None:
-                    try:
-                        features_from_point = getattr(ox, "features_from_point", None) or getattr(
-                            ox, "geometries_from_point"
-                        )
-                        gdf = features_from_point(
-                            (center_lat, center_lon),
-                            tags={"building": True, "building:part": True},
-                            dist=radius_m,
-                        )
-                        cols = list(gdf.columns)
-                        for _, row in gdf.iterrows():
-                            g = row.geometry
-                            if g is None:
-                                continue
-                            geo_with_tags.append((g, _tags_from_gdf_row(row, cols)))
-                        break
-                    except Exception:
-                        lat_delta = radius_m / 111000.0
-                        lon_delta = radius_m / (
-                            111000.0 * max(0.000001, np.cos(np.deg2rad(center_lat)))
-                        )
-                        bbox_for_query = (
-                            center_lat - lat_delta,
-                            center_lon - lon_delta,
-                            center_lat + lat_delta,
-                            center_lon + lon_delta,
-                        )
-                else:
-                    lat_min, lat_max, lon_min, lon_max = bbox
-                    try:
-                        features_from_bbox = getattr(ox, "features_from_bbox", None) or getattr(
-                            ox, "geometries_from_bbox"
-                        )
-                        if hasattr(ox, "features_from_bbox"):
-                            gdf = features_from_bbox(
-                                (lon_min, lat_min, lon_max, lat_max),
-                                tags={"building": True, "building:part": True},
+                with overpass_settings(ox, endpoint):
+                    if radius_m is not None:
+                        try:
+                            features_from_point = getattr(ox, "features_from_point", None) or getattr(
+                                ox, "geometries_from_point"
                             )
-                        else:
-                            gdf = features_from_bbox(
-                                lat_max,
-                                lat_min,
-                                lon_max,
-                                lon_min,
+                            gdf = features_from_point(
+                                (center_lat, center_lon),
                                 tags={"building": True, "building:part": True},
+                                dist=radius_m,
                             )
-                        cols = list(gdf.columns)
-                        for _, row in gdf.iterrows():
-                            g = row.geometry
-                            if g is None:
-                                continue
-                            geo_with_tags.append((g, _tags_from_gdf_row(row, cols)))
-                        break
-                    except Exception:
-                        bbox_for_query = (lat_min, lon_min, lat_max, lon_max)
+                            cols = list(gdf.columns)
+                            for _, row in gdf.iterrows():
+                                g = row.geometry
+                                if g is None:
+                                    continue
+                                geo_with_tags.append((g, _tags_from_gdf_row(row, cols)))
+                            if not geo_with_tags:
+                                return None, None
+                            break
+                        except Exception:
+                            lat_delta = radius_m / 111000.0
+                            lon_delta = radius_m / (
+                                111000.0 * max(0.000001, np.cos(np.deg2rad(center_lat)))
+                            )
+                            bbox_for_query = (
+                                center_lat - lat_delta,
+                                center_lon - lon_delta,
+                                center_lat + lat_delta,
+                                center_lon + lon_delta,
+                            )
+                    else:
+                        lat_min, lat_max, lon_min, lon_max = bbox
+                        try:
+                            features_from_bbox = getattr(ox, "features_from_bbox", None) or getattr(
+                                ox, "geometries_from_bbox"
+                            )
+                            if hasattr(ox, "features_from_bbox"):
+                                gdf = features_from_bbox(
+                                    (lon_min, lat_min, lon_max, lat_max),
+                                    tags={"building": True, "building:part": True},
+                                )
+                            else:
+                                gdf = features_from_bbox(
+                                    lat_max,
+                                    lat_min,
+                                    lon_max,
+                                    lon_min,
+                                    tags={"building": True, "building:part": True},
+                                )
+                            cols = list(gdf.columns)
+                            for _, row in gdf.iterrows():
+                                g = row.geometry
+                                if g is None:
+                                    continue
+                                geo_with_tags.append((g, _tags_from_gdf_row(row, cols)))
+                            if not geo_with_tags:
+                                return None, None
+                            break
+                        except Exception:
+                            bbox_for_query = (lat_min, lon_min, lat_max, lon_max)
 
                 # OSMnx failed — fall back to raw Overpass HTTP query
                 if bbox_for_query is None:
@@ -953,7 +946,7 @@ def download_and_build_buildings(
                     south, west, north, east = bbox_for_query
                     # Use "out body geom" so tags are included in the response
                     query = (
-                        f"[out:json][timeout:18];\n"
+                        f"[out:json][timeout:{OVERPASS_TIMEOUT - 10}];\n"
                         f"(\n"
                         f'  way["building"]({south},{west},{north},{east});\n'
                         f'  way["building:part"]({south},{west},{north},{east});\n'
@@ -971,7 +964,11 @@ def download_and_build_buildings(
                     )
                     resp.raise_for_status()
                     data = resp.json()
-                    elements = data.get("elements", [])
+                    if data.get("remark"):
+                        raise RuntimeError(f"Overpass returned incomplete data: {data['remark']}")
+                    if "elements" not in data:
+                        raise RuntimeError("Overpass response is missing elements")
+                    elements = data["elements"]
                     for el in elements:
                         el_tags = dict(el.get("tags", {}))
                         if el.get("type") in {"node", "way", "relation"}:
@@ -981,8 +978,9 @@ def download_and_build_buildings(
                         polygon = _overpass_geometry(el)
                         if polygon is not None:
                             geo_with_tags.append((polygon, el_tags))
-                    if geo_with_tags:
-                        break
+                    if not geo_with_tags:
+                        return None, None
+                    break
                 except Exception as exc:
                     logging.warning("Overpass HTTP fetch failed via %s: %s", endpoint, exc)
                     geo_with_tags = []
@@ -994,7 +992,10 @@ def download_and_build_buildings(
                 continue
 
         if not geo_with_tags:
-            return None, None
+            raise MapDataDownloadError(
+                "Building download failed on all map-data servers. Check your connection "
+                "and retry generation. No model was exported."
+            )
 
     try:
         landmark_registry = load_default_landmark_registry()
