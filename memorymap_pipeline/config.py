@@ -5,6 +5,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .print_scale import PRINT_SCALE_DEFAULTS, printer_thresholds
+
 
 ROUTE_LAYER_HEIGHT_SLOPES = {
     0.08: 0.16,
@@ -37,6 +39,8 @@ def route_slope_for_layer_height(layer_height_mm: float) -> float:
 
 
 DEFAULT_CONFIG = {
+    # Advisory only in manual mode; existing absolute grouping controls still apply.
+    **PRINT_SCALE_DEFAULTS,
     "portrait": {"map_width": 190.0, "map_height": 240.0},
     "landscape": {"map_width": 240.0, "map_height": 190.0},
     # None resolves from style profile (Urban 2.0 mm, Landscape 1.2 mm).
@@ -229,4 +233,5 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
         else:
             config[key] = value
 
+    printer_thresholds(config)
     return config

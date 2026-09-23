@@ -59,6 +59,23 @@ class MapFrame:
     def printable_height_mm(self) -> float:
         return self.print_height_mm - 2.0 * self.margin_mm
 
+    @property
+    def x_mm_per_meter(self) -> float:
+        return self.printable_width_mm / self.coverage_width_m
+
+    @property
+    def y_mm_per_meter(self) -> float:
+        return self.printable_height_mm / self.coverage_height_m
+
+    @property
+    def mm_per_meter(self) -> float:
+        """Effective scale; explicit non-aspect-matched frames retain axis scaling."""
+        return min(self.x_mm_per_meter, self.y_mm_per_meter)
+
+    @property
+    def meters_per_mm(self) -> float:
+        return 1.0 / self.mm_per_meter
+
     @classmethod
     def fit_route(
         cls,
@@ -116,12 +133,8 @@ class MapFrame:
         if coordinates.ndim != 2 or coordinates.shape[1] != 2:
             raise ValueError("Projected coordinates must be an Nx2 array")
         rotated = _rotate(coordinates, -self.rotation_degrees)
-        x = self.print_width_mm / 2.0 + rotated[:, 0] * (
-            self.printable_width_mm / self.coverage_width_m
-        )
-        y = self.print_height_mm / 2.0 + rotated[:, 1] * (
-            self.printable_height_mm / self.coverage_height_m
-        )
+        x = self.print_width_mm / 2.0 + rotated[:, 0] * self.x_mm_per_meter
+        y = self.print_height_mm / 2.0 + rotated[:, 1] * self.y_mm_per_meter
         return np.column_stack((x, y))
 
     def transform_lonlat(self, latitudes: np.ndarray, longitudes: np.ndarray) -> np.ndarray:
