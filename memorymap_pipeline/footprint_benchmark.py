@@ -354,10 +354,7 @@ def _metric_summary(values: list[float]) -> dict | None:
 def _grouping_advisory_metrics(frame: MapFrame, diagnostics: list[dict], grouping_stats: dict | None) -> dict:
     from scipy.spatial import cKDTree
 
-    scale_mm_per_m = min(
-        frame.printable_width_mm / frame.coverage_width_m,
-        frame.printable_height_mm / frame.coverage_height_m,
-    )
+    scale_mm_per_m = frame.mm_per_meter
     source_polygons = []
     retained_or_grouped = []
     output_shapes = []
@@ -628,6 +625,7 @@ def run(manifest_path: Path, output: Path, label: str = "baseline", *, grouping:
             "warnings": result.warnings,
             "generation_config": config,
             "building_grouping": result.stats.get("building_grouping"),
+            "building_generalization": result.stats.get("building_generalization"),
             "grouping_advisory_metrics": _grouping_advisory_metrics(
                 frame,
                 diagnostics,

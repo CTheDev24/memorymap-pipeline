@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 import math
+import json
 import logging
 import os
 from pathlib import Path
@@ -28,6 +29,7 @@ from .landcover import (
     rasterize_geometry_mask,
 )
 from .map_frame import MapFrame
+from .print_scale import PrintScaleContext
 from .impact_observatory import ImpactObservatoryProvider
 from .mesh import (
     build_base_plate,
@@ -372,6 +374,7 @@ def generate_memory_map(
     config = _merged_config(request.config)
     flat_border_enabled = bool(config.get("flat_border_enabled", False))
     frame = _frame_for_border(request.frame, flat_border_enabled)
+    print_scale = PrintScaleContext.from_frame(frame, config)
     style_profile = str(config.get("style_profile", "urban"))
     if style_profile not in {"urban", "landscape"}:
         raise ValueError(f"Unsupported style profile: {style_profile}")
@@ -779,10 +782,7 @@ def generate_memory_map(
                 osm_exposed_mask = rasterize_geometry_mask(
                     available_grid, exposed_land
                 )
-                evidence_buffer_mm = 60.0 * min(
-                    frame.printable_width_mm / frame.coverage_width_m,
-                    frame.printable_height_mm / frame.coverage_height_m,
-                )
+                evidence_buffer_mm = 60.0 * frame.mm_per_meter
                 evidence_geometries = (
                     []
                     if request.landcover_grid is not None
@@ -1152,6 +1152,12 @@ def generate_memory_map(
                 warnings.append(f"Building grouping skipped: {exc}")
 
     building_filter_stats = {}
+    building_generalization_stats = {
+        **print_scale.diagnostics(),
+        "mode": config["building_generalization_mode"],
+        "thresholds_applied_to_geometry": False,
+        "measurement_status": "unavailable" if request.include_buildings else "disabled",
+    }
     unioned_buildings = None
     buildings_mesh = None
     if request.include_buildings:
@@ -1181,10 +1187,7 @@ def generate_memory_map(
             route_points=scaled,
             terrain_height_at=feature_support_at,
             building_scale_mm_per_m=(
-                min(
-                    frame.printable_width_mm / frame.coverage_width_m,
-                    frame.printable_height_mm / frame.coverage_height_m,
-                )
+                frame.mm_per_meter
                 * float(config.get("building_vertical_exaggeration", 1.0))
             ),
             extend_elevated_parts_to_ground=bool(
@@ -1195,6 +1198,8 @@ def generate_memory_map(
             grouping_barriers=grouping_barriers,
             residential_min_width_mm=float(config.get("residential_min_width_mm", 0.0)),
             filter_stats=building_filter_stats,
+            print_scale_context=print_scale,
+            generalization_stats=building_generalization_stats,
         )
         finally:
             logging.getLogger().removeHandler(collector)
@@ -1215,6 +1220,9 @@ def generate_memory_map(
             f"source footprints below {building_filter_stats['minimum_width_mm']:g} mm after grouping. "
             "Unclassified and protected buildings are retained; inspect the sliced model."
         )
+    logging.info("BUILDING GENERALIZATION CONTEXT %s", json.dumps(
+        building_generalization_stats, sort_keys=True, allow_nan=False,
+    ))
     progress(85, "Building mesh complete")
 
     if all(
@@ -1266,6 +1274,7 @@ def generate_memory_map(
         "ground_cover": ground_cover_stats,
         "buildings": _geometry_count(unioned_buildings),
         "building_filter": building_filter_stats,
+        "building_generalization": building_generalization_stats,
         "building_grouping": (
             buildings_mesh.metadata.get("building_grouping") if buildings_mesh is not None else None
         ),

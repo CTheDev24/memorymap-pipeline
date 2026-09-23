@@ -1,0 +1,6 @@
+{
+  "synthetic_rectangles": 10000,
+  "elapsed_seconds": 11.201778800001193,
+  "note": "Local diagnostic microbenchmark; not a complex OSM performance guarantee.",
+  "measured_building_count": 10000
+}

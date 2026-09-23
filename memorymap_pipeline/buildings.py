@@ -14,6 +14,8 @@ from trimesh import Trimesh
 from .building_classification import BuildingClass, classify_building, preset_for
 from .building_filtering import residential_omissions
 from .building_grouping import group_footprints
+from .building_generalization import disposition_diagnostics, measure_footprints
+from .print_scale import PrintScaleContext
 from .geometry import repair_polygon
 from .landmarks import (
     LandmarkDefinition,
@@ -846,6 +848,8 @@ def download_and_build_buildings(
     grouping_barriers: geom.base.BaseGeometry | None = None,
     residential_min_width_mm: float = 0.0,
     filter_stats: dict | None = None,
+    print_scale_context: PrintScaleContext | None = None,
+    generalization_stats: dict | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
@@ -857,6 +861,14 @@ def download_and_build_buildings(
     ``embed_depth_mm`` extends every building below the base top without reducing that
     visible height. All extruded buildings are concatenated into a single mesh.
     """
+    records: list[dict] = []
+
+    def report_generalization(footprints):
+        if generalization_stats is not None and print_scale_context is not None:
+            generalization_stats.update(measure_footprints(footprints, print_scale_context))
+            generalization_stats.update(disposition_diagnostics(records))
+            generalization_stats["measurement_status"] = "measured"
+
     # geo_with_tags: list of (shapely_geometry, tags_dict) collected from all sources
     geo_with_tags: list[tuple] = []
 
@@ -1006,10 +1018,7 @@ def download_and_build_buildings(
     plate_box = geom.box(margin_mm, margin_mm, map_width_mm - margin_mm, map_height_mm - margin_mm)
     frame = transform.get("map_frame")
     horizontal_scale_mm_per_m = (
-        min(
-            frame.printable_width_mm / frame.coverage_width_m,
-            frame.printable_height_mm / frame.coverage_height_m,
-        )
+        frame.mm_per_meter
         if frame is not None
         else float(transform.get("scale", 1.0))
     )
@@ -1026,13 +1035,15 @@ def download_and_build_buildings(
         elif g is not None and g.geom_type == "MultiPolygon":
             polys = list(g.geoms)
         else:
+            record = {
+                "id": f"b{source_index:06d}-p0",
+                "source_id": str(tags.get("_osm_id", tags.get("id", source_index))),
+                "status": "unresolved", "reason": "unsupported_or_null_geometry",
+                "output_face_ranges": [],
+            }
+            records.append(record)
             if diagnostics is not None:
-                diagnostics.append({
-                    "id": f"b{source_index:06d}-p0",
-                    "source_id": str(tags.get("_osm_id", tags.get("id", source_index))),
-                    "status": "unresolved", "reason": "unsupported_or_null_geometry",
-                    "output_face_ranges": [],
-                })
+                diagnostics.append(record)
             continue
 
         landmark = None
@@ -1064,6 +1075,7 @@ def download_and_build_buildings(
                 "reason": "empty_or_invalid_geometry",
                 "output_face_ranges": [],
             }
+            records.append(record)
             if diagnostics is not None:
                 diagnostics.append(record)
             if p.is_empty:
@@ -1123,6 +1135,7 @@ def download_and_build_buildings(
             record.update(status="unresolved", reason="not_meshed")
 
     if not elements:
+        report_generalization([])
         return None, None
 
     part_union = ops.unary_union([poly for poly, _dims, is_part, _landmark in elements if is_part])
@@ -1146,10 +1159,7 @@ def download_and_build_buildings(
     if building_scale_mm_per_m is None:
         frame = transform.get("map_frame")
         if frame is not None:
-            building_scale_mm_per_m = min(
-                frame.printable_width_mm / frame.coverage_width_m,
-                frame.printable_height_mm / frame.coverage_height_m,
-            )
+            building_scale_mm_per_m = frame.mm_per_meter
         else:
             building_scale_mm_per_m = float(transform.get("scale", 1.0))
     tier_height = _tiered_building_height_mapper(
@@ -1430,6 +1440,10 @@ def download_and_build_buildings(
                 )
         face_cursor += face_count
 
+    report_generalization([
+        poly for poly, _dims, is_part, landmark in elements
+        if not is_part and landmark is None
+    ])
     final_mesh = None
     if meshes:
         try:

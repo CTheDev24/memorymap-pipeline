@@ -1,0 +1,375 @@
+{
+  "baseline_commit": "71de412",
+  "cases": {
+    "200-False-0.0": {
+      "filter": {
+        "minimum_width_mm": 0.0,
+        "omitted_sources": 0
+      },
+      "grouping": {
+        "enabled": false,
+        "grouped_sources": 0,
+        "groups": 0,
+        "ungrouped_small_sources": 0,
+        "width_mm": null
+      },
+      "meshes": {
+        "base": "65005f110684e8221fcc42f9b2297a74e22814d6d99313063ffc6dfe9f8f0e3b",
+        "buildings": "e7f485e503a432dae7101b8025b7cd37760631e3595625958de03a888f66e785",
+        "roads": "ee908f66df4616eb8a66e3fb376024e03b5c4852348204797c31f368c676db30",
+        "route": "b2970d5daa4dafd645d20ff05243f1d80fe23e7cc9c270874624e37e86458ad3"
+      },
+      "records": [
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000001-p1",
+          "output_face_ranges": [
+            [
+              0,
+              12
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        },
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000002-p1",
+          "output_face_ranges": [
+            [
+              12,
+              24
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        },
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000003-p1",
+          "output_face_ranges": [],
+          "reason": "frame_clip_threshold",
+          "status": "omitted"
+        }
+      ]
+    },
+    "200-True-0.0": {
+      "filter": {
+        "minimum_width_mm": 0.0,
+        "omitted_sources": 0
+      },
+      "grouping": {
+        "enabled": true,
+        "grouped_sources": 0,
+        "groups": 0,
+        "remaining_small_by_reason": {
+          "barrier_or_boundary": 0,
+          "no_nearby_eligible_partner": 0,
+          "no_valid_group_found": 0,
+          "protected_building": 0
+        },
+        "rescued_groups": 0,
+        "ungrouped_small_sources": 0,
+        "width_mm": 0.8
+      },
+      "meshes": {
+        "base": "65005f110684e8221fcc42f9b2297a74e22814d6d99313063ffc6dfe9f8f0e3b",
+        "buildings": "e7f485e503a432dae7101b8025b7cd37760631e3595625958de03a888f66e785",
+        "roads": "d9dff36c4b1c33e8e558324e8b8eb6140544720a0fd6876be8b161e3f69c26e0",
+        "route": "b2970d5daa4dafd645d20ff05243f1d80fe23e7cc9c270874624e37e86458ad3"
+      },
+      "records": [
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000001-p1",
+          "output_face_ranges": [
+            [
+              0,
+              12
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        },
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000002-p1",
+          "output_face_ranges": [
+            [
+              12,
+              24
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        },
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000003-p1",
+          "output_face_ranges": [],
+          "reason": "frame_clip_threshold",
+          "status": "omitted"
+        }
+      ]
+    },
+    "200-True-0.8": {
+      "filter": {
+        "minimum_width_mm": 0.8,
+        "omitted_sources": 0
+      },
+      "grouping": {
+        "enabled": true,
+        "grouped_sources": 0,
+        "groups": 0,
+        "remaining_small_by_reason": {
+          "barrier_or_boundary": 0,
+          "no_nearby_eligible_partner": 0,
+          "no_valid_group_found": 0,
+          "protected_building": 0
+        },
+        "rescued_groups": 0,
+        "ungrouped_small_sources": 0,
+        "width_mm": 0.8
+      },
+      "meshes": {
+        "base": "65005f110684e8221fcc42f9b2297a74e22814d6d99313063ffc6dfe9f8f0e3b",
+        "buildings": "e7f485e503a432dae7101b8025b7cd37760631e3595625958de03a888f66e785",
+        "roads": "d9dff36c4b1c33e8e558324e8b8eb6140544720a0fd6876be8b161e3f69c26e0",
+        "route": "b2970d5daa4dafd645d20ff05243f1d80fe23e7cc9c270874624e37e86458ad3"
+      },
+      "records": [
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000001-p1",
+          "output_face_ranges": [
+            [
+              0,
+              12
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        },
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000002-p1",
+          "output_face_ranges": [
+            [
+              12,
+              24
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        },
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000003-p1",
+          "output_face_ranges": [],
+          "reason": "frame_clip_threshold",
+          "status": "omitted"
+        }
+      ]
+    },
+    "20000-False-0.0": {
+      "filter": {
+        "minimum_width_mm": 0.0,
+        "omitted_sources": 0
+      },
+      "grouping": {
+        "enabled": false,
+        "grouped_sources": 0,
+        "groups": 0,
+        "ungrouped_small_sources": 0,
+        "width_mm": null
+      },
+      "meshes": {
+        "base": "65005f110684e8221fcc42f9b2297a74e22814d6d99313063ffc6dfe9f8f0e3b",
+        "buildings": "f2910ba00d2405fefb19fc35d417d278ba5d0a9917f4187a698339d8879bac39",
+        "roads": "3f7c10773f418351e5e65aa3ba09ef9cce9869951437014d5feae62c9d32c528",
+        "route": "e672a6b3f7af7360d7b6bde2ebc00f574dd945e20b25d7bb1da89e4de305ccd6"
+      },
+      "records": [
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000001-p1",
+          "output_face_ranges": [
+            [
+              0,
+              12
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        },
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000002-p1",
+          "output_face_ranges": [
+            [
+              12,
+              24
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        },
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000003-p1",
+          "output_face_ranges": [
+            [
+              24,
+              36
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        }
+      ]
+    },
+    "20000-True-0.0": {
+      "filter": {
+        "minimum_width_mm": 0.0,
+        "omitted_sources": 0
+      },
+      "grouping": {
+        "enabled": true,
+        "grouped_sources": 0,
+        "groups": 0,
+        "remaining_small_by_reason": {
+          "barrier_or_boundary": 1,
+          "no_nearby_eligible_partner": 1,
+          "no_valid_group_found": 0,
+          "protected_building": 1
+        },
+        "rescued_groups": 0,
+        "ungrouped_small_sources": 3,
+        "width_mm": 0.8
+      },
+      "meshes": {
+        "base": "65005f110684e8221fcc42f9b2297a74e22814d6d99313063ffc6dfe9f8f0e3b",
+        "buildings": "f2910ba00d2405fefb19fc35d417d278ba5d0a9917f4187a698339d8879bac39",
+        "roads": "86828e994ccffb1b4af7ef7560449e1763d30e9867cd0d769557b354e3388025",
+        "route": "e672a6b3f7af7360d7b6bde2ebc00f574dd945e20b25d7bb1da89e4de305ccd6"
+      },
+      "records": [
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000001-p1",
+          "output_face_ranges": [
+            [
+              0,
+              12
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        },
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000002-p1",
+          "output_face_ranges": [
+            [
+              12,
+              24
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        },
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000003-p1",
+          "output_face_ranges": [
+            [
+              24,
+              36
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        }
+      ]
+    },
+    "20000-True-0.8": {
+      "filter": {
+        "minimum_width_mm": 0.8,
+        "omitted_sources": 1
+      },
+      "grouping": {
+        "enabled": true,
+        "grouped_sources": 0,
+        "groups": 0,
+        "remaining_small_by_reason_before_filter": {
+          "barrier_or_boundary": 1,
+          "no_nearby_eligible_partner": 1,
+          "no_valid_group_found": 0,
+          "protected_building": 1
+        },
+        "rescued_groups": 0,
+        "ungrouped_small_sources": 2,
+        "width_mm": 0.8
+      },
+      "meshes": {
+        "base": "65005f110684e8221fcc42f9b2297a74e22814d6d99313063ffc6dfe9f8f0e3b",
+        "buildings": "a1afd85f89d190ecacb3fed0a1e816c5aebf8461a0f3a56b0b658b447ab6ec77",
+        "roads": "86828e994ccffb1b4af7ef7560449e1763d30e9867cd0d769557b354e3388025",
+        "route": "e672a6b3f7af7360d7b6bde2ebc00f574dd945e20b25d7bb1da89e4de305ccd6"
+      },
+      "records": [
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000001-p1",
+          "output_face_ranges": [],
+          "reason": "residential_below_minimum_print_width",
+          "status": "omitted"
+        },
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000002-p1",
+          "output_face_ranges": [
+            [
+              0,
+              12
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        },
+        {
+          "group_id": null,
+          "group_source_ids": null,
+          "id": "b000003-p1",
+          "output_face_ranges": [
+            [
+              12,
+              24
+            ]
+          ],
+          "reason": "individual_extrusion",
+          "status": "retained"
+        }
+      ]
+    }
+  },
+  "comparison": "All six cases matched exactly against an isolated dev snapshot.",
+  "method": "SHA-256 of raw vertices + faces per mesh; exact source status/group/filter comparison."
+}

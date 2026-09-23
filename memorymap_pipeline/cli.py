@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import json
 from pathlib import Path
 
 from .config import load_config, route_height_for_profile
+from .print_scale import PrintScaleContext
 from .gpx_loader import load_route_from_gpx
 from .mesh import (
     build_base_plate,
@@ -90,6 +92,13 @@ def main() -> None:
     # compute transform once and apply to any other layer (routes, roads, future layers)
     transform = compute_normalize_center_transform(projected, width_mm=map_width, height_mm=map_height, margin_mm=margin_mm)
     scaled = apply_transform(projected, transform)
+    print_scale = PrintScaleContext.from_transform(transform, config)
+    generalization_stats = {
+        **print_scale.diagnostics(),
+        "mode": config["building_generalization_mode"],
+        "thresholds_applied_to_geometry": False,
+        "measurement_status": "unavailable" if args.include_buildings else "disabled",
+    }
 
     base_mesh = None
     if args.include_base:
@@ -190,8 +199,13 @@ def main() -> None:
             buildings_file=buildings_file_arg,
             overlay_roads=unioned,
             route_points=scaled,
+            print_scale_context=print_scale,
+            generalization_stats=generalization_stats,
         )
 
+    logger.info("BUILDING GENERALIZATION CONTEXT %s", json.dumps(
+        generalization_stats, sort_keys=True, allow_nan=False,
+    ))
     if base_mesh is not None:
         center_meshes_to_base([route_mesh] + ([roads_mesh] if roads_mesh is not None else []) + ([buildings_mesh] if buildings_mesh is not None else []), map_width, map_height)
 
