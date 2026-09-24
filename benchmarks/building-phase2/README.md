@@ -88,7 +88,7 @@ build workflow tests the branch and packages the preview executable on push.
 
 ## Validation and limits
 
-- Full local suite: 408 passed (74 existing/dependency warnings).
+- Full local suite after performance follow-up: 421 passed (76 dependency/deprecation warnings).
 - Six manual-mode mesh/source-record fingerprint comparisons: exact match.
 - New tests cover unknown small/tall cases, road barriers, ordering, courtyards,
   contacting parts, clipped roofs, the actual Peachtree crossing, sidecar lifecycle,
@@ -99,5 +99,17 @@ build workflow tests the branch and packages the preview executable on push.
   remaining projected route overlap, and preserved the 22.466 mm highest structure.
   Grouping was disabled because original road/water/source data was unavailable.
   Its 4,202 omissions are NOT a forecast for a source-classified fresh generation.
-- Full Peachtree regeneration, a fresh slice, and a physical right-side test remain
-  required. The new executable does not establish that stringing is eliminated.
+- Full frozen-input Peachtree regeneration and audited export completed; see the
+  performance follow-up below. A fresh slice and physical right-side test remain
+  required. The executable does not establish that stringing is eliminated.
+
+## Performance follow-up
+
+The Phase 2 performance regression, measured road-barrier benchmark, validation
+and remaining limitations are documented in [PERFORMANCE.md](PERFORMANCE.md).
+The next filter architecture is planned in [BUILDING_FILTER_PLAN.md](BUILDING_FILTER_PLAN.md);
+that redesign is not part of the performance fix.
+
+The full frozen-input follow-up, exact output comparison, remaining hotspots and
+review guide are in [PERFORMANCE_FOLLOWUP.md](PERFORMANCE_FOLLOWUP.md).
+Height controls remain planned in [BUILDING_HEIGHT_CONTROLS_PLAN.md](BUILDING_HEIGHT_CONTROLS_PLAN.md).

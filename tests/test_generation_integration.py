@@ -263,6 +263,11 @@ def test_full_generation_uses_frame_for_every_local_layer(tmp_path):
     assert result.output_path == output
     assert output.is_file()
     assert progress and progress[-1] == 100
+    assert progress == sorted(progress)
+    assert any(55 < value < 85 for value in progress)
+    stage_seconds = result.stats["building_generalization"]["stage_seconds"]
+    assert {"source_loading", "footprint_preparation", "extrusion", "width_diagnostics", "assembly"} <= stage_seconds.keys()
+    assert all(value >= 0 for value in stage_seconds.values())
     assert result.stats["roads"] > 0
     assert result.stats["buildings"] == 2  # third footprint is entirely east of the frame
     height_distribution = result.stats["building_height_distribution"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
+from time import perf_counter
 from typing import Callable
 
 import numpy as np
@@ -13,9 +14,8 @@ from trimesh import Trimesh
 
 from .building_classification import BuildingClass, classify_building, preset_for
 from .building_filtering import residential_omissions
-from .building_grouping import group_footprints
 from .building_generalization import disposition_diagnostics, measure_footprints
-from .print_scale import PrintScaleContext
+from .building_grouping import group_footprints
 from .building_optimization import optimize_buildings
 from .geometry import repair_polygon
 from .landmarks import (
@@ -24,9 +24,9 @@ from .landmarks import (
     load_default_landmark_registry,
 )
 from .mesh import route_mesh_from_polygon
+from .print_scale import PrintScaleContext
 from .projection import apply_transform, project_lonlat_array
 from .stadiums import StadiumRecipe, build_stadium_mesh
-
 
 SUPPORTED_ROOF_SHAPES = {"flat", "gabled", "hipped", "pyramidal", "skillion"}
 MIN_PLAUSIBLE_LEVEL_HEIGHT_M = 1.5
@@ -415,11 +415,18 @@ def _tags_from_gdf_row(row, columns: list[str]) -> dict:
     """Build a plain tag dict from a GeoDataFrame row, dropping missing values."""
     import math
 
+    # GeoDataFrame rows have object dtype. Read that array once rather than
+    # doing a pandas label lookup for every OSM column, preserving native tag
+    # objects (including lists/arrays) and the original index identity below.
+    values = (
+        dict(zip(row.index, row.to_numpy(copy=False)))
+        if hasattr(row, "to_numpy") and row.index.is_unique else row
+    )
     tags: dict = {}
     for col in columns:
         if col == "geometry":
             continue
-        val = row[col]
+        val = values[col]
         # Drop None and float NaN (covers pandas NaN without requiring pandas import)
         if val is None:
             continue
@@ -853,6 +860,7 @@ def download_and_build_buildings(
     generalization_stats: dict | None = None,
     generalization_mode: str = "manual",
     route_exclusion: geom.base.BaseGeometry | None = None,
+    progress_callback: Callable[[float, str], None] | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
@@ -870,10 +878,36 @@ def download_and_build_buildings(
     if optimized and print_scale_context is None:
         raise ValueError("Print optimization requires a print scale context")
     records: list[dict] = []
+    # This cache lives for one generation only; changed geometry gets a new WKB key.
+    width_cache = {}
+    stage_seconds = (
+        generalization_stats.setdefault("stage_seconds", {})
+        if generalization_stats is not None else {}
+    )
+    stage_name = None
+    stage_started = perf_counter()
+
+    def progress(fraction, message):
+        if progress_callback is not None:
+            progress_callback(fraction, message)
+
+    def stage(name, fraction, message):
+        nonlocal stage_name, stage_started
+        now = perf_counter()
+        if stage_name is not None:
+            stage_seconds[stage_name] = now - stage_started
+            logging.getLogger(__name__).info("Building stage %s: %.3fs", stage_name, now - stage_started)
+        stage_name, stage_started = name, now
+        progress(fraction, message)
+
+    stage("source_loading", 0.0, "Loading building footprints")
 
     def report_generalization(footprints):
         if generalization_stats is not None and print_scale_context is not None:
-            generalization_stats.update(measure_footprints(footprints, print_scale_context))
+            generalization_stats.update(measure_footprints(
+                footprints, print_scale_context, width_cache=width_cache,
+                progress_callback=lambda f: progress(.86 + .04 * f, "Measuring source building widths"),
+            ))
             generalization_stats.update(disposition_diagnostics(records))
             generalization_stats["measurement_status"] = "measured"
 
@@ -1023,6 +1057,7 @@ def download_and_build_buildings(
         landmark_registry = None
 
     # Margin-inset plate boundary used for clip/omit decisions
+    stage("footprint_preparation", .08, "Preparing and classifying building footprints")
     plate_box = geom.box(margin_mm, margin_mm, map_width_mm - margin_mm, map_height_mm - margin_mm)
     frame = transform.get("map_frame")
     horizontal_scale_mm_per_m = (
@@ -1038,6 +1073,9 @@ def download_and_build_buildings(
 
     diagnostic_by_geometry: dict[int, dict] = {}
     for source_index, (g, tags) in enumerate(geo_with_tags, 1):
+        if source_index % 100 == 0:
+            progress(.08 + .10 * source_index / len(geo_with_tags),
+                     f"Preparing building footprints {source_index}/{len(geo_with_tags)}")
         if g is not None and g.geom_type == "Polygon":
             polys = [g]
         elif g is not None and g.geom_type == "MultiPolygon":
@@ -1143,7 +1181,9 @@ def download_and_build_buildings(
             record.update(status="unresolved", reason="not_meshed")
 
     if not elements:
+        stage("width_diagnostics", .85, "Measuring building widths")
         report_generalization([])
+        stage(None, 1.0, "No building footprints in frame")
         return None, None
 
     part_union = ops.unary_union([poly for poly, _dims, is_part, _landmark in elements if is_part])
@@ -1197,12 +1237,17 @@ def download_and_build_buildings(
     ]
     measurement_footprints = [p for p, _d, part, lm in elements if not part and lm is None]
     optimization = None
+    stage("optimization", .20, "Applying building policy")
     if optimized:
         optimization = optimize_buildings(
             elements, rendered_element_heights, print_scale_context,
             allowed_region=plate_box, barriers=grouping_barriers,
             route_exclusion=route_exclusion, allow_grouping=grouping is not None,
             max_group_height_mm=grouping["max_height_mm"] if grouping else 3.0,
+            width_cache=width_cache,
+            progress_callback=lambda f, message: progress(.20 + .40 * f, message),
+            timings=(generalization_stats.setdefault("optimization_seconds", {})
+                     if generalization_stats is not None else None),
         )
         updated = []
         for i, (poly, dims, part, landmark) in enumerate(elements):
@@ -1215,6 +1260,7 @@ def download_and_build_buildings(
             diagnostic_by_geometry[id(result)] = record
             updated.append((result, dims, part, landmark))
         elements = updated
+    stage("support_and_manual_grouping", .60, "Resolving building supports and groups")
     # Real-world support does not guarantee contact after visual height mapping:
     # each building's tier and footprint can change its vertical scale.
     vertical_bounds = []
@@ -1282,6 +1328,7 @@ def download_and_build_buildings(
             width_mm=grouping["width_mm"], gap_mm=grouping["gap_mm"],
             span_mm=grouping["span_mm"], allowed_region=plate_box,
             diagnostics=grouping_diagnostics,
+            progress_callback=lambda f, message: progress(.60 + .05 * f, message),
         )
         for group in groups:
             grouped_at[group.members[0]] = group
@@ -1311,11 +1358,15 @@ def download_and_build_buildings(
             )
     output_footprints = []
 
+    stage("extrusion", .65, "Extruding building meshes")
     # Extrude each building individually then concatenate into one mesh
     meshes = []
     face_cursor = 0
     surface_z = z_offset + embed_depth_mm
     for element_index, (poly, dimensions, _is_part, landmark) in enumerate(elements):
+        if element_index % 100 == 0:
+            progress(.65 + .20 * element_index / len(elements),
+                     f"Extruding buildings {element_index}/{len(elements)}")
         if element_index in omitted_residential:
             continue
         if element_index in grouped_members and element_index not in grouped_at:
@@ -1488,14 +1539,19 @@ def download_and_build_buildings(
                 )
         face_cursor += face_count
 
+    stage("width_diagnostics", .85, "Measuring building widths")
     report_generalization(measurement_footprints)
     if optimized and generalization_stats is not None:
         generalization_stats.update(
             thresholds_applied_to_geometry=True,
-            output_widths=measure_footprints(output_footprints, print_scale_context),
+            output_widths=measure_footprints(
+                output_footprints, print_scale_context, width_cache=width_cache,
+                progress_callback=lambda f: progress(.90 + .05 * f, "Measuring output building widths"),
+            ),
             decisions={action: sum(r.get("optimization", {}).get("action") == action for r in records)
                        for action in ("preserved", "simplified", "grouped", "enlarged", "omitted", "unresolved")},
         )
+    stage("assembly", .95, "Assembling building meshes")
     final_mesh = None
     if meshes:
         try:
@@ -1560,4 +1616,5 @@ def download_and_build_buildings(
         except Exception:
             pass
 
+    stage(None, 1.0, "Building meshes assembled")
     return unioned, final_mesh

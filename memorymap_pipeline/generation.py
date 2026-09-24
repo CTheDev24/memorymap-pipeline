@@ -7,10 +7,11 @@ import os
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Callable
 
 import numpy as np
-from shapely import area, contains_xy, intersection, polygons
+from shapely import area, contains_xy, intersection, intersects, polygons, prepare
 from shapely.geometry import LineString, MultiPoint, box
 from shapely.ops import unary_union
 from trimesh.util import concatenate
@@ -349,6 +350,30 @@ def _restore_hydroflattened_land(
     if filled_count == 0:
         return surface, 0
     return replace(surface, heights_mm=repaired), filled_count
+
+
+def _building_route_overlap(triangles, route_exclusion, progress_callback=None, *, chunk_size=4096):
+    """Check every projected mesh face, including roofs, with exact intersections.
+
+    Prepared predicates reject disjoint faces cheaply. Chunking bounds temporary
+    polygon memory and provides progress without weakening the clearance gate.
+    """
+    if route_exclusion.is_empty:
+        if progress_callback is not None:
+            progress_callback(1.0)
+        return 0.0
+    prepare(route_exclusion)
+    overlaps = []
+    for start in range(0, len(triangles), chunk_size):
+        projected = polygons(triangles[start:start + chunk_size])
+        projected = projected[area(projected) > 1e-12]
+        hits = projected[intersects(route_exclusion, projected)]
+        overlaps.append(area(intersection(hits, route_exclusion)))
+        if progress_callback is not None:
+            progress_callback(min(1.0, (start + chunk_size) / len(triangles)))
+    if progress_callback is not None:
+        progress_callback(1.0)
+    return float(np.sum(np.concatenate(overlaps))) if overlaps else 0.0
 
 
 def generate_memory_map(
@@ -1123,7 +1148,8 @@ def generate_memory_map(
                         config.get("road_terrain_min_visible_height_mm", 0.4)
                     ),
                 )
-    progress(55, "Road mesh complete")
+    progress(55, "Preparing building barriers")
+    building_barriers_started = perf_counter()
 
     route_exclusion = None
     if print_optimized and request.include_route:
@@ -1175,6 +1201,9 @@ def generate_memory_map(
         "thresholds_applied_to_geometry": False,
         "measurement_status": "unavailable" if request.include_buildings else "disabled",
     }
+    building_generalization_stats["stage_seconds"] = {
+        "barrier_preparation": perf_counter() - building_barriers_started,
+    }
     unioned_buildings = None
     buildings_mesh = None
     if request.include_buildings:
@@ -1219,6 +1248,7 @@ def generate_memory_map(
             generalization_stats=building_generalization_stats,
             generalization_mode=config["building_generalization_mode"],
             route_exclusion=route_exclusion,
+            progress_callback=lambda f, message: progress(55 + int(27 * f), message),
         )
         finally:
             logging.getLogger().removeHandler(collector)
@@ -1239,15 +1269,15 @@ def generate_memory_map(
             f"source footprints below {building_filter_stats['minimum_width_mm']:g} mm after grouping. "
             "Unclassified and protected buildings are retained; inspect the sliced model."
         )
-    logging.info("BUILDING GENERALIZATION CONTEXT %s", json.dumps(
-        building_generalization_stats, sort_keys=True, allow_nan=False,
-    ))
     if print_optimized and buildings_mesh is not None and route_exclusion is not None:
         # Include roofs and landmark enhancements, not only the input footprints.
-        triangles = buildings_mesh.triangles[:, :, :2]
-        projected = polygons(triangles)
-        projected = projected[area(projected) > 1e-12]
-        overlap = float(np.sum(area(intersection(projected, route_exclusion))))
+        progress(82, "Checking building route clearance")
+        route_check_started = perf_counter()
+        overlap = _building_route_overlap(
+            buildings_mesh.triangles[:, :, :2], route_exclusion,
+            lambda f: progress(82 + int(2 * f), "Checking building route clearance"),
+        )
+        building_generalization_stats["stage_seconds"]["route_clearance_check"] = perf_counter() - route_check_started
         building_generalization_stats["route_exclusion_projected_overlap_mm2"] = overlap
         if overlap > 1e-6:
             raise ValueError("Optimized building geometry crosses the route clearance corridor")
@@ -1257,6 +1287,9 @@ def generate_memory_map(
             f"{counts.get(action, 0)} {action}" for action in
             ("simplified", "grouped", "enlarged", "omitted", "unresolved")
         ) + ". Unknown source classifications are preserved in the audit report.")
+    logging.info("BUILDING GENERALIZATION CONTEXT %s", json.dumps(
+        building_generalization_stats, sort_keys=True, allow_nan=False,
+    ))
     progress(85, "Building mesh complete")
 
     if all(

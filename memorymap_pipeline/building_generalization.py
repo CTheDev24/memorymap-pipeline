@@ -6,6 +6,7 @@ import math
 from enum import Enum
 
 import numpy as np
+import shapely
 from shapely.errors import ShapelyError
 
 from .print_scale import PrintScaleContext
@@ -32,12 +33,17 @@ def has_local_core(polygon, width_mm: float) -> bool:
     return not polygon.buffer(-radius, join_style=2).is_empty
 
 
-def local_core_width_mm(polygon) -> float:
+def local_core_width_mm(polygon, *, cache=None) -> float:
     """Binary-search the collapse width to 0.0001 mm using mitred erosion.
 
     Bounds only bracket the search; they are never used as the width metric.
-    Holes and multipart geometry participate in every erosion.
+    Holes and multipart geometry participate in every erosion. A caller-owned
+    cache may reuse exact WKB matches within one generation; no global cache or
+    rounded-coordinate keys are used.
     """
+    key = polygon.wkb if cache is not None else None
+    if cache is not None and key in cache:
+        return cache[key]
     if polygon.is_empty or not polygon.is_valid or polygon.area <= 0:
         raise ValueError("Local width requires valid nonempty polygonal geometry")
     x0, y0, x1, y1 = polygon.bounds
@@ -50,15 +56,59 @@ def local_core_width_mm(polygon) -> float:
             high = middle
         else:
             low = middle
-    return (low + high) / 2
+    result = (low + high) / 2
+    if cache is not None:
+        cache[key] = result
+    return result
 
 
-def measure_footprints(footprints, context: PrintScaleContext) -> dict:
+def _cache_width_batch(footprints, cache):
+    """Run the identical erosion search in bounded vectorized batches.
+
+    Failures fall back to the existing per-polygon diagnostic path. Nothing is
+    approximated: bounds, midpoints, mitre settings and stopping tolerance match
+    local_core_width_mm, including independent convergence for each geometry.
+    """
+    pending = {p.wkb: p for p in footprints if p.wkb not in cache}
+    if not pending:
+        return
+    keys, values = list(pending), np.array(list(pending.values()), dtype=object)
+    try:
+        valid = ~shapely.is_empty(values) & shapely.is_valid(values) & (shapely.area(values) > 0)
+        indices = np.flatnonzero(valid)
+        polygons = values[indices]
+        bounds = shapely.bounds(polygons)
+        low = np.zeros(len(polygons))
+        high = np.minimum(bounds[:, 2] - bounds[:, 0], bounds[:, 3] - bounds[:, 1])
+        for _ in range(48):
+            active = np.flatnonzero(high - low > WIDTH_TOLERANCE_MM)
+            if not len(active):
+                break
+            middle = (low[active] + high[active]) / 2
+            empty = shapely.is_empty(shapely.buffer(
+                polygons[active], -middle / 2, quad_segs=16, join_style=2,
+            ))
+            high[active[empty]] = middle[empty]
+            low[active[~empty]] = middle[~empty]
+        for index, width in zip(indices, (low + high) / 2):
+            cache[keys[index]] = float(width)
+    except (ShapelyError, ValueError, ArithmeticError):
+        return
+
+
+def measure_footprints(
+    footprints, context: PrintScaleContext, *, width_cache=None, progress_callback=None,
+) -> dict:
     widths = []
+    width_cache = {} if width_cache is None else width_cache
     marginal = robust = failed = 0
-    for polygon in footprints:
+    for i, polygon in enumerate(footprints):
+        if i % 128 == 0:
+            _cache_width_batch(footprints[i:i + 128], width_cache)
+        if progress_callback is not None and i % 100 == 0:
+            progress_callback(i / max(1, len(footprints)))
         try:
-            width = local_core_width_mm(polygon)
+            width = local_core_width_mm(polygon, cache=width_cache)
             below_marginal = not has_local_core(polygon, context.marginal_width_mm)
             below_robust = not has_local_core(polygon, context.robust_width_mm)
             if not math.isfinite(width):
@@ -70,6 +120,8 @@ def measure_footprints(footprints, context: PrintScaleContext) -> dict:
         widths.append(width)
         marginal += below_marginal
         robust += below_robust
+    if progress_callback is not None:
+        progress_callback(1.0)
     widths.sort()
     count = len(widths)
     result = {

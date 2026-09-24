@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Mapping
@@ -80,6 +81,40 @@ def _mesh_components(layer: str, mesh: Trimesh) -> tuple[list[_Component], np.nd
         face_component[indices] = component_index
         components.append(_Component(layer, component_index, indices))
     return components, face_component
+
+
+class _SupportCache:
+    """Bounded to one export; geometry edits invalidate support reachability.
+
+    Hash complete vertex/face buffers, not bounds or object identity. Coloring and
+    metadata edits do not alter support. Topology validation still runs in full.
+    """
+
+    def __init__(self):
+        self.components = {}
+        self.floating_key = None
+        self.floating_result = None
+
+    def mesh_components(self, layer, mesh):
+        digest = hashlib.sha256()
+        for array in (mesh.vertices, mesh.faces):
+            array = np.ascontiguousarray(array)
+            digest.update(str((array.shape, array.dtype.str)).encode())
+            digest.update(array.view(np.uint8))
+        key = digest.digest()
+        entry = self.components.get(layer)
+        if entry is None or entry[0] != key:
+            entry = (key, _mesh_components(layer, mesh))
+            self.components[layer] = entry
+        return entry[1]
+
+    def floating(self, active, component_lookup, face_components, **settings):
+        key = (tuple((layer, self.components[layer][0]) for layer in active),
+               tuple(sorted(settings.items())))
+        if key != self.floating_key:
+            result = _floating_components(active, component_lookup, face_components, **settings)
+            self.floating_key, self.floating_result = key, result
+        return self.floating_result
 
 
 def _triangle_height(triangle: np.ndarray, x: float, y: float) -> float | None:
@@ -242,6 +277,7 @@ def remove_small_floating_components(
     contact_tolerance_mm: float = 0.03,
     maximum_overlap_mm: float = 5.0,
     maximum_samples_per_component: int = 96,
+    _cache: _SupportCache | None = None,
 ) -> tuple[Trimesh | None, int]:
     """Drop only tiny shells proven to have no support path to the base."""
     active = {name: mesh for name, mesh in meshes.items() if mesh is not None}
@@ -252,11 +288,14 @@ def remove_small_floating_components(
     component_lookup: dict[tuple[str, int], _Component] = {}
     face_components: dict[str, np.ndarray] = {}
     for name, mesh in active.items():
-        components, face_component = _mesh_components(name, mesh)
+        components, face_component = (
+            _mesh_components(name, mesh) if _cache is None
+            else _cache.mesh_components(name, mesh)
+        )
         face_components[name] = face_component
         component_lookup.update((component.key, component) for component in components)
 
-    floating = _floating_components(
+    floating = (_floating_components if _cache is None else _cache.floating)(
         active,
         component_lookup,
         face_components,
@@ -291,6 +330,7 @@ def audit_printability(
     contact_tolerance_mm: float = 0.03,
     maximum_overlap_mm: float = 5.0,
     maximum_samples_per_component: int = 96,
+    _cache: _SupportCache | None = None,
 ) -> PrintabilityReport:
     """Check manifold topology and ensure every shell has a support path to the base.
 
@@ -343,14 +383,17 @@ def audit_printability(
                     f"{layer} does not define a positive outward-facing volume",
                 )
             )
-        components, face_component = _mesh_components(layer, mesh)
+        components, face_component = (
+            _mesh_components(layer, mesh) if _cache is None
+            else _cache.mesh_components(layer, mesh)
+        )
         face_components[layer] = face_component
         component_lookup.update((component.key, component) for component in components)
 
     if invalid_coordinates or "base" not in active:
         return PrintabilityReport(tuple(issues))
 
-    floating_by_layer = _floating_components(
+    floating_by_layer = (_floating_components if _cache is None else _cache.floating)(
         active,
         component_lookup,
         face_components,

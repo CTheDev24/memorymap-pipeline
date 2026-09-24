@@ -1,0 +1,248 @@
+{
+  "status": "completed",
+  "generation_seconds": 1091.5504098999954,
+  "source_acquisition_seconds": 202.22937889999594,
+  "roads_seconds": 159.10041339998133,
+  "export_and_audit_seconds": 218.54788100000587,
+  "frame": {
+    "center_lat": 33.81613,
+    "center_lon": -84.37798405000001,
+    "coverage_width_m": 6361.932283081756,
+    "coverage_height_m": 8036.124989155903,
+    "print_width_mm": 190,
+    "print_height_mm": 240,
+    "margin_mm": 0,
+    "rotation_degrees": 0.0
+  },
+  "config": {
+    "building_generalization_mode": "print_optimized",
+    "line_width_mm": 0.42,
+    "max_print_height_mm": 26,
+    "terrain_enabled": false,
+    "water_enabled": false,
+    "flat_border_enabled": false,
+    "route_markers": "both",
+    "style_profile": "urban"
+  },
+  "gpx_sha256": "dc605a642cd8304a1880649400f81588ab5e40849a8c70d209a57ed6e9c234dd",
+  "sources": {
+    "roads": {
+      "path": "roads.geojson",
+      "features": 118220,
+      "sha256": "bd3a56c92c2475fc7dcb8bac2fb96cac2485ca3183216d7912110ec6825d53ac",
+      "acquired_at": "2026-09-24T20:35:32.805099+00:00",
+      "acquisition_seconds": 123.8174083000049,
+      "origin": "OpenStreetMap via OSMnx / Overpass",
+      "license": "ODbL 1.0; OpenStreetMap contributors"
+    },
+    "water": {
+      "path": "water.geojson",
+      "features": 476,
+      "sha256": "c9a96c641d2d137963a919d40728136d76ee0c0c4240d560a54b98bf855bcf3d",
+      "acquired_at": "2026-09-24T20:35:44.086012+00:00",
+      "acquisition_seconds": 11.283019499998773,
+      "origin": "OpenStreetMap via OSMnx / Overpass",
+      "license": "ODbL 1.0; OpenStreetMap contributors"
+    },
+    "buildings": {
+      "path": "buildings.geojson",
+      "features": 43628,
+      "sha256": "8a8baf80ec4580177b080dcad1f51b1b52a0f1f6fce5479d83e367cba7e54370",
+      "acquired_at": "2026-09-24T20:36:51.227041+00:00",
+      "acquisition_seconds": 67.12895109999226,
+      "origin": "OpenStreetMap via OSMnx / Overpass",
+      "license": "ODbL 1.0; OpenStreetMap contributors"
+    }
+  },
+  "building_generalization": {
+    "mm_per_meter": 0.029865140266466795,
+    "meters_per_mm": 33.48385412148293,
+    "x_mm_per_meter": 0.029865140266466795,
+    "y_mm_per_meter": 0.029865140266466795,
+    "nozzle_diameter_mm": 0.4,
+    "line_width_mm": 0.42,
+    "layer_height_mm": null,
+    "xy_resolution_mm": 0.42,
+    "marginal_width_mm": 0.525,
+    "robust_width_mm": 0.84,
+    "simplify_tolerance_mm": 0.1575,
+    "merge_gap_mm": 0.42,
+    "group_span_mm": 4.2,
+    "route_clearance_mm": 0.84,
+    "effective_xy_resolution_mm": 0.42,
+    "anisotropic": false,
+    "mode": "print_optimized",
+    "thresholds_applied_to_geometry": true,
+    "measurement_status": "measured",
+    "stage_seconds": {
+      "barrier_preparation": 5.810096699977294,
+      "source_loading": 86.30152710000402,
+      "footprint_preparation": 55.715590400010115,
+      "optimization": 421.1766604000004,
+      "support_and_manual_grouping": 2.6171902999922168,
+      "extrusion": 28.517582100001164,
+      "width_diagnostics": 106.6789557999873,
+      "assembly": 4.859632500010775,
+      "route_clearance_check": 1.7994178000080865
+    },
+    "optimization_seconds": {
+      "simplification": 76.59384439999121,
+      "grouping": 311.6066470000078,
+      "printability": 32.36920239997562
+    },
+    "width_method": "maximum_surviving_mitred_erosion_core_v1",
+    "width_tolerance_mm": 0.0001,
+    "width_population": "clipped ordinary footprints after building-part subtraction, before grouping/filtering",
+    "measured_building_count": 23765,
+    "width_measurement_failed_count": 0,
+    "buildings_below_marginal_width": 22396,
+    "buildings_below_marginal_width_percent": 94.23942772985482,
+    "buildings_below_robust_width": 23184,
+    "buildings_below_robust_width_percent": 97.55522827687776,
+    "building_width_p10_mm": 0.15281177663610507,
+    "building_width_p50_mm": 0.3075172741040203,
+    "building_width_p90_mm": 0.42852799714219636,
+    "source_building_count": 43643,
+    "source_count_unit": "source polygon records (multipart sources can contribute multiple)",
+    "grouped_source_count": 12639,
+    "group_count": 3891,
+    "ungrouped_count": 1517,
+    "omitted_count": 29449,
+    "unresolved_count": 1133,
+    "output_widths": {
+      "width_method": "maximum_surviving_mitred_erosion_core_v1",
+      "width_tolerance_mm": 0.0001,
+      "width_population": "clipped ordinary footprints after building-part subtraction, before grouping/filtering",
+      "measured_building_count": 5408,
+      "width_measurement_failed_count": 0,
+      "buildings_below_marginal_width": 598,
+      "buildings_below_marginal_width_percent": 11.057692307692308,
+      "buildings_below_robust_width": 897,
+      "buildings_below_robust_width_percent": 16.58653846153846,
+      "building_width_p10_mm": 0.47361692360238505,
+      "building_width_p50_mm": 0.840037072227038,
+      "building_width_p90_mm": 1.0749992936736739
+    },
+    "decisions": {
+      "preserved": 97,
+      "simplified": 325,
+      "grouped": 12639,
+      "enlarged": 0,
+      "omitted": 10277,
+      "unresolved": 1095
+    },
+    "route_exclusion_projected_overlap_mm2": 1.6186989095877036e-13
+  },
+  "mesh_checks": {
+    "base": {
+      "vertices": 8,
+      "faces": 12,
+      "watertight": true,
+      "winding_consistent": true
+    },
+    "route": {
+      "vertices": 1438,
+      "faces": 2872,
+      "watertight": true,
+      "winding_consistent": true
+    },
+    "roads": {
+      "vertices": 763008,
+      "faces": 1531716,
+      "watertight": true,
+      "winding_consistent": true
+    },
+    "buildings": {
+      "vertices": 103456,
+      "faces": 185260,
+      "watertight": true,
+      "winding_consistent": true
+    },
+    "start_marker": {
+      "vertices": 66,
+      "faces": 128,
+      "watertight": true,
+      "winding_consistent": true
+    },
+    "finish_marker": {
+      "vertices": 66,
+      "faces": 128,
+      "watertight": true,
+      "winding_consistent": true
+    }
+  },
+  "export_validation": {
+    "audit_hash_matches": true,
+    "unresolved_source_reasons": {
+      "unsupported_or_null_geometry": 38
+    },
+    "protected_in_frame": 864,
+    "protected_actions": {
+      "simplified": 16,
+      "preserved": 89,
+      "unresolved": 693,
+      "omitted": 66
+    },
+    "exported_objects": {
+      "Base_White": {
+        "vertices": 8,
+        "faces": 12
+      },
+      "Route_Accent": {
+        "vertices": 1438,
+        "faces": 2872
+      },
+      "Start_Marker": {
+        "vertices": 66,
+        "faces": 128
+      },
+      "Finish_Marker": {
+        "vertices": 66,
+        "faces": 128
+      },
+      "Roads_Black": {
+        "vertices": 763008,
+        "faces": 1531716
+      },
+      "Buildings_Verification": {
+        "vertices": 103456,
+        "faces": 185260
+      },
+      "MemoryMap": {
+        "vertices": 0,
+        "faces": 0
+      }
+    }
+  },
+  "model_sha256": "e9d9c8ac36b638065a6b09466a7d8a8290874b73323b4b31e7a2186a5dd4aad8",
+  "progress_monotonic": true,
+  "route_matches_saved_model": {
+    "symmetric_difference_mm2": 0.0,
+    "hausdorff_distance_mm": 0.0,
+    "current_bounds": [
+      50.294496523750475,
+      5.002435891573624,
+      139.40604019744384,
+      235.00189158631218
+    ],
+    "saved_bounds": [
+      50.294496523750475,
+      5.002435891573624,
+      139.40604019744384,
+      235.00189158631218
+    ]
+  },
+  "warnings": [
+    "Building grouping uses 0.4 mm local streets and omits alleys/driveways to preserve printable neighborhood blocks.",
+    "Building grouping: 12639 source footprints combined into 3891 masses; 897 small footprints remain individual. Inspect the sliced result before printing.",
+    "Print-optimized buildings: 325 simplified, 12639 grouped, 0 enlarged, 10277 omitted, 1095 unresolved. Unknown source classifications are preserved in the audit report."
+  ],
+  "limitations": [
+    "Frozen current OSM sources; not the original stalled-build source snapshot",
+    "Exact stalled-build settings not fully known; route footprint matches saved model",
+    "Offline native-tag replay; source acquisition timed separately",
+    "No completed full pre-fix timing; no full-model speedup ratio claimed",
+    "No slicing or physical print validation"
+  ],
+  "stadium_standard_mass_fallback_count": 3
+}

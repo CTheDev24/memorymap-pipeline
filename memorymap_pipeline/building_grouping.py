@@ -10,6 +10,8 @@ from shapely.ops import unary_union
 from shapely.prepared import prep
 from shapely.strtree import STRtree
 
+from .spatial_area import AreaMask
+
 
 @dataclass(frozen=True)
 class FootprintGroup:
@@ -28,6 +30,7 @@ def group_footprints(
     maximum_members=128,
     allowed_region=None,
     diagnostics=None,
+    progress_callback=None,
 ):
     """Grow bounded neighborhood masses; never add area across a known barrier.
 
@@ -42,13 +45,14 @@ def group_footprints(
         obstacles.append(barriers)
     protected = unary_union(obstacles)
     prepared = prep(protected)
+    protected_area = AreaMask(protected)
     accepted_tree = None
     accepted_shapes = []
 
     def blocked(polygon):
         if allowed_region is not None and not allowed_region.covers(polygon):
             return True
-        if prepared.intersects(polygon) and polygon.intersection(protected).area > 1e-10:
+        if prepared.intersects(polygon) and protected_area.exceeds(polygon, 1e-10):
             return True
         return accepted_tree is not None and any(
             polygon.intersection(accepted_shapes[int(i)]).area > 1e-10
@@ -140,7 +144,10 @@ def group_footprints(
 
     groups = []
     failed_seeds = set()
-    for seed in sorted(available, key=order):
+    for position, seed in enumerate(sorted(available, key=order)):
+        if progress_callback is not None and position % 100 == 0:
+            progress_callback(.65 * position / max(1, len(initially_available)),
+                              f"Grouping building seeds {position}/{len(initially_available)}")
         if (
             seed not in available
             or seed in failed_seeds
@@ -174,7 +181,11 @@ def group_footprints(
     # A failed chain does not prove its members cannot join another partner.
     # Limit alternate partners to bound extra work in dense neighborhoods.
     rescued_groups = 0
-    for seed in sorted(available, key=order):
+    remaining_count = len(available)
+    for position, seed in enumerate(sorted(available, key=order)):
+        if progress_callback is not None and position % 100 == 0:
+            progress_callback(.65 + .35 * position / max(1, remaining_count),
+                              f"Checking alternate building groups {position}/{remaining_count}")
         if maximum_members < 2:
             break
         if seed not in available or substantial(footprints[seed]) or blocked(footprints[seed]):
@@ -222,4 +233,6 @@ def group_footprints(
                 reason = "no_valid_group_found"
             reasons[reason] += 1
         diagnostics.update(remaining_small_by_reason=reasons, rescued_groups=rescued_groups)
+    if progress_callback is not None:
+        progress_callback(1.0, "Building grouping complete")
     return groups

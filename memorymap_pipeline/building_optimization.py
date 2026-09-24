@@ -1,12 +1,15 @@
 """Opt-in, deterministic print-space decisions without inventing OSM classes."""
 
+import logging
 import math
 from dataclasses import dataclass
+from time import perf_counter
 
 import numpy as np
 from shapely import make_valid
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
+from shapely.prepared import prep
 from shapely.strtree import STRtree
 
 from .building_classification import BuildingClass
@@ -33,11 +36,36 @@ def parts(geometry):
     return [geometry] if geometry.geom_type == "Polygon" else list(geometry.geoms)
 
 
-def simplify_footprint(polygon, context, *, area_budget=0.2, forbidden=None):
+class _LocalObstacles:
+    """Exact union-overlap area without rebuilding a frame-wide union per source.
+
+    Intersection distributes over union. Clip only intersecting obstacles first,
+    then union those small pieces so overlapping barriers are not counted twice.
+    The source index is excluded, including when checking protected enlargement.
+    """
+
+    def __init__(self, sources, fixed):
+        self.sources = sources
+        self.tree = STRtree(sources)
+        self.fixed = [(geometry, prep(geometry)) for geometry in fixed if not geometry.is_empty]
+
+    def intersection_area(self, candidate, source_index):
+        if candidate.is_empty:
+            return 0.0
+        pieces = [candidate.intersection(geometry) for geometry, prepared in self.fixed
+                  if prepared.intersects(candidate)]
+        pieces.extend(candidate.intersection(self.sources[int(j)])
+                      for j in self.tree.query(candidate, predicate="intersects")
+                      if int(j) != source_index)
+        return unary_union(pieces).area if pieces else 0.0
+
+
+def simplify_footprint(polygon, context, *, area_budget=0.2, forbidden=None, forbidden_area=None):
     """Remove narrow appendages with opening, bounded by source area loss.
 
     Restrict to the source to avoid new neighbor/road conflicts. Retain large
     courtyard holes; return the source when a safe simplification is unavailable.
+    ``forbidden_area`` lazily measures exact obstacle overlap only for added area.
     """
     if polygon.is_empty:
         return polygon
@@ -56,7 +84,8 @@ def simplify_footprint(polygon, context, *, area_budget=0.2, forbidden=None):
     ]))
     added = filled.difference(polygon)
     if (added.area <= polygon.area * area_budget
-            and (forbidden is None or added.intersection(forbidden).area <= 1e-8)):
+            and (forbidden is None or added.intersection(forbidden).area <= 1e-8)
+            and (forbidden_area is None or forbidden_area(added) <= 1e-8)):
         candidate = filled
     return candidate
 
@@ -72,7 +101,8 @@ class OptimizationResult:
 
 def optimize_buildings(elements, heights, context: PrintScaleContext, *,
                        allowed_region, barriers=None, route_exclusion=None,
-                       allow_grouping=True, max_group_height_mm=3.0):
+                       allow_grouping=True, max_group_height_mm=3.0,
+                       width_cache=None, progress_callback=None, timings=None):
     """Keep semantics separate from physical policy, retaining source indices.
 
     Parts and their contacting parents are protected from independent cleanup;
@@ -81,8 +111,23 @@ def optimize_buildings(elements, heights, context: PrintScaleContext, *,
     """
     if not math.isfinite(max_group_height_mm) or max_group_height_mm <= 0:
         raise ValueError("Group height must be positive and finite")
+    stage_started = perf_counter()
+    width_cache = {} if width_cache is None else width_cache
+
+    def progress(fraction, message):
+        if progress_callback is not None:
+            progress_callback(fraction, message)
+
+    def timed_stage(name):
+        nonlocal stage_started
+        elapsed = perf_counter() - stage_started
+        if timings is not None:
+            timings[name] = elapsed
+        logging.getLogger(__name__).info("Building optimization %s: %.3fs", name, elapsed)
+        stage_started = perf_counter()
+
+    progress(0.0, "Preparing building optimization")
     original = [element[0] for element in elements]
-    source_tree = STRtree(original)
     part_shapes = unary_union([p for p, _d, is_part, _l in elements if is_part])
     protected_classes = {
         BuildingClass.LANDMARK, BuildingClass.STADIUM_ARENA,
@@ -94,7 +139,10 @@ def optimize_buildings(elements, heights, context: PrintScaleContext, *,
     minimum_area = width ** 2
     route = Polygon() if route_exclusion is None else route_exclusion
     obstacles = Polygon() if barriers is None else barriers
+    local_obstacles = _LocalObstacles(original, [obstacles, route])
     for i, (source, dims, is_part, landmark) in enumerate(elements):
+        if i % 100 == 0:
+            progress(.4 * i / max(1, len(elements)), f"Simplifying building footprints {i}/{len(elements)}")
         linked = is_part or (not part_shapes.is_empty and source.intersects(part_shapes))
         courtyard = any(Polygon(hole).area >= minimum_area
                         for part in parts(source) for hole in part.interiors)
@@ -116,10 +164,9 @@ def optimize_buildings(elements, heights, context: PrintScaleContext, *,
             decision.update(action="omitted", reason="route_exclusion",
                             output_area_mm2=0.0, output_core_width_mm=0.0)
         elif not protected:
-            nearby = [original[int(j)] for j in source_tree.query(clipped)
-                      if int(j) != i]
             simplified = simplify_footprint(
-                clipped, context, forbidden=unary_union([obstacles, route, *nearby])
+                clipped, context,
+                forbidden_area=lambda added, source_index=i: local_obstacles.intersection_area(added, source_index),
             )
             if not simplified.equals(clipped):
                 decision.update(action="simplified", reason="small_boundary_details")
@@ -134,11 +181,16 @@ def optimize_buildings(elements, heights, context: PrintScaleContext, *,
     # Empty sources remain indexed for provenance but never participate in groups.
     eligible = [i for i in ordinary if i not in omitted
                 and footprints[i].geom_type == "Polygon" and not footprints[i].interiors]
+    timed_stage("simplification")
+    progress(.4, "Grouping building footprints")
     groups = group_footprints(
         footprints, eligible, unary_union([obstacles, route]),
         width_mm=width, gap_mm=context.merge_gap_mm, span_mm=context.group_span_mm,
         allowed_region=allowed_region,
+        progress_callback=lambda fraction, message: progress(.4 + .35 * fraction, message),
     ) if allow_grouping else []
+    timed_stage("grouping")
+    progress(.75, "Finalizing building printability")
     accepted_groups = []
     group_heights = {}
     for group in groups:
@@ -150,12 +202,16 @@ def optimize_buildings(elements, heights, context: PrintScaleContext, *,
         accepted_groups.append(FootprintGroup(group.members, geometry))
         representative = min(max_group_height_mm, float(np.median([heights[i] for i in group.members])))
         group_heights[group.members[0]] = representative
+        group_width = local_core_width_mm(geometry, cache=width_cache)
         for i in group.members:
             decisions[i].update(action="grouped", reason="bounded_neighborhood_mass",
-                                output_area_mm2=geometry.area, output_core_width_mm=local_core_width_mm(geometry))
+                                output_area_mm2=geometry.area, output_core_width_mm=group_width)
     grouped = {i for g in accepted_groups for i in g.members}
 
     for i, polygon in enumerate(footprints):
+        if i % 100 == 0:
+            progress(.75 + .25 * i / max(1, len(footprints)),
+                     f"Checking building printability {i}/{len(footprints)}")
         if i in omitted or i in grouped:
             continue
         decision = decisions[i]
@@ -183,22 +239,21 @@ def optimize_buildings(elements, heights, context: PrintScaleContext, *,
             weak = any(not has_local_core(p, width) for p in parts(polygon))
             if weak and decision["policy_class"] == "protected" and not elements[i][2]:
                 candidate = polygonal(polygon.buffer(context.xy_resolution_mm / 2, join_style=2))
-                neighbors = [original[int(j)] for j in source_tree.query(candidate)
-                             if int(j) != i]
-                forbidden = unary_union([obstacles, route, *neighbors])
                 safe = (polygon.geom_type == "Polygon" and not polygon.interiors
                         and not polygon.intersects(part_shapes)
                         and candidate.area <= polygon.area * 1.5
                         and allowed_region.covers(candidate)
-                        and candidate.intersection(forbidden).area <= 1e-8
+                        and local_obstacles.intersection_area(candidate, i) <= 1e-8
                         and has_local_core(candidate, width))
                 if safe:
                     footprints[i] = polygon = candidate
                     decision.update(action="enlarged", reason="bounded_landmark_enlargement")
                     weak = False
-            aspect = heights[i] / max(local_core_width_mm(polygon), 1e-4)
+            aspect = heights[i] / max(local_core_width_mm(polygon, cache=width_cache), 1e-4)
             if weak or aspect > 6:
                 decision.update(action="unresolved", reason="protected_or_tall_printability",
                                 height_to_core_width_ratio=aspect)
-        decision.update(output_area_mm2=polygon.area, output_core_width_mm=local_core_width_mm(polygon))
+        decision.update(output_area_mm2=polygon.area, output_core_width_mm=local_core_width_mm(polygon, cache=width_cache))
+    timed_stage("printability")
+    progress(1.0, "Building optimization complete")
     return OptimizationResult(footprints, accepted_groups, omitted, decisions, group_heights)

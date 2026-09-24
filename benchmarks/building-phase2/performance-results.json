@@ -1,0 +1,218 @@
+{
+  "before-sample": {
+    "label": "before-sample",
+    "shells": 60,
+    "elapsed_seconds": 414.68175709999923,
+    "groups": 0,
+    "omitted": 47,
+    "road_coordinates": 382578,
+    "fingerprint": "9921edcaef4a26eeb4a5f78c43b07172f768b38fd9b867cc50575b28c8ea1ed5",
+    "python": "3.12.14",
+    "shapely": "2.1.2",
+    "geos": "3.13.1",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "decisions": {
+      "preserved": 0,
+      "simplified": 4,
+      "grouped": 0,
+      "enlarged": 0,
+      "omitted": 47,
+      "unresolved": 9
+    },
+    "limitations": [
+      "Exported shells lack original tags/IDs and parent dependencies",
+      "Real exported roads; no original water data available",
+      "Grouping enabled; no download, extrusion, terrain, export or slicer timing"
+    ]
+  },
+  "after-sample": {
+    "label": "after-sample",
+    "shells": 60,
+    "elapsed_seconds": 19.440858200003277,
+    "groups": 0,
+    "omitted": 47,
+    "stage_seconds": {
+      "simplification": 0.9171799999894574,
+      "grouping": 18.237275100007537,
+      "printability": 0.28237869999429677
+    },
+    "road_coordinates": 382578,
+    "fingerprint": "9921edcaef4a26eeb4a5f78c43b07172f768b38fd9b867cc50575b28c8ea1ed5",
+    "python": "3.12.14",
+    "shapely": "2.1.2",
+    "geos": "3.13.1",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "decisions": {
+      "preserved": 0,
+      "simplified": 4,
+      "grouped": 0,
+      "enlarged": 0,
+      "omitted": 47,
+      "unresolved": 9
+    },
+    "limitations": [
+      "Exported shells lack original tags/IDs and parent dependencies",
+      "Real exported roads; no original water data available",
+      "Grouping enabled; no download, extrusion, terrain, export or slicer timing"
+    ]
+  },
+  "after-full": {
+    "label": "after-full",
+    "shells": 5651,
+    "elapsed_seconds": 223.41183789999923,
+    "groups": 413,
+    "omitted": 3267,
+    "stage_seconds": {
+      "simplification": 66.83877260000736,
+      "grouping": 140.87731260000146,
+      "printability": 15.677543600002537
+    },
+    "road_coordinates": 382578,
+    "fingerprint": "d17b6789227252c8edb77ac9b83591c5f764d9ad8a9a4aadd26bd13e13718732",
+    "python": "3.12.14",
+    "shapely": "2.1.2",
+    "geos": "3.13.1",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "decisions": {
+      "preserved": 33,
+      "simplified": 457,
+      "grouped": 1015,
+      "enlarged": 0,
+      "omitted": 3267,
+      "unresolved": 879
+    },
+    "limitations": [
+      "Exported shells lack original tags/IDs and parent dependencies",
+      "Real exported roads; no original water data available",
+      "Grouping enabled; no download, extrusion, terrain, export or slicer timing"
+    ]
+  },
+  "projection-comparison": {
+    "triangles": 213284,
+    "repeats": 3,
+    "results": {
+      "before": {
+        "seconds": [
+          10.453128200009814,
+          8.030236499995226,
+          8.02822940000624
+        ],
+        "median_seconds": 8.030236499995226,
+        "overlap_mm2": 325.22157962381937
+      },
+      "after": {
+        "seconds": [
+          2.567670200005523,
+          2.331917200004682,
+          2.5024099000002025
+        ],
+        "median_seconds": 2.5024099000002025,
+        "overlap_mm2": 325.22157962381937
+      }
+    }
+  },
+  "manual_compatibility": {
+    "matches": true,
+    "cases": 6,
+    "baseline_commit": "71de412b4da99e61cf4da7ebcaa1feaf2a3dc1aa"
+  },
+  "baseline_commit": "f8866e169d49c05590b1fa813dd7253486e5374f",
+  "source_sha256": "86acd5d422d2b8833389200c0b0397ce65f5c3dc723104e4569d5c4ab332d95b",
+  "profile_hotspots": {
+    "before-sample": [
+      {
+        "function": "local_core_width_mm",
+        "calls": 21,
+        "cumulative_seconds": 0.1998427
+      },
+      {
+        "function": "group_footprints",
+        "calls": 1,
+        "cumulative_seconds": 9.226625400000001
+      },
+      {
+        "function": "unary_union",
+        "calls": 156,
+        "cumulative_seconds": 410.83411240000004
+      }
+    ],
+    "after-sample": [
+      {
+        "function": "local_core_width_mm",
+        "calls": 21,
+        "cumulative_seconds": 0.1937539
+      },
+      {
+        "function": "group_footprints",
+        "calls": 1,
+        "cumulative_seconds": 10.288983100000001
+      },
+      {
+        "function": "intersection_area",
+        "calls": 46,
+        "cumulative_seconds": 0.5272049000000001
+      },
+      {
+        "function": "unary_union",
+        "calls": 100,
+        "cumulative_seconds": 16.445505100000002
+      }
+    ],
+    "after-full": [
+      {
+        "function": "intersection_area",
+        "calls": 4186,
+        "cumulative_seconds": 29.7886318
+      },
+      {
+        "function": "local_core_width_mm",
+        "calls": 2730,
+        "cumulative_seconds": 11.7666442
+      },
+      {
+        "function": "unary_union",
+        "calls": 8819,
+        "cumulative_seconds": 38.704550000000005
+      },
+      {
+        "function": "group_footprints",
+        "calls": 1,
+        "cumulative_seconds": 132.7814251
+      }
+    ]
+  },
+  "validation": {
+    "pytest_passed": 413,
+    "pytest_warnings": 76,
+    "pytest_seconds": 46.17,
+    "basetemp": "benchmarks/outputs/pytest-building-perf-full-0924b",
+    "new_file_ruff": "passed",
+    "production_ruff_delta": {
+      "memorymap_pipeline/building_generalization.py": {
+        "baseline_findings": 0,
+        "current_findings": 0,
+        "new_findings": []
+      },
+      "memorymap_pipeline/building_grouping.py": {
+        "baseline_findings": 0,
+        "current_findings": 0,
+        "new_findings": []
+      },
+      "memorymap_pipeline/building_optimization.py": {
+        "baseline_findings": 0,
+        "current_findings": 0,
+        "new_findings": []
+      },
+      "memorymap_pipeline/buildings.py": {
+        "baseline_findings": 37,
+        "current_findings": 36,
+        "new_findings": []
+      },
+      "memorymap_pipeline/generation.py": {
+        "baseline_findings": 10,
+        "current_findings": 10,
+        "new_findings": []
+      }
+    }
+  }
+}

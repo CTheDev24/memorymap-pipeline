@@ -491,7 +491,7 @@ def export_3mf(
 ) -> None:
     from trimesh.exchange.export import export_mesh
 
-    from .printability import audit_printability, remove_small_floating_components
+    from .printability import _SupportCache, audit_printability, remove_small_floating_components
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -513,6 +513,7 @@ def export_3mf(
         "start_marker": start_marker_mesh,
         "finish_marker": finish_marker_mesh,
     }
+    support_cache = _SupportCache()
     cleanup_limits = {"buildings": 12, "water": 8, "landscape": 16}
     removed_shells = {layer: 0 for layer in cleanup_limits}
     if base_mesh is not None:
@@ -524,6 +525,7 @@ def export_3mf(
                     layer_meshes,
                     layer,
                     maximum_faces=maximum_faces,
+                    _cache=support_cache,
                 )
                 layer_meshes[layer] = cleaned
                 removed_shells[layer] += removed
@@ -595,7 +597,8 @@ def export_3mf(
             "landscape": landscape_mesh,
             "start_marker": start_marker_mesh,
             "finish_marker": finish_marker_mesh,
-        }
+        },
+        _cache=support_cache,
     ).raise_for_errors()
 
     export_mesh(
