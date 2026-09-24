@@ -35,8 +35,8 @@ Notes:
   keeping the orange route continuous, supported, and 1.2 mm wide by default.
 - Route faces are locally refined to a 2.4 mm maximum edge before terrain draping, preventing
   long triangulation diagonals from becoming thin fins near bends or converging segments.
-- Building heights follow the physical map scale by default; only unusually tall outliers are adaptively compressed to the GUI maximum (25 mm by default, 31.75 mm hard limit).
-- Buildings retain at least 1.2 mm of visible height by default, keeping dense urban footprints legible as structures instead of nearly flat surface patches.
+- Building heights default to the existing architectural-relief tiers. Opt-in proportional mode maps source heights to the horizontal map scale.
+- The Building heights panel adds a multiplier and optional final visible minimum/maximum, including roofs. These are separate from the legacy scale-adjusted relief ceiling.
 - Urban water solids are 0.6 mm thick: 0.4 mm is embedded into structural support and
   0.2 mm remains exclusively visible. A minimum 0.4 mm base-material bottom skin prevents
   water from appearing on the underside. Landscape surface dimensions are described below.
@@ -327,6 +327,50 @@ not the exported 3MF.
 The 3D preview is a geometry inspection tool, **not a slicer or toolpath preview**. Bambu
 Studio is still required to inspect layers, bridges and overhangs, filament changes, purge
 behavior, supports, and printer-specific toolpaths.
+
+### Building height controls and saved projects
+
+In **Building heights**, choose **Architectural relief (current style)** to keep the
+existing tier mapping, or **Proportional to map scale** to use source metres times
+the horizontal map scale. The multiplier applies once, followed by the optional
+minimum and maximum in millimetres. Both limits are off by default. Proportional
+1x with limits off preserves source proportions; missing source heights still use
+classification estimates. These settings do not alter terrain exaggeration.
+
+Limits include roofs and apply to the top of each connected parent/part assembly
+above its shared ground datum, excluding embedding. Parts scale together, preserving
+relative levels; lower parts need not individually reach an assembly's minimum.
+Grouped buildings retain their existing shared-mass policy. Stadium recipes scale
+as a whole. Very small proportional features still need review in your slicer.
+
+For the DC Half Marathon, try **Proportional to map scale**, **2x**, with both limits
+off. The cached Pentagon source is 23 m: at the fitted 190 x 240 mm frame this gives
+1.574 mm, compared with 7.954 mm in architectural relief at its tested 26 mm ceiling.
+Exact results depend on the selected geographic frame and source data.
+
+Use **Save project...** / **Open project...** to retain the frame, GPX reference,
+layer settings and height controls. The project references the GPX; keep that file
+available. Older project versions retain legacy height behavior. Changing height
+settings invalidates the previous preview and disables saving its model: regenerate
+to update both. **Reset building heights** restores the existing defaults.
+
+JSON configuration supports:
+
+```json
+{
+  "building_height_mode": "proportional",
+  "building_height_multiplier": 2.0,
+  "building_height_min_mm": null,
+  "building_height_max_mm": null
+}
+```
+
+Multipliers and enabled limits must be finite and positive; minimum cannot exceed
+maximum. The old `max_print_height_mm` remains a scale-adjusted relief control, not
+a final cap. Active height controls produce a `.audit.json` sidecar with source
+height provenance, resolved heights and assembly floor/cap counts. Save result as
+copies that sidecar with the model. Individual building overrides and new category
+filters are not part of these global controls.
 
 ### Building parts and roofs
 

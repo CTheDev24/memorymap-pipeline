@@ -16,6 +16,7 @@ from shapely.geometry import LineString, MultiPoint, box
 from shapely.ops import unary_union
 from trimesh.util import concatenate
 
+from .building_heights import BuildingHeightPolicy
 from .buildings import download_and_build_buildings
 from .config import DEFAULT_CONFIG, route_height_for_profile, route_slope_for_layer_height
 from .geometry import buffered_polygon_from_points, repair_polygon
@@ -396,6 +397,7 @@ def generate_memory_map(
     progress(0, "Preparing print frame")
     _configure_packaged_networking()
     config = _merged_config(request.config)
+    height_policy = BuildingHeightPolicy.from_config(config)
     flat_border_enabled = bool(config.get("flat_border_enabled", False))
     frame = _frame_for_border(request.frame, flat_border_enabled)
     print_scale = PrintScaleContext.from_frame(frame, config)
@@ -406,7 +408,7 @@ def generate_memory_map(
                       building_grouping_gap_mm=print_scale.merge_gap_mm,
                       building_grouping_span_mm=print_scale.group_span_mm)
     building_records = request.building_diagnostics
-    if print_optimized and building_records is None:
+    if (print_optimized or height_policy.active) and building_records is None:
         building_records = []
     style_profile = str(config.get("style_profile", "urban"))
     if style_profile not in {"urban", "landscape"}:
@@ -1222,6 +1224,7 @@ def generate_memory_map(
             z_offset=z_offset,
             embed_depth_mm=feature_embed_mm,
             max_print_height_mm=float(config["max_print_height_mm"]),
+            height_policy=height_policy,
             min_building_height_mm=float(config["min_building_height_mm"]),
             building_default_height_m=float(config["building_default_height_m"]),
             building_levels_to_m=float(config["building_levels_to_m"]),
@@ -1388,11 +1391,11 @@ def generate_memory_map(
             "finish_marker": _mesh_stats(finish_marker_mesh),
         },
     }
-    if request.export_model and print_optimized:
+    if request.export_model and (print_optimized or height_policy.active):
         import hashlib
         report = {
-            "schema_version": 1, "mode": "print_optimized",
-            "algorithm_version": "building-optimization-v1",
+            "schema_version": 1, "mode": config["building_generalization_mode"],
+            "algorithm_version": ("building-optimization-v1" if print_optimized else "building-heights-v1"),
             "route_points_sha256": hashlib.sha256(json.dumps(
                 [asdict(point) for point in request.route.points], sort_keys=True
             ).encode()).hexdigest(),

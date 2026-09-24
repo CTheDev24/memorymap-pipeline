@@ -16,6 +16,7 @@ from .building_classification import BuildingClass, classify_building, preset_fo
 from .building_filtering import residential_omissions
 from .building_generalization import disposition_diagnostics, measure_footprints
 from .building_grouping import group_footprints
+from .building_heights import BuildingHeightPolicy, assembly_roots
 from .building_optimization import optimize_buildings
 from .geometry import repair_polygon
 from .landmarks import (
@@ -782,6 +783,7 @@ def _supported_elevated_elements(
         ]
     ],
     vertical_bounds: list[tuple[float, float]] | None = None,
+    *, preserve_top: bool = False,
 ) -> dict[int, float]:
     """Map supported parts to bottoms that retain contact after height mapping."""
     if vertical_bounds is not None:
@@ -821,7 +823,7 @@ def _supported_elevated_elements(
         if vertical_bounds is not None:
             for index, bottom in newly_supported.items():
                 old_bottom, old_top = vertical_bounds[index]
-                vertical_bounds[index] = (bottom, old_top - (old_bottom - bottom))
+                vertical_bounds[index] = (bottom, old_top if preserve_top else old_top - (old_bottom - bottom))
         supported.update(newly_supported)
         pending.difference_update(newly_supported)
     return supported
@@ -861,17 +863,20 @@ def download_and_build_buildings(
     generalization_mode: str = "manual",
     route_exclusion: geom.base.BaseGeometry | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
+    height_policy: BuildingHeightPolicy | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
-    Each building follows the physical horizontal map scale. Heights are adaptively
-    compressed only when tall outliers exceed the configured maximum. Buildings
+    Footprints follow the horizontal map scale. Heights use legacy architectural
+    tiers by default; an explicit policy can select proportional source heights,
+    a multiplier, and final assembly limits (including roofs). Buildings
     where more than ``building_clip_threshold`` of their footprint lies outside the
     margin-inset build area are omitted; the remainder are clipped to that boundary.
 
     ``embed_depth_mm`` extends every building below the base top without reducing that
     visible height. All extruded buildings are concatenated into a single mesh.
     """
+    height_policy = height_policy or BuildingHeightPolicy()
     if generalization_mode not in {"manual", "print_optimized"}:
         raise ValueError("Unsupported building generalization mode")
     optimized = generalization_mode == "print_optimized"
@@ -1186,6 +1191,14 @@ def download_and_build_buildings(
         stage(None, 1.0, "No building footprints in frame")
         return None, None
 
+    assembly_by_dims = {}
+    assembly_sizes = {}
+    assembly_source_elements = list(elements)
+    if height_policy.active:
+        roots = assembly_roots(elements)
+        assembly_by_dims = {id(item[1]): root for item, root in zip(elements, roots)}
+        for root in roots:
+            assembly_sizes[root] = assembly_sizes.get(root, 0) + 1
     part_union = ops.unary_union([poly for poly, _dims, is_part, _landmark in elements if is_part])
     if not part_union.is_empty:
         resolved: list[
@@ -1218,7 +1231,7 @@ def download_and_build_buildings(
     def real_area_m2(polygon: geom.base.BaseGeometry) -> float:
         return polygon.area / max(horizontal_scale_mm_per_m**2, 1e-12)
 
-    def classified_height(
+    def legacy_classified_height(
         dimensions: BuildingDimensions,
         real_height_m: float,
         footprint_area_m2: float,
@@ -1230,6 +1243,62 @@ def download_and_build_buildings(
             total_visible = min(total_visible, preset.max_visual_height_mm)
         fraction = np.clip(real_height_m / max(dimensions.total_height_m, 1e-9), 0.0, 1.0)
         return float(total_visible * fraction)
+
+    classified_height = legacy_classified_height
+    assembly_ground = {}
+    if height_policy.active:
+        raw_heights = {}
+        envelope_heights = {}
+        for _poly, dims, _part, _landmark in assembly_source_elements:
+            raw = (dims.total_height_m * horizontal_scale_mm_per_m
+                   if height_policy.mode == "proportional" else
+                   legacy_classified_height(dims, dims.total_height_m, dims.footprint_area_m2))
+            raw_heights[id(dims)] = raw
+        # A parent completely replaced by parts has no visible roof. Its source
+        # height must not prevent the surviving assembly from reaching the floor.
+        for _poly, dims, _part, _landmark in elements:
+            assembly = assembly_by_dims[id(dims)]
+            envelope_heights[assembly] = max(raw_heights[id(dims)], envelope_heights.get(assembly, 0.0))
+        resolved = {key: height_policy.resolve(value) for key, value in envelope_heights.items()}
+
+        def classified_height(dimensions, real_height_m, footprint_area_m2):
+            assembly = assembly_by_dims[id(dimensions)]
+            scale = resolved[assembly][0] / envelope_heights[assembly]
+            return float(raw_heights[id(dimensions)] * scale * np.clip(
+                real_height_m / dimensions.total_height_m, 0.0, 1.0,
+            ))
+
+        for poly, dims, _part, _landmark in elements:
+            assembly = assembly_by_dims[id(dims)]
+            details = {
+                "mode": height_policy.mode, "multiplier": height_policy.multiplier,
+                "source_height_m": dims.total_height_m, "height_source": dims.height_source,
+                "true_scale_top_mm": dims.total_height_m * horizontal_scale_mm_per_m,
+                "mapped_top_mm": raw_heights[id(dims)],
+                "requested_top_mm": classified_height(dims, dims.total_height_m, dims.footprint_area_m2),
+                "assembly_id": f"assembly-{assembly}",
+                "assembly_top_mm": resolved[assembly][0], "limit_applied": resolved[assembly][1],
+                "datum": "local assembly ground surface, excluding embed depth",
+            }
+            diagnostic_by_geometry[id(poly)]["height_control"] = details
+        if terrain_height_at is not None:
+            for poly, dims, _part, _landmark in assembly_source_elements:
+                shapes = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
+                for shape in shapes:
+                    coordinates = list(shape.exterior.coords)
+                    for interior in shape.interiors:
+                        coordinates.extend(interior.coords)
+                    coordinates.extend((shape.centroid.coords[0], shape.representative_point().coords[0]))
+                    samples = np.asarray(coordinates)
+                    ground = float(np.min(terrain_height_at(samples[:, 0], samples[:, 1])))
+                    assembly = assembly_by_dims[id(dims)]
+                    assembly_ground[assembly] = min(ground, assembly_ground.get(assembly, ground))
+        if generalization_stats is not None:
+            generalization_stats["height_controls"] = {
+                **height_policy.config(), "assembly_count": len(resolved),
+                "raised_assemblies": sum(reason == "floor" for _, reason in resolved.values()),
+                "capped_assemblies": sum(reason == "cap" for _, reason in resolved.values()),
+            }
 
     rendered_element_heights = [
         classified_height(dims, dims.total_height_m, dims.footprint_area_m2)
@@ -1267,7 +1336,7 @@ def download_and_build_buildings(
     for poly, dims, _is_part, _landmark in elements:
         area_m2 = dims.footprint_area_m2 or real_area_m2(poly)
         total = classified_height(dims, dims.total_height_m, area_m2)
-        minimum_body = min(0.6, total)
+        minimum_body = 0.0 if height_policy.active else min(0.6, total)
         bottom = min(
             classified_height(dims, dims.min_height_m, area_m2),
             max(0.0, total - minimum_body),
@@ -1277,8 +1346,8 @@ def download_and_build_buildings(
             max(bottom + minimum_body, classified_height(dims, dims.eave_height_m, area_m2)),
         )
         vertical_bounds.append((bottom, eave))
-    supported_elevated = _supported_elevated_elements(elements, vertical_bounds)
-    if extend_elevated_parts_to_ground:
+    supported_elevated = _supported_elevated_elements(elements, vertical_bounds, preserve_top=height_policy.active)
+    if extend_elevated_parts_to_ground and not height_policy.active:
         for index, bottom in supported_elevated.items():
             rendered_element_heights[index] -= max(0.0, vertical_bounds[index][0] - bottom)
     height_distribution = _height_distribution_stats(
@@ -1320,6 +1389,7 @@ def download_and_build_buildings(
                 BuildingClass.LANDMARK, BuildingClass.STADIUM_ARENA,
                 BuildingClass.RELIGIOUS, BuildingClass.CIVIC_INSTITUTIONAL,
             }
+            and (not height_policy.active or assembly_sizes[assembly_by_dims[id(dims)]] == 1)
             and poly.geom_type == "Polygon" and not poly.interiors
             and rendered_element_heights[i] <= grouping["max_height_mm"]
         ]
@@ -1408,7 +1478,9 @@ def download_and_build_buildings(
             try:
                 footprint_area_m2 = dimensions.footprint_area_m2 or real_area_m2(part)
                 terrain_z = 0.0
-                if terrain_height_at is not None:
+                if height_policy.active and terrain_height_at is not None:
+                    terrain_z = assembly_ground[assembly_by_dims[id(dimensions)]]
+                elif terrain_height_at is not None:
                     sample_coordinates = list(part.exterior.coords)
                     for interior in part.interiors:
                         sample_coordinates.extend(interior.coords)
@@ -1425,6 +1497,15 @@ def download_and_build_buildings(
                             part,
                             recipe=landmark_recipe or StadiumRecipe(),
                         )
+                        if height_policy.active:
+                            target_top = classified_height(
+                                dimensions, dimensions.total_height_m, footprint_area_m2,
+                            )
+                            # Scale all recipe bodies/roofs/supports together, then
+                            # keep the same physical embedding below ground.
+                            stadium.vertices[:, 2] *= (target_top + embed_depth_mm) / stadium.bounds[1, 2]
+                            record["height_control"]["recipe_adapter"] = "whole_recipe_envelope"
+                            record["height_control"].setdefault("effective_tops_mm", []).append(target_top)
                         stadium.apply_translation(
                             (0.0, 0.0, surface_z + terrain_z - embed_depth_mm)
                         )
@@ -1455,7 +1536,7 @@ def download_and_build_buildings(
                     dimensions.total_height_m,
                     footprint_area_m2,
                 )
-                minimum_body_mm = min(0.6, total_mm)
+                minimum_body_mm = 0.0 if height_policy.active else min(0.6, total_mm)
                 bottom_mm = min(bottom_mm, max(0.0, total_mm - minimum_body_mm))
                 eave_mm = min(
                     total_mm,
@@ -1464,32 +1545,45 @@ def download_and_build_buildings(
                         classified_height(dimensions, dimensions.eave_height_m, footprint_area_m2),
                     ),
                 )
+                if group_height is not None and height_policy.active:
+                    # Group heights already incorporate the multiplier. Only ensure
+                    # the existing grouping ceiling cannot override final limits.
+                    if height_policy.minimum_mm is not None:
+                        group_height = max(group_height, height_policy.minimum_mm)
+                    if height_policy.maximum_mm is not None:
+                        group_height = min(group_height, height_policy.maximum_mm)
                 if group_height is not None:
                     bottom_mm = 0.0
                     eave_mm = total_mm = group_height
                 if extend_elevated_parts_to_ground and element_index in supported_elevated:
-                    # Translate a supported upper part as a unit; stretching its
-                    # bottom down would turn a thin crown into a tall wall.
+                    # Legacy mapping translates upper parts as a unit. Explicit
+                    # height controls preserve the requested top and extend support.
                     shift = max(0.0, bottom_mm - supported_elevated[element_index])
                     bottom_mm -= shift
-                    eave_mm -= shift
-                    total_mm -= shift
+                    if not height_policy.active:
+                        eave_mm -= shift
+                        total_mm -= shift
                     if diagnostics is not None and shift > 1e-9:
                         record.setdefault("support_adjustments", []).append({
                             "part_index": part_index,
                             "downward_translation_mm": shift,
-                            "reason": "preserve_contact_after_height_mapping",
+                            "reason": ("extend_support_without_changing_top" if height_policy.active
+                                       else "preserve_contact_after_height_mapping"),
                         })
+                if height_policy.active:
+                    for output_record in group_records or [record]:
+                        output_record["height_control"].setdefault("effective_tops_mm", []).append(total_mm)
                 effective_embed = (
                     embed_depth_mm if bottom_mm <= 1e-9 else min(embed_depth_mm, bottom_mm)
                 )
-                meshes.append(
-                    route_mesh_from_polygon(
-                        part,
-                        height_mm=(eave_mm - bottom_mm) + effective_embed,
-                        z_offset=surface_z + terrain_z + bottom_mm - effective_embed,
+                if (eave_mm - bottom_mm) + effective_embed > 0:
+                    meshes.append(
+                        route_mesh_from_polygon(
+                            part,
+                            height_mm=(eave_mm - bottom_mm) + effective_embed,
+                            z_offset=surface_z + terrain_z + bottom_mm - effective_embed,
+                        )
                     )
-                )
                 roof = _roof_mesh(
                     part,
                     eave_z=surface_z + terrain_z + eave_mm,

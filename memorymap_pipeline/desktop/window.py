@@ -9,14 +9,16 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+from dataclasses import asdict
 from pathlib import Path
 
+from ..building_heights import BuildingHeightPolicy
 from ..config import ROUTE_LAYER_HEIGHT_SLOPES, route_slope_for_layer_height
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
 from ..palettes import default_preset, resolve_palette
 from .print_settings import ACCENTS, ROAD_CATEGORIES, finish_colors
-from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN
+from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN, DesktopProject
 from .viewer_support import placeholder_html, viewer_url
 from .worker import GenerationWorker
 
@@ -97,6 +99,7 @@ class MemoryMapWindow(QMainWindow):
         self.color_preset_name = default_preset(STYLE_PROFILE_URBAN)
         self.layer_colors = resolve_palette(STYLE_PROFILE_URBAN)
         self.color_buttons: dict[str, QPushButton] = {}
+        self._height_revision = 0
         self.bridge = MapBridge(self)
         self.bridge.frame_changed.connect(self._remember_frame)
         self._build_ui()
@@ -109,6 +112,10 @@ class MemoryMapWindow(QMainWindow):
         pick = QPushButton("Open GPX…")
         pick.clicked.connect(self.choose_gpx)
         toolbar.addWidget(pick)
+        for label, callback in (("Open project…", self.open_project), ("Save project…", self.save_project)):
+            button = QPushButton(label)
+            button.clicked.connect(callback)
+            toolbar.addWidget(button)
         toolbar.addWidget(self.file_label, 1)
         layout.addLayout(toolbar)
 
@@ -134,10 +141,10 @@ class MemoryMapWindow(QMainWindow):
         controls_scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        controls_scroll.setMinimumWidth(320)
+        controls_scroll.setMinimumWidth(380)
         controls_scroll.setWidget(self._controls())
         split.addWidget(controls_scroll)
-        split.setSizes([880, 340])
+        split.setSizes([820, 400])
         layout.addWidget(split, 1)
         self.setCentralWidget(root)
 
@@ -353,13 +360,48 @@ class MemoryMapWindow(QMainWindow):
         terrain_form = QFormLayout(terrain_box)
         self.terrain_relief = self._spin(3.0, 0.5, 12.0)
         self.water_recess = self._spin(0.4, 0.1, 3.0)
-        self.building_max_height = self._spin(30.0, 9.0, 31.75)
         self.terrain_relief.setEnabled(False)
         self.water_recess.setEnabled(False)
         terrain_form.addRow("Maximum relief", self.terrain_relief)
         terrain_form.addRow("Water recess", self.water_recess)
-        terrain_form.addRow("Maximum building height", self.building_max_height)
         outer.addWidget(terrain_box)
+        self.height_box = QGroupBox("Building heights")
+        heights = QFormLayout(self.height_box)
+        heights.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        self.building_height_mode = QComboBox()
+        self.building_height_mode.addItem("Architectural relief (current style)", "architectural_relief")
+        self.building_height_mode.addItem("Proportional to map scale", "proportional")
+        self.building_height_multiplier = self._spin(1.0, .01, 20, decimals=2)
+        self.building_height_multiplier.setDecimals(2)
+        self.building_height_multiplier.setSuffix(" ×")
+        self.building_height_min_enabled = QCheckBox("Minimum visible height")
+        self.building_height_max_enabled = QCheckBox("Maximum visible height")
+        self.building_height_min = self._spin(.8, .01, 100, decimals=2)
+        self.building_height_max = self._spin(30, .01, 100, decimals=2)
+        for control in (self.building_height_min, self.building_height_max):
+            control.setDecimals(2)
+            control.setEnabled(False)
+        self.building_max_height = self._spin(30.0, 9.0, 31.75)
+        self.building_max_height.setToolTip("Existing scale-adjusted relief ceiling, before multiplier and final limits.")
+        heights.addRow("Height mode", self.building_height_mode)
+        heights.addRow("Height multiplier", self.building_height_multiplier)
+        heights.addRow(self.building_height_min_enabled, self.building_height_min)
+        heights.addRow(self.building_height_max_enabled, self.building_height_max)
+        heights.addRow("Relief ceiling (legacy)", self.building_max_height)
+        note = QLabel("Proportional 1× uses source heights at map scale. Missing heights use estimates. Limits include roofs and apply to whole building assemblies. Regenerate after edits.")
+        note.setWordWrap(True)
+        heights.addRow(note)
+        reset = QPushButton("Reset building heights")
+        reset.clicked.connect(self._reset_building_heights)
+        heights.addRow(reset)
+        self.building_height_mode.currentIndexChanged.connect(self._height_settings_changed)
+        for control in (self.building_height_multiplier, self.building_height_min,
+                        self.building_height_max, self.building_max_height):
+            control.valueChanged.connect(self._height_settings_changed)
+        for control in (self.building_height_min_enabled, self.building_height_max_enabled):
+            control.toggled.connect(self._height_settings_changed)
+        self.buildings_layer.toggled.connect(self.height_box.setEnabled)
+        outer.addWidget(self.height_box)
         self.generate = QPushButton("Generate 3MF")
         self.generate.setEnabled(False)
         self.generate.clicked.connect(self.request_generation)
@@ -376,9 +418,9 @@ class MemoryMapWindow(QMainWindow):
         return panel
 
     @staticmethod
-    def _spin(value: float, minimum: float, maximum: float) -> QDoubleSpinBox:
-        spin = QDoubleSpinBox(); spin.setRange(minimum, maximum)
-        spin.setDecimals(1); spin.setValue(value); spin.setSuffix(" mm")
+    def _spin(value: float, minimum: float, maximum: float, *, decimals: int = 1) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox(); spin.setDecimals(decimals); spin.setRange(minimum, maximum)
+        spin.setValue(value); spin.setSuffix(" mm")
         return spin
 
     @staticmethod
@@ -406,6 +448,9 @@ class MemoryMapWindow(QMainWindow):
 
     @Slot()
     def choose_gpx(self) -> None:
+        if self.generation_thread is not None:
+            self.add_warning("Wait for generation to finish before opening a GPX.")
+            return
         name, _ = QFileDialog.getOpenFileName(self, "Choose GPX route", "", "GPX files (*.gpx)")
         if name:
             self.gpx_path = Path(name)
@@ -614,6 +659,174 @@ class MemoryMapWindow(QMainWindow):
         if optimized and enabled:
             self.roads_layer.setChecked(True)
 
+    def _height_config(self) -> dict:
+        if not hasattr(self, "building_height_mode"):
+            return BuildingHeightPolicy().config()
+        return BuildingHeightPolicy(
+            self.building_height_mode.currentData(), self.building_height_multiplier.value(),
+            self.building_height_min.value() if self.building_height_min_enabled.isChecked() else None,
+            self.building_height_max.value() if self.building_height_max_enabled.isChecked() else None,
+        ).config()
+
+    def _height_settings_changed(self, *_args) -> None:
+        self._height_revision += 1
+        self.building_height_min.setEnabled(self.building_height_min_enabled.isChecked())
+        self.building_height_max.setEnabled(self.building_height_max_enabled.isChecked())
+        self.building_max_height.setEnabled(self.building_height_mode.currentData() == "architectural_relief")
+        if self.result_path is not None:
+            self.save.setEnabled(False)
+            self.preview_view.setHtml(placeholder_html("Building heights changed. Regenerate to update the preview and exported model."))
+
+    def _reset_building_heights(self) -> None:
+        self.building_height_mode.setCurrentIndex(0)
+        self.building_height_multiplier.setValue(1)
+        self.building_height_min_enabled.setChecked(False)
+        self.building_height_max_enabled.setChecked(False)
+        self.building_max_height.setValue(30)
+
+    def _project_state(self) -> DesktopProject:
+        if self.current_frame is None or self.gpx_path is None:
+            raise ValueError("Open a GPX before saving a project")
+        config = self._generation_config_payload()
+        frame = dict(self.current_frame)
+        frame.update(print_width_mm=self.print_width.value(), print_height_mm=self.print_height.value(),
+                     margin_mm=MemoryMapWindow._effective_margin(self))
+        return DesktopProject(
+            frame=MapFrame(**frame), gpx_path=str(self.gpx_path.resolve()),
+            include_roads=self.roads_layer.isChecked(), include_buildings=self.buildings_layer.isChecked(),
+            include_terrain=self.terrain_layer.isChecked(), include_water=self.water_layer.isChecked(),
+            building_grouping_enabled=self.building_grouping.isChecked(),
+            building_generalization_mode=config["building_generalization_mode"],
+            building_line_width_mm=self.building_line_width.value(),
+            **MemoryMapWindow._height_config(self), max_print_height_mm=self.building_max_height.value(),
+            flat_border_enabled=self.flat_border.isChecked(), terrain_relief_mm=self.terrain_relief.value(),
+            water_recess_mm=self.water_recess.value(), route_width_mm=self.route_width.value(),
+            route_height_mm=self.route_height.currentData(), route_markers=config["route_markers"],
+            route_layer_height_mm=self.route_layer_height.currentData(), style_profile=self.style_profile.currentData(),
+            surface_skin_thickness_mm=self.surface_skin_thickness.value(),
+            minimum_waterway_width_mm=self.minimum_waterway_width.value(),
+            ground_cover_mode=self.ground_cover_mode.currentData(),
+            ground_cover_sensitivity=self.ground_cover_sensitivity.currentData(),
+            color_preset=self.color_preset_name, layer_colors=dict(self.layer_colors),
+            extra_generation_settings={
+                "road_types": config.get("road_types", []),
+                "residential_min_width_mm": self.residential_width.value() if self.filter_residential.isChecked() else 0,
+                "include_route": self.route_layer.isChecked(), "finish": self.finish.currentData(),
+                "route_accent": self.route_accent.currentData(), "custom_route_color": self.custom_route_color,
+                "route_clearance_mm": self.route_clearance.value(),
+            },
+        )
+
+    def save_project(self) -> None:
+        try:
+            project = self._project_state()
+            name, _ = QFileDialog.getSaveFileName(self, "Save Trace project", "map.trace.json", "Trace project (*.json)")
+            if name:
+                project.save(name)
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Cannot save project", str(exc))
+
+    def open_project(self) -> None:
+        if self.generation_thread is not None:
+            self.add_warning("Wait for generation to finish before opening a project.")
+            return
+        name, _ = QFileDialog.getOpenFileName(self, "Open Trace project", "", "Trace project (*.json)")
+        if not name:
+            return
+        try:
+            project = DesktopProject.load(name)
+            if not project.gpx_path:
+                raise ValueError("Project has no GPX path")
+            route_path = Path(project.gpx_path)
+            if not route_path.is_absolute():
+                route_path = Path(name).parent / route_path
+            route = load_route_from_gpx(route_path)
+            self._apply_project(project, route_path, route)
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Cannot open project", str(exc))
+
+    def _apply_project(self, project, route_path, route) -> None:
+        self.gpx_path, self.route = route_path, route
+        self.file_label.setText(route_path.name)
+        extra = project.extra_generation_settings
+        checks = {
+            "roads_layer": project.include_roads, "buildings_layer": project.include_buildings,
+            "terrain_layer": project.include_terrain, "water_layer": project.include_water,
+            "flat_border": project.flat_border_enabled, "building_grouping": project.building_grouping_enabled,
+            "print_optimized": project.building_generalization_mode == "print_optimized",
+            "building_height_min_enabled": project.building_height_min_mm is not None,
+            "building_height_max_enabled": project.building_height_max_mm is not None,
+            "start_marker": project.route_markers in {"start", "both"},
+            "finish_marker": project.route_markers in {"finish", "both"},
+            "filter_residential": extra.get("residential_min_width_mm", 0) > 0,
+            "route_layer": extra.get("include_route", True),
+        }
+        values = {
+            "print_width": project.frame.print_width_mm, "print_height": project.frame.print_height_mm,
+            "margin": project.frame.margin_mm, "terrain_relief": project.terrain_relief_mm,
+            "water_recess": project.water_recess_mm, "route_width": project.route_width_mm,
+            "building_line_width": project.building_line_width_mm,
+            "building_max_height": project.max_print_height_mm,
+            "building_height_multiplier": project.building_height_multiplier,
+            "building_height_min": project.building_height_min_mm or .8,
+            "building_height_max": project.building_height_max_mm or 30,
+            "surface_skin_thickness": project.surface_skin_thickness_mm,
+            "minimum_waterway_width": project.minimum_waterway_width_mm,
+            "residential_width": extra.get("residential_min_width_mm", .8) or .8,
+            "route_clearance": extra.get("route_clearance_mm", 5),
+        }
+        combos = {
+            "style_profile": project.style_profile, "route_height": project.route_height_mm,
+            "route_layer_height": project.route_layer_height_mm, "building_height_mode": project.building_height_mode,
+            "ground_cover_mode": project.ground_cover_mode, "ground_cover_sensitivity": project.ground_cover_sensitivity,
+            "finish": extra.get("finish", self.finish.currentData()),
+            "route_accent": extra.get("route_accent", self.route_accent.currentData()),
+        }
+        # Restore an immutable snapshot without intermediate refits or color updates.
+        for name, value in checks.items():
+            control = getattr(self, name); control.blockSignals(True)
+            control.setChecked(value); control.blockSignals(False)
+        for name, value in values.items():
+            control = getattr(self, name); control.blockSignals(True)
+            control.setRange(min(control.minimum(), value), max(control.maximum(), value))
+            control.setValue(value); control.blockSignals(False)
+        for name, value in combos.items():
+            control = getattr(self, name); control.blockSignals(True)
+            index = control.findData(value)
+            if index < 0:
+                control.addItem(str(value), value); index = control.count() - 1
+            control.setCurrentIndex(index); control.blockSignals(False)
+        if "road_types" in extra:
+            for label, control in self.road_categories.items():
+                control.setChecked(any(t in extra["road_types"] for t in ROAD_CATEGORIES[label]))
+        self.custom_route_color = extra.get("custom_route_color", self.custom_route_color)
+        self.previous_route_accent = self.route_accent.currentData()
+        self.color_preset_name = project.color_preset or default_preset(project.style_profile)
+        self.layer_colors = resolve_palette(project.style_profile, self.color_preset_name, project.layer_colors)
+        self.landscape.blockSignals(True)
+        self.portrait.blockSignals(True)
+        self.landscape.setChecked(project.frame.print_width_mm >= project.frame.print_height_mm)
+        self.portrait.setChecked(project.frame.print_width_mm < project.frame.print_height_mm)
+        self.landscape.blockSignals(False)
+        self.portrait.blockSignals(False)
+        self.current_frame = asdict(project.frame)
+        self.default_frame = self.current_frame.copy()
+        self._height_settings_changed()
+        self._terrain_toggled(project.include_terrain)
+        self._building_optimization_changed()
+        self._style_changed()
+        self.margin.setEnabled(project.flat_border_enabled)
+        self.height_box.setEnabled(project.include_buildings)
+        self.generate.setEnabled(True)
+        self.save.setEnabled(False)
+        self.result_path = self.preview_path = None
+        self.preview_view.setHtml(placeholder_html("Project loaded. Generate to create a matching preview and model."))
+        route_json = {"type": "Feature", "properties": {}, "geometry": {
+            "type": "LineString", "coordinates": [[p.longitude, p.latitude] for p in route.points]}}
+        self.map_view.page().runJavaScript(
+            f"window.defaultFrame={json.dumps(self.default_frame)};setRoute({json.dumps(route_json)});setFrame(window.defaultFrame);"
+        )
+
     def _generation_config_payload(self) -> dict:
         route_layer_height = float(self.route_layer_height.currentData())
         start_marker = bool(
@@ -646,6 +859,7 @@ class MemoryMapWindow(QMainWindow):
             "terrain_max_relief_mm": self.terrain_relief.value(),
             "water_recess_mm": self.water_recess.value(),
             "max_print_height_mm": self.building_max_height.value(),
+            **MemoryMapWindow._height_config(self),
             "route_layer_height_mm": route_layer_height,
             "route_profile_max_slope": route_slope_for_layer_height(
                 route_layer_height
@@ -676,6 +890,9 @@ class MemoryMapWindow(QMainWindow):
     def request_generation(self) -> None:
         if not self.gpx_path or not self.route or not self.current_frame:
             return
+        self._generation_height_revision = self._height_revision
+        self.height_box.setEnabled(False)
+        self.save.setEnabled(False)
         self.progress.setValue(0); self.warnings.clear(); self.generate.setEnabled(False)
         self.generate.setText("Generating…")
         self.finish.setEnabled(False)
@@ -721,6 +938,8 @@ class MemoryMapWindow(QMainWindow):
             control = getattr(self, name, None)
             if control is not None:
                 control.setEnabled(True)
+        if hasattr(self, "height_box"):
+            self.height_box.setEnabled(self.buildings_layer.isChecked())
         self.generation_thread = None; self.generation_worker = None
 
     @Slot(int, str)
@@ -730,6 +949,11 @@ class MemoryMapWindow(QMainWindow):
 
     @Slot(str, str)
     def set_result(self, path: str, preview_path: str = "") -> None:
+        if getattr(self, "_generation_height_revision", 0) != getattr(self, "_height_revision", 0):
+            self.save.setEnabled(False)
+            self.add_warning("Height settings changed during generation. Regenerate before saving.")
+            return
+        self._result_height_revision = getattr(self, "_height_revision", 0)
         self.generate.setText("Regenerate map")
         self.result_path = Path(path)
         self.save.setEnabled(self.result_path.is_file())
@@ -760,6 +984,9 @@ class MemoryMapWindow(QMainWindow):
 
     @Slot()
     def save_result(self) -> None:
+        if getattr(self, "_result_height_revision", -1) != getattr(self, "_height_revision", 0):
+            self.add_warning("Regenerate with the current height settings before saving.")
+            return
         if not self.result_path or not self.result_path.is_file(): return
         name, _ = QFileDialog.getSaveFileName(self, "Save Trace Studio model", self.result_path.name, "3MF (*.3mf)")
         if name:

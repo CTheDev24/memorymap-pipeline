@@ -44,7 +44,7 @@ def test_project_json_and_file_round_trip(tmp_path):
     assert expected.to_dict()["route"]["markers"] == "both"
     assert expected.to_dict()["style"]["ground_cover_mode"] == "osm-only"
     assert expected.to_dict()["style"]["ground_cover_sensitivity"] == "broad"
-    assert expected.to_dict()["version"] == 2
+    assert expected.to_dict()["version"] == 3
 
 
 def test_project_rejects_unknown_version_and_invalid_dimensions():

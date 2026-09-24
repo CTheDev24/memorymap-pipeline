@@ -1,6 +1,10 @@
 # Optional building-height controls: assessment and plan
 
-Date: 2026-09-24. Status: proposal only. No height mapper, appearance defaults,
+Update: Global controls are now implemented on `codex/building-height-controls`;
+see [implementation and validation](HEIGHT_CONTROLS.md). Individual overrides and
+additional filters remain proposals. The original assessment follows.
+
+Date: 2026-09-24. Original status: proposal only. No height mapper, appearance defaults,
 filters, UI, or cache behavior changed in this assessment. Keep implementation in
 a separate appearance change after review of the performance fix.
 

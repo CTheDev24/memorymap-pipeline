@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..building_heights import BuildingHeightPolicy
 from ..map_frame import MapFrame
 from ..palettes import default_preset, resolve_palette
 from ..route_markers import RouteMarkerMode
@@ -40,6 +41,12 @@ class DesktopProject:
     building_grouping_enabled: bool = False
     building_generalization_mode: str = "manual"
     building_line_width_mm: float = 0.42
+    building_height_mode: str = "architectural_relief"
+    building_height_multiplier: float = 1.0
+    building_height_min_mm: float | None = None
+    building_height_max_mm: float | None = None
+    max_print_height_mm: float = 30.0
+    extra_generation_settings: dict[str, Any] = field(default_factory=dict)
     include_terrain: bool = False
     include_water: bool = False
     flat_border_enabled: bool = False
@@ -56,9 +63,13 @@ class DesktopProject:
     ground_cover_sensitivity: str = "balanced"
     color_preset: str | None = None
     layer_colors: dict[str, str] = field(default_factory=dict)
-    version: int = field(default=2, init=False)
+    version: int = field(default=3, init=False)
 
     def __post_init__(self) -> None:
+        import math
+        BuildingHeightPolicy.from_config(asdict(self))
+        if not math.isfinite(self.max_print_height_mm) or self.max_print_height_mm <= 0:
+            raise ValueError("Architectural relief ceiling must be positive and finite")
         from ..print_scale import printer_thresholds
         printer_thresholds({"building_generalization_mode": self.building_generalization_mode,
                             "line_width_mm": self.building_line_width_mm})
@@ -93,6 +104,11 @@ class DesktopProject:
             "building_grouping_enabled": self.building_grouping_enabled,
             "building_generalization_mode": self.building_generalization_mode,
             "building_line_width_mm": self.building_line_width_mm,
+            "building_heights": {
+                **BuildingHeightPolicy.from_config(asdict(self)).config(),
+                "max_print_height_mm": self.max_print_height_mm,
+            },
+            "extra_generation_settings": dict(self.extra_generation_settings),
             "layers": {
                 "roads": self.include_roads,
                 "buildings": self.include_buildings,
@@ -126,13 +142,14 @@ class DesktopProject:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "DesktopProject":
         version = value.get("version")
-        if version not in {1, 2}:
+        if version not in {1, 2, 3}:
             raise ValueError("Unsupported desktop project version")
         try:
             layers = value.get("layers", {})
             route = value.get("route", {})
             style = value.get("style", {})
             terrain = value.get("terrain", {})
+            heights = value.get("building_heights", {}) if version == 3 else {}
             return cls(
                 frame=MapFrame(**value["frame"]),
                 gpx_path=value.get("gpx_path"),
@@ -141,6 +158,9 @@ class DesktopProject:
                 building_grouping_enabled=bool(value.get("building_grouping_enabled", False)),
                 building_generalization_mode=str(value.get("building_generalization_mode", "manual")),
                 building_line_width_mm=float(value.get("building_line_width_mm", 0.42)),
+                **BuildingHeightPolicy.from_config(heights).config(),
+                max_print_height_mm=float(heights.get("max_print_height_mm", 30.0)),
+                extra_generation_settings=dict(value.get("extra_generation_settings", {})),
                 include_terrain=bool(layers.get("terrain", False)),
                 include_water=bool(layers.get("water", False)),
                 flat_border_enabled=bool(
