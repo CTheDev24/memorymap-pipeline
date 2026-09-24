@@ -99,7 +99,11 @@ def disposition_diagnostics(records: list[dict]) -> dict:
             "grouped": BuildingDisposition.GROUPED,
             "omitted": BuildingDisposition.OMITTED,
         }.get(record["status"])
-        record["disposition"] = disposition.value if disposition else None
+        policy = record.get("optimization", {})
+        record["disposition"] = (
+            policy["action"] if policy and record["status"] in {"retained", "grouped", "omitted"}
+            else disposition.value if disposition else None
+        )
     return {
         "source_building_count": len(records),
         "source_count_unit": "source polygon records (multipart sources can contribute multiple)",
@@ -107,5 +111,7 @@ def disposition_diagnostics(records: list[dict]) -> dict:
         "group_count": len({r["group_id"] for r in records if r["status"] == "grouped"}),
         "ungrouped_count": statuses.count("retained"),
         "omitted_count": statuses.count("omitted"),
-        "unresolved_count": statuses.count("unresolved"),
+        "unresolved_count": sum(r["status"] == "unresolved" or
+                                r.get("optimization", {}).get("action") == "unresolved"
+                                for r in records),
     }

@@ -429,3 +429,12 @@ the course; **Flat trim around map** and **Trim width (mm)** control a separate 
 border. For the Chicago benchmark use Portrait, 190 × 240 mm, route clearance 5 mm,
 route width 1.2 mm and no flat trim. Manually zooming or panning the frame changes the
 fitted clearance.
+
+## Print-optimized buildings
+
+Trace Studio has an opt-in **Print-optimized buildings** control for simplifying,
+grouping and selectively omitting details at the final print scale. It includes
+unclassified low-rise footprints, protects significant structures, and prevents
+buildings from cutting the route. Set the printer line width to match the slicer.
+Optimized saves include a companion `.audit.json` with source decisions and settings.
+Manual behavior remains the default. See [Phase 2 policy and validation](benchmarks/building-phase2/README.md).

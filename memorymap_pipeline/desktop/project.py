@@ -1,13 +1,27 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 import json
+import shutil
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ..map_frame import MapFrame
 from ..palettes import default_preset, resolve_palette
 from ..route_markers import RouteMarkerMode
+
+
+def copy_generation_result(source: Path, destination: Path) -> None:
+    """Copy the optimized model's provenance alongside Save result as."""
+    if source.resolve() == destination.resolve():
+        return
+    shutil.copy2(source, destination)
+    report = source.with_suffix(".audit.json")
+    if report.is_file():
+        shutil.copy2(report, destination.with_suffix(".audit.json"))
+    elif destination.with_suffix(".audit.json").is_file():
+        # A report from a previous model must never describe this new export.
+        destination.with_suffix(".audit.json").unlink()
 
 
 STYLE_PROFILE_URBAN = "urban"
@@ -24,6 +38,8 @@ class DesktopProject:
     include_roads: bool = True
     include_buildings: bool = True
     building_grouping_enabled: bool = False
+    building_generalization_mode: str = "manual"
+    building_line_width_mm: float = 0.42
     include_terrain: bool = False
     include_water: bool = False
     flat_border_enabled: bool = False
@@ -43,6 +59,9 @@ class DesktopProject:
     version: int = field(default=2, init=False)
 
     def __post_init__(self) -> None:
+        from ..print_scale import printer_thresholds
+        printer_thresholds({"building_generalization_mode": self.building_generalization_mode,
+                            "line_width_mm": self.building_line_width_mm})
         if self.style_profile not in STYLE_PROFILES:
             raise ValueError(
                 f"Unsupported style profile: {self.style_profile!r}"
@@ -72,6 +91,8 @@ class DesktopProject:
             "frame": asdict(self.frame),
             "flat_border_enabled": self.flat_border_enabled,
             "building_grouping_enabled": self.building_grouping_enabled,
+            "building_generalization_mode": self.building_generalization_mode,
+            "building_line_width_mm": self.building_line_width_mm,
             "layers": {
                 "roads": self.include_roads,
                 "buildings": self.include_buildings,
@@ -118,6 +139,8 @@ class DesktopProject:
                 include_roads=bool(layers.get("roads", True)),
                 include_buildings=bool(layers.get("buildings", True)),
                 building_grouping_enabled=bool(value.get("building_grouping_enabled", False)),
+                building_generalization_mode=str(value.get("building_generalization_mode", "manual")),
+                building_line_width_mm=float(value.get("building_line_width_mm", 0.42)),
                 include_terrain=bool(layers.get("terrain", False)),
                 include_water=bool(layers.get("water", False)),
                 flat_border_enabled=bool(

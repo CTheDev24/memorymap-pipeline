@@ -60,6 +60,8 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
+    if config["building_generalization_mode"] != "manual":
+        parser.error("Print-optimized buildings require Trace Studio or the generation service.")
     route_width_mm = args.route_width_mm if args.route_width_mm is not None else config["route_width"]
     route_height_mm = route_height_for_profile(
         str(config.get("style_profile", "urban")),

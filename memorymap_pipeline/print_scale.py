@@ -28,8 +28,8 @@ PRINT_SCALE_DEFAULTS = {
 def printer_thresholds(config: Mapping[str, Any]) -> dict[str, Any]:
     """Resolve and validate partial/legacy configuration with one set of defaults."""
     values = {**PRINT_SCALE_DEFAULTS, **config}
-    if values["building_generalization_mode"] != "manual":
-        raise ValueError("building_generalization_mode must be 'manual' in Phase 1")
+    if values["building_generalization_mode"] not in {"manual", "print_optimized"}:
+        raise ValueError("building_generalization_mode must be manual or print_optimized")
 
     def number(key: str, *, optional: bool = False, zero: bool = False):
         value = values[key]
@@ -75,6 +75,10 @@ def printer_thresholds(config: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("robust width must be at least marginal width")
     if result["group_span_mm"] < result["merge_gap_mm"]:
         raise ValueError("group span must be at least merge gap")
+    if values["building_generalization_mode"] == "print_optimized" and any(
+        result[key] <= 0 for key in ("robust_width_mm", "merge_gap_mm", "group_span_mm")
+    ):
+        raise ValueError("Print-optimized width, merge gap and span must be positive")
     return result
 
 

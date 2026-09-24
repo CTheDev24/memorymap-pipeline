@@ -268,6 +268,15 @@ def test_generation_config_includes_style_profile_and_landscape_dimensions():
     assert payload["building_grouping_enabled"] is False
     window.building_grouping = Check(True)
     assert MemoryMapWindow._generation_config_payload(window)["building_grouping_enabled"] is True
+    window.print_optimized = Check(True)
+    window.building_line_width = Value(0.42)
+    window.filter_residential = Check(True)
+    window.residential_width = Value(2.0)
+    payload = MemoryMapWindow._generation_config_payload(window)
+    assert payload["building_generalization_mode"] == "print_optimized"
+    assert payload["line_width_mm"] == 0.42
+    assert payload["residential_min_width_mm"] == 0.0
+
 
 
 def test_optional_border_defaults_to_full_extent_and_enables_margin_when_checked():

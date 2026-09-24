@@ -16,6 +16,7 @@ from .building_filtering import residential_omissions
 from .building_grouping import group_footprints
 from .building_generalization import disposition_diagnostics, measure_footprints
 from .print_scale import PrintScaleContext
+from .building_optimization import optimize_buildings
 from .geometry import repair_polygon
 from .landmarks import (
     LandmarkDefinition,
@@ -850,6 +851,8 @@ def download_and_build_buildings(
     filter_stats: dict | None = None,
     print_scale_context: PrintScaleContext | None = None,
     generalization_stats: dict | None = None,
+    generalization_mode: str = "manual",
+    route_exclusion: geom.base.BaseGeometry | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
@@ -861,6 +864,11 @@ def download_and_build_buildings(
     ``embed_depth_mm`` extends every building below the base top without reducing that
     visible height. All extruded buildings are concatenated into a single mesh.
     """
+    if generalization_mode not in {"manual", "print_optimized"}:
+        raise ValueError("Unsupported building generalization mode")
+    optimized = generalization_mode == "print_optimized"
+    if optimized and print_scale_context is None:
+        raise ValueError("Print optimization requires a print scale context")
     records: list[dict] = []
 
     def report_generalization(footprints):
@@ -1187,6 +1195,26 @@ def download_and_build_buildings(
         classified_height(dims, dims.total_height_m, dims.footprint_area_m2)
         for _poly, dims, _is_part, _landmark in elements
     ]
+    measurement_footprints = [p for p, _d, part, lm in elements if not part and lm is None]
+    optimization = None
+    if optimized:
+        optimization = optimize_buildings(
+            elements, rendered_element_heights, print_scale_context,
+            allowed_region=plate_box, barriers=grouping_barriers,
+            route_exclusion=route_exclusion, allow_grouping=grouping is not None,
+            max_group_height_mm=grouping["max_height_mm"] if grouping else 3.0,
+        )
+        updated = []
+        for i, (poly, dims, part, landmark) in enumerate(elements):
+            record = diagnostic_by_geometry[id(poly)]
+            record["optimization"] = optimization.decisions[i]
+            result = optimization.footprints[i]
+            # Empty sources keep their identity until the explicit omission branch.
+            if result.is_empty:
+                result = poly
+            diagnostic_by_geometry[id(result)] = record
+            updated.append((result, dims, part, landmark))
+        elements = updated
     # Real-world support does not guarantee contact after visual height mapping:
     # each building's tier and footprint can change its vertical scale.
     vertical_bounds = []
@@ -1233,7 +1261,12 @@ def download_and_build_buildings(
     grouping_diagnostics = {}
     grouped_at = {}
     grouped_members = set()
-    if grouping is not None:
+    if optimization is not None:
+        groups = optimization.groups
+        for group in groups:
+            grouped_at[group.members[0]] = group
+            grouped_members.update(group.members)
+    elif grouping is not None:
         eligible = [
             i for i, (poly, dims, is_part, landmark) in enumerate(elements)
             if not is_part and landmark is None and dims.min_height_m == 0
@@ -1255,10 +1288,11 @@ def download_and_build_buildings(
             grouped_members.update(group.members)
     else:
         groups = []
-    omitted_residential = residential_omissions(elements, groups, residential_min_width_mm)
+    omitted_residential = (optimization.omitted if optimization is not None else
+                           residential_omissions(elements, groups, residential_min_width_mm))
     if filter_stats is not None:
         filter_stats.update(
-            minimum_width_mm=residential_min_width_mm,
+            minimum_width_mm=0.0 if optimized else residential_min_width_mm,
             omitted_sources=len(omitted_residential),
         )
     if omitted_residential:
@@ -1271,7 +1305,8 @@ def download_and_build_buildings(
             )
         for i in omitted_residential:
             diagnostic_by_geometry[id(elements[i][0])].update(
-                status="omitted", reason="residential_below_minimum_print_width",
+                status="omitted", reason=(optimization.decisions[i]["reason"] if optimized else
+                                          "residential_below_minimum_print_width"),
                 minimum_print_width_mm=residential_min_width_mm, output_print_geometry=None,
             )
     output_footprints = []
@@ -1292,7 +1327,8 @@ def download_and_build_buildings(
         if group is not None:
             poly = group.geometry
             group_records = [diagnostic_by_geometry[id(elements[i][0])] for i in group.members]
-            group_height = max(rendered_element_heights[i] for i in group.members)
+            group_height = (optimization.group_heights[group.members[0]] if optimized else
+                            max(rendered_element_heights[i] for i in group.members))
             group_id = "group-" + min(item["id"] for item in group_records)
             for item in group_records:
                 item.update(group_id=group_id, group_source_ids=[r["id"] for r in group_records])
@@ -1414,6 +1450,18 @@ def download_and_build_buildings(
                     orientation=dimensions.roof_orientation,
                     base_overlap_mm=embed_depth_mm,
                 )
+                if optimized and total_mm - eave_mm > 1e-9 and (
+                    roof is None or not roof.is_watertight or not roof.is_winding_consistent
+                ):
+                    # Boolean-cut outlines can expose unstable ridge triangulations.
+                    # Preserve the final footprint and height with a closed flat cap.
+                    roof = route_mesh_from_polygon(
+                        part, height_mm=total_mm - eave_mm + embed_depth_mm,
+                        z_offset=surface_z + terrain_z + eave_mm - embed_depth_mm,
+                    )
+                    record.setdefault("roof_fallbacks", []).append({
+                        "part_index": part_index, "reason": "closed_cap_after_roof_triangulation_failure",
+                    })
                 if roof is not None:
                     meshes.append(roof)
             except Exception as exc:
@@ -1440,10 +1488,14 @@ def download_and_build_buildings(
                 )
         face_cursor += face_count
 
-    report_generalization([
-        poly for poly, _dims, is_part, landmark in elements
-        if not is_part and landmark is None
-    ])
+    report_generalization(measurement_footprints)
+    if optimized and generalization_stats is not None:
+        generalization_stats.update(
+            thresholds_applied_to_geometry=True,
+            output_widths=measure_footprints(output_footprints, print_scale_context),
+            decisions={action: sum(r.get("optimization", {}).get("action") == action for r in records)
+                       for action in ("preserved", "simplified", "grouped", "enlarged", "omitted", "unresolved")},
+        )
     final_mesh = None
     if meshes:
         try:

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import dataclass, field, replace
-import math
 import json
 import logging
+import math
 import os
+from copy import deepcopy
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
-from shapely import contains_xy
-from shapely.geometry import LineString, box
+from shapely import area, contains_xy, intersection, polygons
+from shapely.geometry import LineString, MultiPoint, box
 from shapely.ops import unary_union
 from trimesh.util import concatenate
 
@@ -19,6 +19,7 @@ from .buildings import download_and_build_buildings
 from .config import DEFAULT_CONFIG, route_height_for_profile, route_slope_for_layer_height
 from .geometry import buffered_polygon_from_points, repair_polygon
 from .gpx_loader import Route
+from .impact_observatory import ImpactObservatoryProvider
 from .landcover import (
     LandCoverClass,
     LandCoverGrid,
@@ -29,8 +30,6 @@ from .landcover import (
     rasterize_geometry_mask,
 )
 from .map_frame import MapFrame
-from .print_scale import PrintScaleContext
-from .impact_observatory import ImpactObservatoryProvider
 from .mesh import (
     build_base_plate,
     embedded_feature_dimensions,
@@ -38,6 +37,7 @@ from .mesh import (
     refine_mesh_edges,
     route_mesh_from_polygon,
 )
+from .print_scale import PrintScaleContext
 from .roads import download_and_build_roads, resolve_road_style
 from .route_markers import RouteMarkerMode, build_route_marker, marker_centers
 from .surface_layers import (
@@ -67,7 +67,6 @@ from .water import (
     prepare_water_bodies,
 )
 from .worldcover import WorldCoverProvider
-
 
 ProgressCallback = Callable[[int, str], None]
 
@@ -375,6 +374,15 @@ def generate_memory_map(
     flat_border_enabled = bool(config.get("flat_border_enabled", False))
     frame = _frame_for_border(request.frame, flat_border_enabled)
     print_scale = PrintScaleContext.from_frame(frame, config)
+    print_optimized = config["building_generalization_mode"] == "print_optimized"
+    if print_optimized:
+        config.update(building_grouping_enabled=True, residential_min_width_mm=0.0,
+                      building_grouping_width_mm=print_scale.robust_width_mm,
+                      building_grouping_gap_mm=print_scale.merge_gap_mm,
+                      building_grouping_span_mm=print_scale.group_span_mm)
+    building_records = request.building_diagnostics
+    if print_optimized and building_records is None:
+        building_records = []
     style_profile = str(config.get("style_profile", "urban"))
     if style_profile not in {"urban", "landscape"}:
         raise ValueError(f"Unsupported style profile: {style_profile}")
@@ -1117,6 +1125,14 @@ def generate_memory_map(
                 )
     progress(55, "Road mesh complete")
 
+    route_exclusion = None
+    if print_optimized and request.include_route:
+        protected_route = [route_polygon]
+        for marker in (start_marker_mesh, finish_marker_mesh):
+            if marker is not None:
+                # Conservative projection of marker geometry protects every overhang.
+                protected_route.append(MultiPoint(marker.vertices[:, :2]).convex_hull)
+        route_exclusion = unary_union(protected_route).buffer(print_scale.route_clearance_mm)
     grouping_options = None
     grouping_barriers = None
     if request.include_buildings and bool(config.get("building_grouping_enabled", False)):
@@ -1137,7 +1153,8 @@ def generate_memory_map(
                             water_file=request.water_file, strict=True,
                             minimum_waterway_width_mm=float(config.get("minimum_waterway_width_mm", 0.8)),
                         )
-                route_barrier = buffered_polygon_from_points(scaled, request.route_width_mm)
+                route_barrier = (route_exclusion if route_exclusion is not None else
+                                 buffered_polygon_from_points(scaled, request.route_width_mm))
                 grouping_barriers = unary_union([
                     p for p in [unioned_roads, *grouping_road_polygons, route_barrier, *barriers_water]
                     if p is not None
@@ -1193,13 +1210,15 @@ def generate_memory_map(
             extend_elevated_parts_to_ground=bool(
                 config.get("extend_elevated_building_parts_to_ground", True)
             ),
-            diagnostics=request.building_diagnostics,
+            diagnostics=building_records,
             grouping=grouping_options,
             grouping_barriers=grouping_barriers,
             residential_min_width_mm=float(config.get("residential_min_width_mm", 0.0)),
             filter_stats=building_filter_stats,
             print_scale_context=print_scale,
             generalization_stats=building_generalization_stats,
+            generalization_mode=config["building_generalization_mode"],
+            route_exclusion=route_exclusion,
         )
         finally:
             logging.getLogger().removeHandler(collector)
@@ -1223,6 +1242,21 @@ def generate_memory_map(
     logging.info("BUILDING GENERALIZATION CONTEXT %s", json.dumps(
         building_generalization_stats, sort_keys=True, allow_nan=False,
     ))
+    if print_optimized and buildings_mesh is not None and route_exclusion is not None:
+        # Include roofs and landmark enhancements, not only the input footprints.
+        triangles = buildings_mesh.triangles[:, :, :2]
+        projected = polygons(triangles)
+        projected = projected[area(projected) > 1e-12]
+        overlap = float(np.sum(area(intersection(projected, route_exclusion))))
+        building_generalization_stats["route_exclusion_projected_overlap_mm2"] = overlap
+        if overlap > 1e-6:
+            raise ValueError("Optimized building geometry crosses the route clearance corridor")
+    if print_optimized:
+        counts = building_generalization_stats.get("decisions", {})
+        warnings.append("Print-optimized buildings: " + ", ".join(
+            f"{counts.get(action, 0)} {action}" for action in
+            ("simplified", "grouped", "enlarged", "omitted", "unresolved")
+        ) + ". Unknown source classifications are preserved in the audit report.")
     progress(85, "Building mesh complete")
 
     if all(
@@ -1254,6 +1288,8 @@ def generate_memory_map(
             start_marker_mesh=start_marker_mesh,
             finish_marker_mesh=finish_marker_mesh,
         )
+        # Reusing an output filename must never leave an older model's audit.
+        output_path.with_suffix(".audit.json").unlink(missing_ok=True)
     stats = {
         "route_points": len(request.route.points),
         "style_profile": style_profile,
@@ -1319,6 +1355,22 @@ def generate_memory_map(
             "finish_marker": _mesh_stats(finish_marker_mesh),
         },
     }
+    if request.export_model and print_optimized:
+        import hashlib
+        report = {
+            "schema_version": 1, "mode": "print_optimized",
+            "algorithm_version": "building-optimization-v1",
+            "route_points_sha256": hashlib.sha256(json.dumps(
+                [asdict(point) for point in request.route.points], sort_keys=True
+            ).encode()).hexdigest(),
+            "model_sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
+            "settings": config, "print_scale": print_scale.diagnostics(),
+            "frame": asdict(frame), "statistics": stats,
+            "buildings": building_records, "warnings": warnings,
+        }
+        output_path.with_suffix(".audit.json").write_text(
+            json.dumps(report, indent=2, allow_nan=False), encoding="utf-8"
+        )
     progress(100, "3MF export complete" if request.export_model else "Meshes ready for analysis")
     return GenerationResult(
         output_path=output_path,

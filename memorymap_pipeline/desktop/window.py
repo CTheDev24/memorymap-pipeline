@@ -7,7 +7,6 @@ existing in-process pipeline to a worker thread without running a localhost API.
 from __future__ import annotations
 
 import json
-import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -16,16 +15,18 @@ from ..config import ROUTE_LAYER_HEIGHT_SLOPES, route_slope_for_layer_height
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
 from ..palettes import default_preset, resolve_palette
+from .print_settings import ACCENTS, ROAD_CATEGORIES, finish_colors
 from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN
 from .viewer_support import placeholder_html, viewer_url
 from .worker import GenerationWorker
-from .print_settings import ACCENTS, ROAD_CATEGORIES, finish_colors
-
 
 FRAME_ZOOM_FACTOR = 1.1
 
 try:
-    from PySide6.QtCore import QObject, QThread, QUrl, Qt, Signal, Slot
+    from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal, Slot
+    from PySide6.QtWebChannel import QWebChannel
+    from PySide6.QtWebEngineCore import QWebEngineSettings
+    from PySide6.QtWebEngineWidgets import QWebEngineView
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -49,9 +50,6 @@ try:
         QVBoxLayout,
         QWidget,
     )
-    from PySide6.QtWebChannel import QWebChannel
-    from PySide6.QtWebEngineCore import QWebEngineSettings
-    from PySide6.QtWebEngineWidgets import QWebEngineView
 except ImportError as exc:  # pragma: no cover - depends on optional desktop extras
     if exc.name and exc.name.startswith("PySide6"):
         raise ImportError(
@@ -330,6 +328,15 @@ class MemoryMapWindow(QMainWindow):
         outer.addWidget(road_box)
         building_box = QGroupBox("Building filter")
         building_form = QFormLayout(building_box)
+        self.print_optimized = QCheckBox("Print-optimized buildings")
+        self.print_optimized.setToolTip(
+            "Simplify and group small buildings, omit isolated tiny features, and protect the route. "
+            "Includes unclassified low-rise buildings; keeps landmarks and flags unresolved details."
+        )
+        self.building_line_width = self._spin(0.42, 0.2, 1.2)
+        self.building_line_width.setEnabled(False)
+        building_form.addRow(self.print_optimized)
+        building_form.addRow("Printer line width (mm)", self.building_line_width)
         self.filter_residential = QCheckBox("Omit narrow residential buildings")
         self.residential_width = self._spin(0.8, 0.1, 5.0)
         self.residential_width.setEnabled(False)
@@ -338,6 +345,8 @@ class MemoryMapWindow(QMainWindow):
         building_form.addRow(self.filter_residential)
         building_form.addRow("Minimum footprint width", self.residential_width)
         self.buildings_layer.toggled.connect(building_box.setEnabled)
+        self.print_optimized.toggled.connect(self._building_optimization_changed)
+        self.buildings_layer.toggled.connect(self._building_optimization_changed)
         outer.addWidget(building_box)
 
         terrain_box = QGroupBox("Terrain settings")
@@ -595,6 +604,16 @@ class MemoryMapWindow(QMainWindow):
         script = f"window.setLayerColors && window.setLayerColors({json.dumps(self.layer_colors)});"
         self.preview_view.page().runJavaScript(script)
 
+    def _building_optimization_changed(self, _checked: bool = False) -> None:
+        optimized = self.print_optimized.isChecked()
+        enabled = self.buildings_layer.isChecked()
+        self.building_grouping.setEnabled(enabled and not optimized)
+        self.filter_residential.setEnabled(enabled and not optimized)
+        self.residential_width.setEnabled(enabled and not optimized and self.filter_residential.isChecked())
+        self.building_line_width.setEnabled(enabled and optimized)
+        if optimized and enabled:
+            self.roads_layer.setChecked(True)
+
     def _generation_config_payload(self) -> dict:
         route_layer_height = float(self.route_layer_height.currentData())
         start_marker = bool(
@@ -611,11 +630,14 @@ class MemoryMapWindow(QMainWindow):
         )
         selected_roads = [t for label, control in getattr(self, "road_categories", {}).items()
                           if control.isChecked() for t in ROAD_CATEGORIES[label]]
+        optimized = bool(getattr(self, "print_optimized", None) and self.print_optimized.isChecked())
         return {
+            "building_generalization_mode": "print_optimized" if optimized else "manual",
+            **({"line_width_mm": self.building_line_width.value()} if optimized else {}),
             **({"road_types": selected_roads, "landscape_road_types": selected_roads}
                if hasattr(self, "road_categories") else {}),
             "residential_min_width_mm": (self.residential_width.value()
-                if getattr(self, "filter_residential", None) and self.filter_residential.isChecked() else 0.0),
+                if not optimized and getattr(self, "filter_residential", None) and self.filter_residential.isChecked() else 0.0),
             "building_grouping_enabled": bool(
                 getattr(self, "building_grouping", None) and self.building_grouping.isChecked()
             ),
@@ -741,7 +763,9 @@ class MemoryMapWindow(QMainWindow):
         if not self.result_path or not self.result_path.is_file(): return
         name, _ = QFileDialog.getSaveFileName(self, "Save Trace Studio model", self.result_path.name, "3MF (*.3mf)")
         if name:
-            try: shutil.copy2(self.result_path, name)
+            try:
+                from .project import copy_generation_result
+                copy_generation_result(self.result_path, Path(name))
             except OSError as exc: QMessageBox.critical(self, "Save failed", str(exc))
 
 
