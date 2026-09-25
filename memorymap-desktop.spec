@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules, copy_metadata
 
 
 project_root = Path(SPECPATH)
@@ -22,6 +22,18 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=[], noarchive=False,
 )
+# Qt uses Windows' system ICU API (unversioned exports). Build-host tools on
+# PATH can supply an unrelated ICU DLL with version-suffixed exports instead.
+# Never ship that same-named DLL and shadow the Windows component.
+a.binaries = [entry for entry in a.binaries if entry[0].lower() != "icuuc.dll"]
+# Pyogrio imports Cython helpers from native code, beyond Python's static import
+# graph. Keep all its extension modules alongside the already collected GDAL DLLs.
+collected_names = {entry[0].replace("\\", "/").lower() for entry in a.binaries}
+for source, destination in collect_dynamic_libs("pyogrio", search_patterns=["*.pyd"]):
+    target = (Path(destination) / Path(source).name).as_posix()
+    if target.lower() not in collected_names:
+        a.binaries.append((target, source, "BINARY"))
+        collected_names.add(target.lower())
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name="Trace Studio",
           icon=str(package_root / "desktop" / "assets" / "trace-studio.ico"), debug=False,

@@ -75,6 +75,11 @@ shared-mass height policy.
 
 ## Desktop package
 
+**Superseded:** the original executable below failed at startup because an unrelated
+ICU DLL was bundled. See [the startup fix and runtime validation](QT_STARTUP_FIX.md)
+for the replacement in `dist/height-controls-20260924-fixed/`.
+
+
 Executable: `dist/height-controls-20260924/Trace Studio.exe` (370,700,273 bytes).
 
 SHA-256: `8bbdc23ca9cc72ad2caece6ac1381611b01f8772a6970599e1928f6cb163163a`.

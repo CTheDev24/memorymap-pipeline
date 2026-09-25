@@ -329,3 +329,16 @@ def test_route_clearance_is_independent_of_blank_trim():
     assert MemoryMapWindow._route_padding(window) == pytest.approx(5.6)
     window.flat_border = Value(True)
     assert MemoryMapWindow._route_padding(window) == pytest.approx(.6)
+
+
+def test_desktop_smoke_mode_dispatches_without_normal_launch(monkeypatch, tmp_path):
+    from memorymap_pipeline.desktop import run
+    calls = []
+    fake = types.ModuleType("memorymap_pipeline.desktop.smoke_test")
+    fake.run = lambda path: calls.append(path) or 0
+    monkeypatch.setitem(sys.modules, "memorymap_pipeline.desktop.smoke_test", fake)
+    target = str(tmp_path / "smoke.json")
+    monkeypatch.setattr(sys, "argv", ["Trace Studio.exe", "--smoke-test", target])
+    assert run() == 0 and calls == [target]
+    monkeypatch.setattr(sys, "argv", ["Trace Studio.exe", "--smoke-test"])
+    assert run() == 2

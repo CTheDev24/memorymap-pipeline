@@ -426,7 +426,14 @@ To build a distributable Windows executable, install the packaging extra and run
 ```powershell
 python -m pip install -e ".[desktop,package]"
 pyinstaller --noconfirm --clean memorymap-desktop.spec
+./tools/smoke_desktop.ps1 -Executable "dist/Trace Studio.exe"
 ```
+
+The smoke check starts a hidden native window, generates a synthetic offline map,
+exports its 3MF and verifies the real WebEngine preview. It writes
+`dist/startup-smoke.json` and must pass before distributing the executable. The
+packager excludes `icuuc.dll` so Qt uses the Windows system ICU API rather than an
+incompatible same-named DLL from build-host tools.
 
 The finished executable is written to `dist\Trace Studio.exe`. The `build/`, `dist/`, and
 `*.exe` paths remain ignored by Git: source code, dependencies, and the PyInstaller spec

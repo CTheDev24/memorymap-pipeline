@@ -7,6 +7,7 @@ on:
       - "memorymap_pipeline/**"
       - "tests/**"
       - "memorymap-desktop.spec"
+      - "tools/smoke_desktop.ps1"
       - "pyproject.toml"
       - ".github/workflows/build-desktop.yml"
   pull_request:
@@ -14,6 +15,7 @@ on:
       - "memorymap_pipeline/**"
       - "tests/**"
       - "memorymap-desktop.spec"
+      - "tools/smoke_desktop.ps1"
       - "pyproject.toml"
       - ".github/workflows/build-desktop.yml"
 
@@ -64,6 +66,7 @@ jobs:
             throw "The executable is missing OSMnx package metadata."
           }
           $previewEntries = @(
+            "pyogrio[\\/]_geometry\.pyd",
             "memorymap_pipeline[\\/]desktop[\\/]assets[\\/]trace-studio\.ico",
             "memorymap_pipeline\.desktop\.preview",
             "memorymap_pipeline\.desktop\.viewer_support",
@@ -76,6 +79,11 @@ jobs:
             }
           }
 
+          if ($archive -match "(?im)^icuuc\.dll$") {
+            throw "The executable must use Windows system ICU, not a build-host DLL."
+          }
+          ./tools/smoke_desktop.ps1 -Executable $exe
+
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash *Trace Studio.exe" | Set-Content -Encoding ascii "dist/Trace Studio.exe.sha256"
           Write-Host "Trace Studio.exe SHA-256: $hash"
@@ -87,5 +95,6 @@ jobs:
           path: |
             dist/Trace Studio.exe
             dist/Trace Studio.exe.sha256
+            dist/startup-smoke.json
           if-no-files-found: error
           retention-days: 14
