@@ -12,12 +12,14 @@ from shapely.ops import triangulate
 from shapely.strtree import STRtree
 from trimesh import Trimesh
 
+from .building_download import tiles as building_download_tiles
 from .building_classification import BuildingClass, classify_building, preset_for
 from .building_filtering import residential_omissions
 from .building_generalization import disposition_diagnostics, measure_footprints
 from .building_grouping import group_footprints
 from .building_heights import BuildingHeightPolicy, assembly_roots
 from .building_optimization import optimize_buildings
+from .overpass_geometry import polygon_from_element as _overpass_geometry
 from .geometry import repair_polygon
 from .landmarks import (
     LandmarkDefinition,
@@ -471,45 +473,6 @@ def _configure_overpass(osmnx: object, endpoint: str) -> None:
         settings.requests_timeout = OVERPASS_TIMEOUT
 
 
-def _overpass_geometry(element: dict) -> geom.base.BaseGeometry | None:
-    """Build polygon geometry from an Overpass way or multipolygon relation."""
-
-    def ring(items: object) -> geom.Polygon | None:
-        if not isinstance(items, list):
-            return None
-        coordinates = [
-            (item["lon"], item["lat"])
-            for item in items
-            if isinstance(item, dict) and "lon" in item and "lat" in item
-        ]
-        if len(coordinates) < 3:
-            return None
-        try:
-            polygon = geom.Polygon(coordinates)
-            return polygon if not polygon.is_empty else None
-        except Exception:
-            return None
-
-    if element.get("type") == "way":
-        return ring(element.get("geometry"))
-    if element.get("type") != "relation":
-        return None
-    outers: list[geom.Polygon] = []
-    inners: list[geom.Polygon] = []
-    for member in element.get("members", []):
-        if not isinstance(member, dict) or member.get("type") != "way":
-            continue
-        polygon = ring(member.get("geometry"))
-        if polygon is None:
-            continue
-        (inners if member.get("role") == "inner" else outers).append(polygon)
-    if not outers:
-        return None
-    result = ops.unary_union(outers)
-    if inners:
-        result = result.difference(ops.unary_union(inners))
-    return result
-
 
 def _adaptive_height_mapper(
     real_heights_m: list[float],
@@ -931,6 +894,18 @@ def download_and_build_buildings(
         except Exception as exc:
             logging.warning("Failed to read local buildings file %s: %s", buildings_file, exc)
             return None, None
+    elif bbox is not None and len(building_download_tiles(bbox)) > 16:
+        from .building_download import download_tiles
+
+        download_stats = {}
+        if generalization_stats is not None:
+            generalization_stats["download"] = download_stats
+        for el in download_tiles(bbox, OVERPASS_ENDPOINTS, progress, diagnostics=download_stats):
+            polygon = _overpass_geometry(el)
+            tags = dict(el.get("tags", {}))
+            tags.update(_osm_type=el["type"], _osm_id=el["id"])
+            # Keep unresolved source IDs in the audit instead of dropping them.
+            geo_with_tags.append((polygon, tags))
     else:
         try:
             import osmnx as ox
