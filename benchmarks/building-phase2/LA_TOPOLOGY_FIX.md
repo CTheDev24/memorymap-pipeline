@@ -23,8 +23,12 @@ incomplete chains. Unresolved tiled sources retain their IDs in the building aud
   mesh pipeline with proportional 2x, 0.8 mm floor and print optimization. Its mesh
   is watertight. An incomplete variant is explicitly recorded as unresolved.
 - Final full suite: 453 passed, 76 warnings.
-- Replacement package: dist/la-topology-20260927/Trace Studio.exe (building).
+- Replacement package: dist/la-topology-20260927/Trace Studio.exe (complete).
 
 This validates cached input assembly and focused production geometry, not a full
 LA model generation or physical print. The previous full-map replay was stopped
 in road processing; no complete replacement LA 3MF is claimed.
+
+Packaged Qt startup, offline model generation and actual WebEngine/WebGL preview
+passed. Six bundled modules match tested source. Executable SHA-256:
+`21f8d5397ed08a685ea8a5ba2a84fd410ec2c1b1297e2d09c464d2debf20dc8e`.
