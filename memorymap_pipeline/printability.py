@@ -321,6 +321,11 @@ def remove_small_floating_components(
     )
     cleaned.remove_unreferenced_vertices()
     cleaned.fix_normals(multibody=True)
+    cleaned.metadata = dict(target.metadata)
+    original_indices = np.asarray(
+        target.metadata.get("export_original_face_indices", np.arange(len(target.faces)))
+    )
+    cleaned.metadata["export_original_face_indices"] = original_indices[keep]
     return cleaned, len(removable)
 
 

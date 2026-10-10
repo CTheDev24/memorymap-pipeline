@@ -87,6 +87,36 @@ def test_only_tiny_proven_floating_building_shells_are_removed() -> None:
     assert cleaned.bounds[1, 0] < 25.0
 
 
+def test_export_returns_cleaned_preview_and_remaps_source_ranges(tmp_path):
+    import xml.etree.ElementTree as ET
+    import zipfile
+    from memorymap_pipeline.generation import remap_building_export_records
+
+    base = build_base_plate(40, 30, 1.6)
+    grounded = _solid((4, 4, 2.2), (10, 10, 0.9))
+    floating = _solid((1, 1, 0.4), (25, 10, 3))
+    buildings = concatenate((floating, grounded))
+    buildings.metadata["building_height_distribution"] = {"kept": True}
+    records = [
+        {"status": "retained", "output_face_ranges": [[0, 12]]},
+        {"status": "retained", "output_face_ranges": [[12, 24]]},
+    ]
+    path = tmp_path / "cleaned.3mf"
+    preview = export_3mf(path, base, None, buildings_mesh=buildings)["buildings"]
+    remap_building_export_records(records, preview.metadata["export_original_face_indices"])
+    assert records[0]["status"] == "omitted"
+    assert records[0]["reason"] == "unsupported_export_shell"
+    assert records[1]["output_face_ranges"] == [[0, 12]]
+    assert preview.metadata["building_height_distribution"] == {"kept": True}
+    with zipfile.ZipFile(path) as archive:
+        model = ET.fromstring(archive.read("3D/3dmodel.model"))
+    exported = next(
+        o for o in model.findall(".//{*}object") if o.get("name") == "Buildings_Verification"
+    )
+    assert len(exported.findall(".//{*}triangle")) == len(preview.faces) == 12
+    assert preview.bounds[1, 0] < 25
+
+
 def test_large_floating_building_shell_remains_a_validation_error() -> None:
     base = build_base_plate(40.0, 30.0, 1.6)
     floating = _solid((4.0, 4.0, 1.0), (20.0, 15.0, 4.0))
@@ -129,9 +159,7 @@ def test_export_removes_tiny_floating_water_and_landscape_shells(tmp_path) -> No
     landscape = concatenate((supported_landscape, floating_landscape))
     assert len(floating_water.faces) == 8
     assert len(floating_landscape.faces) == 16
-    assert not audit_printability(
-        {"base": base, "water": water, "landscape": landscape}
-    ).printable
+    assert not audit_printability({"base": base, "water": water, "landscape": landscape}).printable
 
     output = tmp_path / "cleaned-surface-fragments.3mf"
     export_3mf(
@@ -202,10 +230,12 @@ def test_deeply_embedded_part_has_real_volume_support():
 def test_deep_overlap_with_overhead_arch_is_not_volume_support():
     # A connected, grounded arch has its roof over the floating box, but its
     # cavity contains no supporting material at the box's bottom.
-    profile = Polygon([(0, -.2), (1, -.2), (1, 8), (7, 8), (7, -.2),
-                       (8, -.2), (8, 10), (0, 10)])
+    profile = Polygon(
+        [(0, -0.2), (1, -0.2), (1, 8), (7, 8), (7, -0.2), (8, -0.2), (8, 10), (0, 10)]
+    )
     arch = route_mesh_from_polygon(profile, 8)
     from trimesh.transformations import rotation_matrix
+
     arch.apply_transform(rotation_matrix(np.pi / 2, [1, 0, 0]))
     arch.apply_translation((16, 19, 0))
     floating = _solid((2, 2, 2), (20, 15, 3))

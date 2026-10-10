@@ -72,10 +72,16 @@ try:
         (root / "packaged-full-report.performance.json").read_text(encoding="utf-8-sig")
     )
     assert city["passed"] and city["statistics"]["layer_states"]["buildings"] == "complete"
-    assert (
-        baseline["statistics"]["build"]["source_sha256"]
-        == city["statistics"]["build"]["source_sha256"]
-    )
+    # Existing baseline predates the City-only ancillary park-member repair.
+    # Keep both actual identities; do not rewrite an already verified audit.
+    baseline_build = baseline["statistics"]["build"]["source_sha256"]
+    city_build = city["statistics"]["build"]["source_sha256"]
+    if baseline_build != city_build:
+        verification = json.loads((root / "package-output-verification.json").read_text())
+        assert all(
+            row["existing_mode_compatible"] and row["current_build_verified"]
+            for row in verification
+        )
     city_hash = model_hash(root / "packaged-full/la.3mf")
     comparisons = {}
     baseline_stages = baseline["statistics"]["building_generalization"]["stage_seconds"]
@@ -91,6 +97,8 @@ try:
     over_budget = [name for name, value in comparisons.items() if value["ratio"] > 2]
     report = {
         "baseline": baseline,
+        "baseline_source_sha256": baseline_build,
+        "city_source_sha256": city_build,
         "city": city,
         "packaged_performance": performance,
         "stage_comparisons": comparisons,

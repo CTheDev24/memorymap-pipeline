@@ -484,7 +484,21 @@ def open_space_polygons(bbox, transform, center_lat, center_lon, source=None):
     )
     result = []
     for e in elements:
-        poly = _overpass_geometry(e)
+        # Multipolygon relations can carry descriptive point members as well
+        # as boundary ways. These points do not define occupied open space.
+        boundary = e
+        if e.get("type") == "relation":
+            boundary = dict(
+                e,
+                members=[
+                    member
+                    for member in e.get("members", [])
+                    if not (
+                        member.get("type") == "node" and member.get("role") in {"artwork", "label"}
+                    )
+                ],
+            )
+        poly = _overpass_geometry(boundary)
         if poly is None:
             raise RuntimeError(
                 f"Open-space geometry could not be decoded: {e.get('type')} {e.get('id')}"

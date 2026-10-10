@@ -1386,7 +1386,7 @@ def generate_memory_map(
     ):
         raise ValueError("No printable layers were generated")
     if request.export_model:
-        export_3mf(
+        exported_meshes = export_3mf(
             output_path,
             base_mesh,
             route_mesh,
@@ -1400,6 +1400,28 @@ def generate_memory_map(
             start_marker_mesh=start_marker_mesh,
             finish_marker_mesh=finish_marker_mesh,
         )
+        buildings_mesh = exported_meshes["buildings"]
+        water_mesh = exported_meshes["water"]
+        landscape_mesh = exported_meshes["landscape"]
+        if buildings_mesh is not None:
+            original_faces = buildings_mesh.metadata.pop("export_original_face_indices", None)
+            if original_faces is not None:
+                remap_building_export_records(building_records or [], original_faces)
+                if building_generalization_stats is not None:
+                    building_generalization_stats["represented_source_count"] = sum(
+                        bool(record.get("output_face_ranges"))
+                        for record in (building_records or [])
+                    )
+                    building_generalization_stats["omitted_count"] = sum(
+                        record.get("status") == "omitted" for record in (building_records or [])
+                    )
+                    building_generalization_stats["export_cleanup_omissions"] = sum(
+                        record.get("reason") == "unsupported_export_shell"
+                        for record in (building_records or [])
+                    )
+        for cleaned_layer in (water_mesh, landscape_mesh):
+            if cleaned_layer is not None:
+                cleaned_layer.metadata.pop("export_original_face_indices", None)
         # Reusing an output filename must never leave an older model's audit.
         output_path.with_suffix(".audit.json").unlink(missing_ok=True)
     stats = {
@@ -1510,6 +1532,26 @@ def generate_memory_map(
         start_marker_mesh=start_marker_mesh,
         finish_marker_mesh=finish_marker_mesh,
     )
+
+
+def remap_building_export_records(records, original_faces):
+    """Bind diagnostic face ranges to the cleaned, actually exported mesh."""
+    import numpy as np
+
+    indices = np.asarray(original_faces)
+    for record in records:
+        prior = record.get("output_face_ranges", [])
+        ranges = []
+        for start, end in prior:
+            left, right = np.searchsorted(indices, [start, end])
+            if right > left:
+                ranges.append([int(left), int(right)])
+        record["output_face_ranges"] = ranges
+        if prior and not ranges:
+            record.update(status="omitted", reason="unsupported_export_shell")
+            record["output_print_geometry"] = None
+        elif prior != ranges:
+            record["export_cleanup"] = "face_ranges_remapped"
 
 
 def _geometry_count(geometry: Any | None) -> int:

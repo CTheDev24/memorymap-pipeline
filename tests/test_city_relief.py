@@ -26,6 +26,39 @@ def context():
     return PrintScaleContext.from_frame(MapFrame(0, 0, 100, 100, 100, 100), {"line_width_mm": 0.4})
 
 
+@pytest.mark.parametrize("role", ["artwork", "label"])
+def test_open_space_relation_ignores_descriptive_points(monkeypatch, role):
+    from memorymap_pipeline import building_download, buildings
+
+    ring = [{"lon": x, "lat": y} for x, y in [(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)]]
+    relation = {
+        "type": "relation",
+        "id": 19748327,
+        "members": [
+            {"type": "way", "role": "outer", "geometry": ring},
+            {"type": "node", "role": role, "lat": 0.5, "lon": 0.5},
+        ],
+    }
+    monkeypatch.setattr(building_download, "download_tiles", lambda *a, **kw: [relation])
+    monkeypatch.setattr(buildings, "_transform_shapely_polygon", lambda p, **kw: p)
+    result = c.open_space_polygons(None, None, 0, 0)
+    assert len(result) == 1 and result[0].area == pytest.approx(1)
+    assert len(relation["members"]) == 2
+
+
+def test_open_space_relation_rejects_non_way_boundary(monkeypatch):
+    from memorymap_pipeline import building_download
+
+    relation = {
+        "type": "relation",
+        "id": 1,
+        "members": [{"type": "node", "role": "outer", "lat": 0, "lon": 0}],
+    }
+    monkeypatch.setattr(building_download, "download_tiles", lambda *a, **kw: [relation])
+    with pytest.raises(RuntimeError, match="could not be decoded"):
+        c.open_space_polygons(None, None, 0, 0)
+
+
 def test_height_bands_monotone_and_physical():
     heights = [c.height(element(box(0, 0, 1, 1), h)[1]) for h in (3, 6, 9, 12, 30, 60, 200, 400)]
     assert heights == sorted(heights)

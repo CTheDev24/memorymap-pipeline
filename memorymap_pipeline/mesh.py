@@ -487,7 +487,7 @@ def export_3mf(
     layer_colors: dict[str, str] | None = None,
     start_marker_mesh: Trimesh | None = None,
     finish_marker_mesh: Trimesh | None = None,
-) -> None:
+):
     from trimesh.exchange.export import export_mesh
 
     from .printability import _SupportCache, audit_printability, remove_small_floating_components
@@ -604,3 +604,4 @@ def export_3mf(
         file_type="3mf",
     )
     _apply_3mf_materials(output_path, materials)
+    return layer_meshes
