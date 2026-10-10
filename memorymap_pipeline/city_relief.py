@@ -67,12 +67,12 @@ def configure(config):
     return config
 
 
-def height(dimensions, *, landmark=False):
-    if dimensions.building_type in {"shed", "garage", "garages", "carport", "hut"}:
-        return 1.2
-    h = dimensions.total_height_m
+def height(dimensions, *, landmark=False, source_height_m=None):
+    h = dimensions.total_height_m if source_height_m is None else source_height_m
     if landmark:
         return min(16.0, max(6.0, 6.0 + max(0.0, h - 15.0) / 20.0))
+    if h <= 9 and dimensions.building_type in {"shed", "garage", "garages", "carport", "hut"}:
+        return 1.2
     if h <= 9:
         return 1.6 + 0.8 * max(0.0, h - 3.0) / 6.0
     if h <= 30:

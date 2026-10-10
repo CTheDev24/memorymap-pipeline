@@ -51,6 +51,16 @@ try:
     baseline = json.loads((root / "existing/metrics.json").read_text())
     assert baseline["statistics"]["layer_states"]["buildings"] == "complete"
     baseline_hash = model_hash(root / "existing/la.3mf")
+    subprocess.run(
+        [
+            sys.executable,
+            "tools/verify_city_relief_package.py",
+            "dist/city-relief-reviewed/Trace Studio.exe",
+            str(root / "package-provenance.json"),
+        ],
+        check=True,
+        creationflags=0x08000000,
+    )
     record("running_packaged_full_city_relief", baseline_sha256=baseline_hash)
     subprocess.run(
         ["powershell", "-NoProfile", "-File", "tools/validate_city_relief_package.ps1"],

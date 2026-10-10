@@ -1298,28 +1298,58 @@ def download_and_build_buildings(
         raw_heights = {}
         envelope_heights = {}
         city_assembly_shapes = {}
-        if city and not height_policy.active:
+        city_aspect_limited_roots = set()
+        if city:
+            source_tops = {}
+            representatives = {}
+            emphasized_roots = set()
+            for _p, d, _part, _landmark in elements:
+                root = assembly_by_dims[id(d)]
+                source_tops[root] = max(source_tops.get(root, 0.0), d.total_height_m)
+            for _p, d, part, landmark in assembly_source_elements:
+                root = assembly_by_dims[id(d)]
+                key = (not part, d.footprint_area_m2)
+                if root not in representatives or key > representatives[root][0]:
+                    representatives[root] = (key, d)
+                if landmark_emphasis and (
+                    landmark is not None
+                    or d.building_class in {BuildingClass.LANDMARK, BuildingClass.STADIUM_ARENA}
+                ):
+                    emphasized_roots.add(root)
+            city_targets = {
+                root: city_relief.height(
+                    representatives[root][1],
+                    landmark=root in emphasized_roots,
+                    source_height_m=top,
+                )
+                for root, top in source_tops.items()
+            }
             tall_roots = {
-                assembly_by_dims[id(d)]
-                for _p, d, _part, _landmark in assembly_source_elements
-                if d.total_height_m > 15
+                root for root, top in source_tops.items() if top > 15 or root in emphasized_roots
             }
             for p, d, _part, _landmark in assembly_source_elements:
                 root = assembly_by_dims[id(d)]
-                if root in tall_roots:
+                if root in tall_roots and not height_policy.active:
                     city_assembly_shapes.setdefault(root, []).append(p)
             city_assembly_widths = {
                 key: local_core_width_mm(ops.unary_union(shapes), cache=width_cache)
                 for key, shapes in city_assembly_shapes.items()
             }
+            for root, width in city_assembly_widths.items():
+                ceiling = max(1.2, 6 * width)
+                if city_targets[root] > ceiling:
+                    city_targets[root] = ceiling
+                    city_aspect_limited_roots.add(root)
         for _poly, dims, _part, _landmark in assembly_source_elements:
-            raw = (
-                dims.total_height_m * horizontal_scale_mm_per_m
-                if height_policy.mode == "proportional"
-                else legacy_classified_height(dims, dims.total_height_m, dims.footprint_area_m2)
-            )
-            if city and not height_policy.active and dims.total_height_m > 15:
-                raw = min(raw, max(1.2, 6 * city_assembly_widths[assembly_by_dims[id(dims)]]))
+            if city:
+                root = assembly_by_dims[id(dims)]
+                raw = dims.total_height_m * city_targets[root] / max(source_tops[root], 1e-9)
+            else:
+                raw = (
+                    dims.total_height_m * horizontal_scale_mm_per_m
+                    if height_policy.mode == "proportional"
+                    else legacy_classified_height(dims, dims.total_height_m, dims.footprint_area_m2)
+                )
             raw_heights[id(dims)] = raw
         # A parent completely replaced by parts has no visible roof. Its source
         # height must not prevent the surviving assembly from reaching the floor.
@@ -1360,10 +1390,7 @@ def download_and_build_buildings(
                 "limit_applied": resolved[assembly][1],
                 "datum": "local assembly ground surface, excluding embed depth",
                 "appearance": appearance_mode,
-                "preset_aspect_limit_applied": city
-                and not height_policy.active
-                and raw_heights[id(dims)]
-                < legacy_classified_height(dims, dims.total_height_m, dims.footprint_area_m2),
+                "preset_aspect_limit_applied": city and assembly in city_aspect_limited_roots,
             }
             diagnostic_by_geometry[id(poly)]["height_control"] = details
         if terrain_height_at is not None:

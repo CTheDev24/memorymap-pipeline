@@ -423,3 +423,73 @@ def test_landmark_enlargement_checks_previously_indexed_assemblies():
     assert reports[0]["effective_footprint_scale"] == 1.25
     assert reports[69]["effective_footprint_scale"] == 1.1
     assert output[0][0].intersection(output[69][0]).area == 0
+
+
+@pytest.mark.parametrize(
+    "controls", [{}, {"building_height_multiplier": 2, "building_height_max_mm": 3}]
+)
+def test_city_assembly_preserves_source_height_ratios_through_caps_and_controls(tmp_path, controls):
+    from memorymap_pipeline.generation import GenerationRequest, generate_memory_map
+    from memorymap_pipeline.gpx_loader import Route, RoutePoint
+
+    frame = MapFrame(34, -118, 1900, 1900, 20, 20)
+    lat, lon = frame.print_to_lonlat(np.array([2, 18]), np.array([2, 2]))
+    route = Route([RoutePoint(float(a), float(b)) for a, b in zip(lat, lon)])
+    features = []
+    for ident, polygon, height, part in [
+        (1, box(9, 9, 9.3, 10), 13, False),
+        (2, box(9, 9.5, 9.3, 10), 24, True),
+    ]:
+        points = np.asarray(polygon.exterior.coords)
+        lat, lon = frame.print_to_lonlat(points[:, 0], points[:, 1])
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {
+                    "building:part" if part else "building": "yes",
+                    "height": height,
+                    "roof:shape": "flat",
+                    "_osm_id": ident,
+                    "_osm_type": "way",
+                },
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [list(zip(lon.tolist(), lat.tolist()))],
+                },
+            }
+        )
+    source = tmp_path / "buildings.geojson"
+    source.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    roads = tmp_path / "roads.geojson"
+    roads.write_text('{"type":"FeatureCollection","features":[]}')
+    output = tmp_path / "assembly.3mf"
+    result = generate_memory_map(
+        GenerationRequest(
+            route,
+            frame,
+            output,
+            roads_file=roads,
+            buildings_file=source,
+            water_polygons=[],
+            open_space_polygons=[],
+            config={"building_appearance_mode": "city_relief", **controls},
+        )
+    )
+    assert result.buildings_mesh.is_watertight
+    rows = json.loads(output.with_suffix(".audit.json").read_text())["buildings"]
+    parent, part = [
+        next(row["height_control"] for row in rows if row["source_id"] == str(i)) for i in (1, 2)
+    ]
+    assert parent["requested_top_mm"] < part["requested_top_mm"]
+    assert parent["requested_top_mm"] / part["requested_top_mm"] == pytest.approx(13 / 24)
+    assert parent["preset_aspect_limit_applied"] is (not controls)
+    assert part["preset_aspect_limit_applied"] is (not controls)
+    if controls:
+        assert part["requested_top_mm"] == pytest.approx(3)
+
+
+def test_verified_tall_accessory_type_uses_height_evidence_in_city_band():
+    from dataclasses import replace
+
+    dimensions = replace(element(box(0, 0, 1, 1), 60)[1], building_type="garage")
+    assert c.height(dimensions) > 6
