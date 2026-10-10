@@ -11,7 +11,7 @@ with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compressleve
         "review.html",
         "prototype-summary.json",
         "package-provenance.json",
-        "packaged-smoke.json",
+        "package-startup-smoke.json",
         "package-output-verification.json",
         "tests-final.log",
         "full-validation-state.json",
