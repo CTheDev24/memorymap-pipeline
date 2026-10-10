@@ -2,6 +2,7 @@
 
 from shapely import get_num_coordinates
 from shapely.geometry import box
+from shapely.prepared import prep
 from shapely.strtree import STRtree
 
 
@@ -15,6 +16,7 @@ class AreaMask:
 
     def __init__(self, geometry, *, maximum_coordinates=2048):
         self.geometry = geometry
+        self.prepared = prep(geometry)
         self.reference_areas = {}
         pieces = []
 
@@ -48,7 +50,13 @@ class AreaMask:
             if key not in self.reference_areas:
                 if len(self.reference_areas) >= 65536:
                     del self.reference_areas[next(iter(self.reference_areas))]
-                self.reference_areas[key] = polygon.intersection(self.geometry).area
+                # Exact topology establishes zero area for disjoint interiors.
+                # Avoid a full-map overlay for touching road/source boundaries.
+                self.reference_areas[key] = (
+                    0.0
+                    if not self.prepared.intersects(polygon) or self.prepared.touches(polygon)
+                    else polygon.intersection(self.geometry).area
+                )
             area = self.reference_areas[key]
         return area > threshold
 

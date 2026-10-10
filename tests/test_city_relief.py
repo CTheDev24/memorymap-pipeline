@@ -493,3 +493,25 @@ def test_verified_tall_accessory_type_uses_height_evidence_in_city_band():
 
     dimensions = replace(element(box(0, 0, 1, 1), 60)[1], building_type="garage")
     assert c.height(dimensions) > 6
+
+
+def test_area_mask_touching_boundary_skips_reference_overlay(monkeypatch):
+    from shapely.geometry import MultiPolygon, Polygon
+
+    from memorymap_pipeline.spatial_area import AreaMask
+
+    barrier = MultiPolygon([box(1, 0, 2, 1), box(4, 0, 5, 1)])
+    mask = AreaMask(barrier, maximum_coordinates=6)
+    original = Polygon.intersection
+    overlays = []
+
+    def tracked(self, other, *args, **kwargs):
+        if other is barrier:
+            overlays.append(self)
+        return original(self, other, *args, **kwargs)
+
+    monkeypatch.setattr(Polygon, "intersection", tracked)
+    assert not mask.exceeds(box(0, 0, 1, 1), 1e-10)
+    assert not overlays
+    assert mask.exceeds(box(0, 0, 1 + 1e-11, 1), 5e-12)
+    assert len(overlays) == 1
