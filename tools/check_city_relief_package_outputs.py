@@ -32,7 +32,18 @@ for area in ("downtown", "neighborhood", "landmark"):
     packaged = root / "packaged-prototypes" / area / "sample.3mf"
     source = root / "prototypes" / area / "balanced" / "sample.3mf"
     matches = geometry(packaged) == geometry(source)
-    reports.append({"area": area, "model_payload_identical": matches, "audit_hashes_valid": True})
+    existing_matches = geometry(root / "prototypes" / area / "existing" / "sample.3mf") == geometry(
+        root / "pre-local-overlay" / area / "existing" / "sample.3mf"
+    )
+    reports.append(
+        {
+            "area": area,
+            "model_payload_identical": matches,
+            "existing_mode_compatible": existing_matches,
+            "audit_hashes_valid": True,
+        }
+    )
     print(area, "model payload identical:", matches)
     assert matches
+    assert existing_matches
 (root / "package-output-verification.json").write_text(json.dumps(reports, indent=2))
