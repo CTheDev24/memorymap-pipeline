@@ -95,6 +95,7 @@ try:
                 "ratio": value / duration,
             }
     over_budget = [name for name, value in comparisons.items() if value["ratio"] > 2]
+    peak_ratio = performance["peak_process_working_set_bytes"] / baseline["peak_rss_bytes"]
     report = {
         "baseline": baseline,
         "baseline_source_sha256": baseline_build,
@@ -104,8 +105,8 @@ try:
         "stage_comparisons": comparisons,
         "stages_over_twice_baseline": over_budget,
         "total_runtime_ratio": city["elapsed_seconds"] / baseline["elapsed_seconds"],
-        "peak_memory_ratio": performance["peak_process_working_set_bytes"]
-        / baseline["peak_rss_bytes"],
+        "peak_memory_ratio": peak_ratio,
+        "peak_memory_over_twice_baseline": peak_ratio > 2,
         "method": "Serial frozen-road/native-building-cache runs. Baseline is source Python; City uses verified one-file executable. Stage comparisons use audited generation timings. Baseline elapsed/peak excludes GLB export; packaged elapsed/peak includes it, and package wall time includes extraction. Total and peak ratios therefore remain diagnostic. Early baseline overlapped coupon validation; a controlled release benchmark remains pending.",
     }
     (root / "full-performance-comparison.json").write_text(json.dumps(report, indent=2))
@@ -131,7 +132,7 @@ try:
         "full_exports_and_renders_complete",
         passed=True,
         performance_acceptance="investigation_required"
-        if over_budget
+        if over_budget or peak_ratio > 2
         else "controlled_benchmark_pending",
         physical_prints="pending",
         release_accepted=False,
