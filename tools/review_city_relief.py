@@ -50,7 +50,7 @@ if slice_report.exists():
     page += "<h2>Actual A1 slicing</h2><p>0.4 mm nozzle, 0.42 mm outer walls, 0.16 mm layers, PLA Basic. Centerline presence above the base is evidence of toolpaths, not a strength or clearance guarantee.</p><ul>"
     for sample in json.loads(slice_report.read_text()):
         page += f"<li>{html.escape(sample['area'].title())}: {sample['forms_with_toolpaths']} / {sample['output_forms']} forms receive above-base toolpaths; {sample['seconds'] / 60:.1f} min; {sample['grams']:.2f} g.</li>"
-    page += "</ul><p>All 28 typified neighborhood forms receive toolpaths. Only 62 of 199 unresolved preserved structures do. Physically print and inspect the coupons before accepting the preset.</p>"
+    page += "</ul><p>Inspect the disposition counts in toolpath-survival.json for representative and unresolved forms. Physically print and inspect the coupons before accepting the preset.</p>"
 page += "</body>"
 (root / "review.html").write_text(page, encoding="utf-8")
 (root / "prototype-summary.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
