@@ -98,7 +98,7 @@ try:
         "total_runtime_ratio": city["elapsed_seconds"] / baseline["elapsed_seconds"],
         "peak_memory_ratio": performance["peak_process_working_set_bytes"]
         / baseline["peak_rss_bytes"],
-        "method": "Serial frozen-road/native-building-cache runs. Baseline is source Python; City uses verified one-file executable. Compare reported generation time; package wall time includes extraction. Early baseline overlapped coupon validation; treat as diagnostic, not a controlled release benchmark.",
+        "method": "Serial frozen-road/native-building-cache runs. Baseline is source Python; City uses verified one-file executable. Stage comparisons use audited generation timings. Baseline elapsed/peak excludes GLB export; packaged elapsed/peak includes it, and package wall time includes extraction. Total and peak ratios therefore remain diagnostic. Early baseline overlapped coupon validation; a controlled release benchmark remains pending.",
     }
     (root / "full-performance-comparison.json").write_text(json.dumps(report, indent=2))
     record("rendering_full_maps", city_sha256=city_hash, stages_over_twice_baseline=over_budget)
