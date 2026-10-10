@@ -16,6 +16,7 @@ from .building_classification import BuildingClass
 from .building_generalization import has_local_core, local_core_width_mm
 from .building_grouping import FootprintGroup, group_footprints
 from .print_scale import PrintScaleContext
+from .spatial_area import AreaMask
 
 
 def polygonal(geometry):
@@ -50,22 +51,31 @@ class _LocalObstacles:
     def __init__(self, sources, fixed):
         self.sources = sources
         self.tree = STRtree(sources)
-        self.fixed = [(geometry, prep(geometry)) for geometry in fixed if not geometry.is_empty]
+        self.fixed = [(geometry, AreaMask(geometry)) for geometry in fixed if not geometry.is_empty]
 
     def intersection_area(self, candidate, source_index):
         if candidate.is_empty:
             return 0.0
         pieces = [
-            candidate.intersection(geometry)
-            for geometry, prepared in self.fixed
-            if prepared.intersects(candidate)
+            piece for _geometry, mask in self.fixed for piece in mask.intersections(candidate)
         ]
         pieces.extend(
             candidate.intersection(self.sources[int(j)])
             for j in self.tree.query(candidate, predicate="intersects")
             if int(j) != source_index
         )
-        return unary_union(pieces).area if pieces else 0.0
+        area = unary_union(pieces).area if pieces else 0.0
+        # Artificial partition boundaries must not alter the 1e-8 decision.
+        # Zero overlaps are far from that threshold and need no global overlay.
+        if abs(area - 1e-8) <= 1e-9:
+            exact = [candidate.intersection(geometry) for geometry, _mask in self.fixed]
+            exact.extend(
+                candidate.intersection(self.sources[int(j)])
+                for j in self.tree.query(candidate, predicate="intersects")
+                if int(j) != source_index
+            )
+            area = unary_union(exact).area
+        return area
 
 
 def simplify_footprint(polygon, context, *, area_budget=0.2, forbidden=None, forbidden_area=None):

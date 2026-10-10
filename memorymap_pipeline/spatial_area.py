@@ -51,3 +51,10 @@ class AreaMask:
                 self.reference_areas[key] = polygon.intersection(self.geometry).area
             area = self.reference_areas[key]
         return area > threshold
+
+    def intersections(self, polygon):
+        """Return exact local clips; shared tile boundaries have zero area."""
+        return [
+            polygon.intersection(self.pieces[int(i)])
+            for i in self.tree.query(polygon, predicate="intersects")
+        ]

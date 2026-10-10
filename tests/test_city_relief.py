@@ -391,3 +391,25 @@ def test_cached_area_mask_matches_reference_at_boundaries_and_tolerance():
         for p in candidates:
             for threshold in [1e-10, 1e-8, 0.01]:
                 assert local.exceeds(p, threshold) == (p.intersection(mask).area > threshold)
+
+
+def test_local_obstacle_partition_preserves_union_area_and_threshold_decisions():
+    from shapely.ops import unary_union
+
+    from memorymap_pipeline.building_optimization import _LocalObstacles
+
+    barriers = unary_union([box(i, j, i + 0.6, j + 0.6) for i in range(40) for j in range(40)])
+    sources = [box(19.8, 19.8, 20.2, 20.2), box(100, 100, 101, 101)]
+    overlapping = box(19, 19, 22, 22)
+    obstacles = _LocalObstacles(sources, [barriers, overlapping])
+    assert len(obstacles.fixed[0][1].pieces) > 1
+    reference = unary_union([barriers, overlapping, sources[0]])
+    for candidate in [
+        box(19.9, 19.9, 20.7, 20.7),
+        box(0.7, 0.7, 0.8, 0.8),
+        *[box(0.1, 0.1, 0.1 + area / 0.1, 0.2) for area in (1e-8 - 1e-12, 1e-8, 1e-8 + 1e-12)],
+    ]:
+        actual = obstacles.intersection_area(candidate, 1)
+        expected = candidate.intersection(reference).area
+        assert actual == pytest.approx(expected, abs=1e-12)
+        assert (actual <= 1e-8) == (expected <= 1e-8)
