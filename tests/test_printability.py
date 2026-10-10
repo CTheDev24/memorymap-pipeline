@@ -103,7 +103,10 @@ def test_export_returns_cleaned_preview_and_remaps_source_ranges(tmp_path):
     ]
     path = tmp_path / "cleaned.3mf"
     preview = export_3mf(path, base, None, buildings_mesh=buildings)["buildings"]
-    remap_building_export_records(records, preview.metadata["export_original_face_indices"])
+    assert (
+        remap_building_export_records(records, preview.metadata["export_original_face_indices"])
+        == 1
+    )
     assert records[0]["status"] == "omitted"
     assert records[0]["reason"] == "unsupported_export_shell"
     assert records[1]["output_face_ranges"] == [[0, 12]]

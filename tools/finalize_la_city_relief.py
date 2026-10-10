@@ -136,7 +136,11 @@ try:
         physical_prints="pending",
         release_accepted=False,
     )
-    for script in ("tools/review_city_relief.py", "tools/package_city_relief_review.py"):
+    for script in (
+        "tools/summarize_la_building_losses.py",
+        "tools/review_city_relief.py",
+        "tools/package_city_relief_review.py",
+    ):
         subprocess.run([sys.executable, script], check=True, creationflags=0x08000000)
 except Exception as error:
     record("failed", error=f"{type(error).__name__}: {error}")

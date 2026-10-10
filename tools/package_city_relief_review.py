@@ -16,6 +16,7 @@ with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compressleve
         "tests-final.log",
         "full-validation-state.json",
         "full-performance-comparison.json",
+        "building-loss-breakdown.json",
     ):
         path = root / name
         if path.exists():
@@ -44,6 +45,7 @@ with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compressleve
             "la.3mf",
             "la.audit.json",
             "metrics.json",
+            "preview-provenance.json",
             "top.png",
             "perspective.png",
             "side.png",

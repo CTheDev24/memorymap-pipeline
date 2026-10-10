@@ -1406,8 +1406,14 @@ def generate_memory_map(
         if buildings_mesh is not None:
             original_faces = buildings_mesh.metadata.pop("export_original_face_indices", None)
             if original_faces is not None:
-                remap_building_export_records(building_records or [], original_faces)
+                removed_forms = remap_building_export_records(
+                    building_records or [], original_faces
+                )
                 if building_generalization_stats is not None:
+                    building_generalization_stats["output_representative_count"] -= removed_forms
+                    building_generalization_stats["height_distribution_stage"] = (
+                        "before_export_cleanup"
+                    )
                     building_generalization_stats["represented_source_count"] = sum(
                         bool(record.get("output_face_ranges"))
                         for record in (building_records or [])
@@ -1539,6 +1545,7 @@ def remap_building_export_records(records, original_faces):
     import numpy as np
 
     indices = np.asarray(original_faces)
+    removed_forms = set()
     for record in records:
         prior = record.get("output_face_ranges", [])
         ranges = []
@@ -1548,10 +1555,12 @@ def remap_building_export_records(records, original_faces):
                 ranges.append([int(left), int(right)])
         record["output_face_ranges"] = ranges
         if prior and not ranges:
+            removed_forms.add(tuple(tuple(pair) for pair in prior))
             record.update(status="omitted", reason="unsupported_export_shell")
             record["output_print_geometry"] = None
         elif prior != ranges:
             record["export_cleanup"] = "face_ranges_remapped"
+    return len(removed_forms)
 
 
 def _geometry_count(geometry: Any | None) -> int:
