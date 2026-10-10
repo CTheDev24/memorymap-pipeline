@@ -40,6 +40,8 @@ The low-rise neighborhood represents 201 sources in Existing, 1,103 in Balanced,
 
 The three Balanced prototype slices use A1, PLA Basic, 0.16 mm layers, a 0.4 mm nozzle, and 0.42 mm outer walls. Estimated times are approximately 17 min downtown, 7 min neighborhood, and 12 min landmark. These are monochrome test coupons; route/color production settings require separate review.
 
+The landmark coupon exposes an unmet target: City Hall and Disney Concert Hall remain at 1.0× footprint scale because their assemblies cannot safely enlarge to 1.5× around the protected corridors. City Hall retains two of eight assembly elements after route exclusion, with a 3.54 mm assembly top above ground; Disney retains all four, with a 4.94 mm top. Their height audits flag preset aspect limits. These are feasible representations, not proof of landmark recognition; inspect their silhouettes before accepting the preset.
+
 All three packaged coupon exports have valid model/audit hashes and exactly the same exported vertex and triangle payloads as their source-generated counterparts. 3MF archive hashes differ between runs because object UUIDs and archive metadata are generated anew; each individual audit still binds to its own exact archive.
 
 ## Remaining acceptance gates
