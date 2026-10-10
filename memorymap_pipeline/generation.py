@@ -1409,8 +1409,11 @@ def generate_memory_map(
                 removed_forms = remap_building_export_records(
                     building_records or [], original_faces
                 )
-                if building_generalization_stats is not None:
-                    building_generalization_stats["output_representative_count"] -= removed_forms
+                if building_generalization_stats is not None and building_records is not None:
+                    if "output_representative_count" in building_generalization_stats:
+                        building_generalization_stats["output_representative_count"] -= (
+                            removed_forms
+                        )
                     building_generalization_stats["height_distribution_stage"] = (
                         "before_export_cleanup"
                     )
