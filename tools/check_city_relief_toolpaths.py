@@ -12,6 +12,8 @@ from pathlib import Path
 from shapely.geometry import Point, shape
 from shapely.strtree import STRtree
 
+from gcode_centerlines import arc_midpoints
+
 root = Path("benchmarks/outputs/city-relief/slicer")
 reports = []
 for area in ("downtown", "neighborhood", "landmark"):
@@ -32,6 +34,7 @@ for area in ("downtown", "neighborhood", "landmark"):
         gcode = archive.read("Metadata/plate_1.gcode").decode()
     x = y = z = 0.0
     relative_extrusion = False
+    relative_position = False
     previous_e = 0.0
     touched = set()
     segments = 0
@@ -41,31 +44,57 @@ for area in ("downtown", "neighborhood", "landmark"):
             relative_extrusion = True
         elif line == "M82":
             relative_extrusion = False
+        elif line == "G91":
+            relative_position = True
+        elif line == "G90":
+            relative_position = False
+        elif line in ("G90.1", "G18", "G19"):
+            raise ValueError(f"Unsupported arc coordinate convention: {line}")
         elif line.startswith("G92 E"):
             previous_e = float(line[5:])
-        elif line.startswith(("G0 ", "G1 ")):
+        elif line.startswith(("G0 ", "G1 ", "G2 ", "G3 ")):
             fields = {
                 key: float(value)
-                for key, value in re.findall(r"([XYZE])([-+]?(?:\d+\.?\d*|\.\d+))", line)
+                for key, value in re.findall(r"([XYZEIJRP])([-+]?(?:\d+\.?\d*|\.\d+))", line)
             }
             nx, ny, nz = fields.get("X", x), fields.get("Y", y), fields.get("Z", z)
+            if relative_position:
+                nx, ny, nz = x + fields.get("X", 0), y + fields.get("Y", 0), z + fields.get("Z", 0)
             e = fields.get("E", 0 if relative_extrusion else previous_e)
             delta_e = e if relative_extrusion else e - previous_e
             if "E" in fields:
                 previous_e = e
-            if delta_e > 0 and nz > 1.6 + 0.05 and (nx != x or ny != y):
+            arc = line.startswith(("G2 ", "G3 "))
+            if delta_e > 0 and max(z, nz) > 1.6 + 0.05 and (arc or nx != x or ny != y):
                 segments += 1
-                point = Point((x + nx) / 2 - offset_x, (y + ny) / 2 - offset_y)
-                for index in tree.query(point, predicate="intersects"):
-                    touched.add(keys[int(index)])
+                if arc:
+                    if "R" in fields or fields.get("P", 0):
+                        raise ValueError("Unsupported extruding R/P arc")
+                    samples = arc_midpoints(
+                        x,
+                        y,
+                        nx,
+                        ny,
+                        fields.get("I", 0),
+                        fields.get("J", 0),
+                        clockwise=line.startswith("G2 "),
+                    )
+                else:
+                    samples = [((x + nx) / 2, (y + ny) / 2, 0.5)]
+                for px, py, fraction in samples:
+                    if z + (nz - z) * fraction <= 1.6 + 0.05:
+                        continue
+                    point = Point(px - offset_x, py - offset_y)
+                    for index in tree.query(point, predicate="intersects"):
+                        touched.add(keys[int(index)])
             x, y, z = nx, ny, nz
     total = Counter(value[1] for value in groups.values())
     found = Counter(groups[key][1] for key in touched)
     report = {
         "area": area,
         "source_sha256": audit["model_sha256"],
-        "method": "positive-extrusion G1 midpoint within audited footprint above base+0.05mm",
-        "limitations": "Presence only; not proof of full silhouette, gaps, strength or source-by-source preservation.",
+        "method": "positive-extrusion G1 midpoint and G2/G3 relative-I/J centerline samples every <=0.05mm within audited footprint above base+0.05mm",
+        "limitations": "Sampled presence only; unmatched forms are not proof of absence. Not proof of full silhouette, gaps, strength or source-by-source preservation.",
         "output_forms": len(groups),
         "forms_with_toolpaths": len(touched),
         "disposition_totals": dict(total),

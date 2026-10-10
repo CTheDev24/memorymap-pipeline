@@ -39,9 +39,9 @@ for area in ("downtown", "neighborhood", "landmark"):
     packaged = root / "packaged-prototypes" / area / "sample.3mf"
     source = root / "prototypes" / area / "balanced" / "sample.3mf"
     matches = geometry(packaged, fingerprint) == geometry(source, fingerprint)
-    existing_matches = geometry(root / "prototypes" / area / "existing" / "sample.3mf", fingerprint) == geometry(
-        root / "pre-local-overlay" / area / "existing" / "sample.3mf"
-    )
+    existing_matches = geometry(
+        root / "prototypes" / area / "existing" / "sample.3mf", fingerprint
+    ) == geometry(root / "pre-local-overlay" / area / "existing" / "sample.3mf")
     reports.append(
         {
             "area": area,
