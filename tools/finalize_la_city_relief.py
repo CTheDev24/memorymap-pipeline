@@ -110,12 +110,17 @@ try:
     }
     (root / "full-performance-comparison.json").write_text(json.dumps(report, indent=2))
     record("rendering_full_maps", city_sha256=city_hash, stages_over_twice_baseline=over_budget)
+    subprocess.run(
+        [sys.executable, "tools/render_exported_la_baseline.py"],
+        check=True,
+        creationflags=0x08000000,
+    )
     for folder in ("existing", "packaged-full"):
         subprocess.run(
             [
                 sys.executable,
                 "tools/render_city_relief_preview.py",
-                str(root / folder / "la.glb"),
+                str(root / folder / ("la-exported.glb" if folder == "existing" else "la.glb")),
                 "240",
                 "190",
             ],
