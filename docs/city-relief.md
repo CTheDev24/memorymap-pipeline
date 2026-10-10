@@ -58,4 +58,6 @@ Do not merge or replace the installed application automatically. Use the candida
 - `tools/verify_city_relief_package.py`: normalized bundled module and asset verification.
 - `tools/slice_city_relief_prototypes.ps1`: final audit-matched A1 slices.
 - `tools/check_city_relief_toolpaths.py`: traceable above-base toolpath presence diagnostics.
+- `tools/finalize_la_city_relief.py`: serial full-frame validation after an active baseline; writes explicit export/render and performance gate status.
+- `tools/validate_city_relief_package.ps1`: hidden packaged generation with OS peak-memory measurements.
 - Packaged `--validate-map MANIFEST`: run the application generation path with a saved frame and source inputs.
