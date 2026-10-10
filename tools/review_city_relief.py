@@ -46,9 +46,13 @@ page = """<!doctype html><meta charset="utf-8"><title>LA City relief review</tit
 <nav><button onclick="document.body.dataset.view='top'">Top</button><button onclick="document.body.dataset.view='perspective'">Perspective</button><button onclick="document.body.dataset.view='side'">Side</button></nav>
 """ + "".join(sections)
 full_state = root / "full-validation-state.json"
-if full_state.exists() and json.loads(full_state.read_text()).get("passed"):
+full_passed = full_state.exists() and json.loads(full_state.read_text()).get("passed")
+if (root / "existing" / "perspective.png").exists():
     cards = []
     for folder, label in (("existing", "Existing"), ("packaged-full", "City relief")):
+        if folder == "packaged-full" and not full_passed:
+            cards.append("<article><h3>City relief</h3><p>Full-map validation is pending.</p></article>")
+            continue
         views = []
         for camera in ("top", "perspective", "side"):
             pixels = base64.b64encode((root / folder / f"{camera}.png").read_bytes()).decode()
@@ -56,7 +60,8 @@ if full_state.exists() and json.loads(full_state.read_text()).get("passed"):
                 f'<figure data-camera="{camera}"><img src="data:image/png;base64,{pixels}"><figcaption>{camera}</figcaption></figure>'
             )
         cards.append(f"<article><h3>{label}</h3>{''.join(views)}</article>")
-    page += f'<section><h2>Full LA frame — 240 × 190 mm</h2><div class="grid">{"".join(cards)}</div><p>Full exports and audit hashes verified. Physical and controlled performance acceptance remain pending; consult full-performance-comparison.json.</p></section>'
+    status = "Both full exports and audit hashes verified." if full_passed else "Existing baseline export verified; full City relief validation pending."
+    page += f'<section><h2>Full LA frame — 240 × 190 mm</h2><div class="grid">{"".join(cards)}</div><p>{status} Physical and controlled performance acceptance remain pending.</p></section>'
 slice_report = root / "slicer" / "toolpath-survival.json"
 if slice_report.exists():
     page += "<h2>Actual A1 slicing</h2><p>0.4 mm nozzle, 0.42 mm outer walls, 0.16 mm layers, PLA Basic. Centerline presence above the base is evidence of toolpaths, not a strength or clearance guarantee.</p><ul>"
