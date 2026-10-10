@@ -33,7 +33,7 @@ with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compressleve
             ):
                 path = folder / name
                 archive.write(path, path.relative_to(root))
-        for suffix in ("sliced.3mf", "source.audit.json", "result.json"):
+        for suffix in ("sliced.3mf", "source.3mf", "source.audit.json", "result.json"):
             path = root / "slicer" / f"{area}-final-{suffix}"
             archive.write(path, path.relative_to(root))
     for name in ("machine.json", "process.json", "filament.json", "toolpath-survival.json"):

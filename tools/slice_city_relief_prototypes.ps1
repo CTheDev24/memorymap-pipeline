@@ -11,6 +11,7 @@ foreach ($name in $areas) {
     $sourceAudit = Get-Content -LiteralPath $audit -Raw | ConvertFrom-Json
     if ($sourceAudit.model_sha256 -ne $hash) { throw "Source audit hash mismatch: $name" }
     Copy-Item -LiteralPath $audit -Destination (Join-Path $slicer "$name-final-source.audit.json")
+    Copy-Item -LiteralPath $source -Destination (Join-Path $slicer "$name-final-source.3mf")
     $arguments = @("--load-settings", ('"{0};{1}"' -f (Join-Path $slicer "machine.json"), (Join-Path $slicer "process.json")), "--load-filaments", ('"{0}"' -f (Join-Path $slicer "filament.json")), "--slice", "0", "--export-3mf", ('"{0}"' -f $output), ('"{0}"' -f $source))
     $job = Start-Process -FilePath "C:/Program Files/Bambu Studio/bambu-studio.exe" -ArgumentList $arguments -WorkingDirectory $slicer -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput (Join-Path $slicer "$name-final.stdout.log") -RedirectStandardError (Join-Path $slicer "$name-final.stderr.log")
     if ($job.ExitCode -ne 0) { throw "Slicing failed: $name, exit $($job.ExitCode)" }

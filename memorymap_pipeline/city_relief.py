@@ -165,7 +165,7 @@ def typify_neighborhoods(
                     ]
                 )
                 if not allowed.covers(candidate) or (
-                    prepared.intersects(candidate) and mask.exceeds(candidate, 1e-8)
+                    mask.exceeds(candidate, 1e-8) and prepared.intersects(candidate)
                 ):
                     continue
                 if any(
@@ -242,7 +242,7 @@ def typify_neighborhoods(
             old_members = accepted_members[neighbor]
             candidate = accepted[neighbor].union(source).convex_hull.minimum_rotated_rectangle
             if not allowed.covers(candidate) or (
-                prepared.intersects(candidate) and mask.exceeds(candidate, 1e-8)
+                mask.exceeds(candidate, 1e-8) and prepared.intersects(candidate)
             ):
                 continue
             if any(
@@ -399,12 +399,17 @@ def enlarge_landmarks(elements, roots, allowed, barriers, route):
     sources = [e[0] for e in elements]
     tree = STRtree(sources)
     fixed = unary_union([g for g in (barriers, route) if g is not None])
+    from .spatial_area import AreaMask
+
+    fixed_mask = AreaMask(fixed)
     assemblies = {}
     for i, root in enumerate(roots):
         assemblies.setdefault(root, []).append(i)
     output = list(elements)
     reports = {}
     accepted = []
+    accepted_tree = STRtree([])
+    indexed_count = 0
     for root, members in sorted(assemblies.items()):
         from .building_classification import BuildingClass
 
@@ -432,13 +437,17 @@ def enlarge_landmarks(elements, roots, allowed, barriers, route):
             added = candidate.difference(envelope)
             if (
                 allowed.covers(candidate)
-                and added.intersection(fixed).area <= 1e-8
+                and not fixed_mask.exceeds(added, 1e-8)
                 and all(
                     added.intersection(sources[int(j)]).area <= 1e-8
                     for j in tree.query(candidate, predicate="intersects")
                     if int(j) not in members
                 )
-                and all(added.intersection(g).area <= 1e-8 for g in accepted)
+                and all(
+                    added.intersection(accepted[int(j)]).area <= 1e-8
+                    for j in accepted_tree.query(candidate)
+                )
+                and all(added.intersection(g).area <= 1e-8 for g in accepted[indexed_count:])
             ):
                 scale = factor
                 break
@@ -457,6 +466,9 @@ def enlarge_landmarks(elements, roots, allowed, barriers, route):
                 "reason": "bounded_enlargement" if scale > 1 else "no_safe_enlargement",
             }
         accepted.append(unary_union([output[i][0] for i in members]))
+        if len(accepted) - indexed_count >= 64:
+            accepted_tree = STRtree(accepted)
+            indexed_count = len(accepted)
     return output, reports
 
 

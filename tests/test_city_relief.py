@@ -413,3 +413,13 @@ def test_local_obstacle_partition_preserves_union_area_and_threshold_decisions()
         expected = candidate.intersection(reference).area
         assert actual == pytest.approx(expected, abs=1e-12)
         assert (actual <= 1e-8) == (expected <= 1e-8)
+
+
+def test_landmark_enlargement_checks_previously_indexed_assemblies():
+    sources = [element(box(10, 10, 11, 11), 40)]
+    sources.extend(element(box(30 + i * 3, 10, 31 + i * 3, 11), 40) for i in range(68))
+    sources.append(element(box(11.2, 10, 12.2, 11), 40))
+    output, reports = c.enlarge_landmarks(sources, list(range(70)), box(0, 0, 300, 20), None, None)
+    assert reports[0]["effective_footprint_scale"] == 1.25
+    assert reports[69]["effective_footprint_scale"] == 1.1
+    assert output[0][0].intersection(output[69][0]).area == 0
