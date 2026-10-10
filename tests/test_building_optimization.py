@@ -156,7 +156,7 @@ def test_optimized_generation_exports_source_decisions_and_disables_legacy_filte
     assert report['buildings'] and len(report['model_sha256'])==64
     generate_memory_map(GenerationRequest(route=route,frame=frame,output_path=result.output_path,
         include_roads=False,include_buildings=False))
-    assert not result.output_path.with_suffix('.audit.json').exists()
+    assert json.loads(result.output_path.with_suffix('.audit.json').read_text())['layer_states']['buildings'] == 'disabled'
 
 
 

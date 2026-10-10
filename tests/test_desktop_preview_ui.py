@@ -171,7 +171,7 @@ def test_retry_action_is_labeled_and_reenabled(monkeypatch):
     from memorymap_pipeline.desktop import window as module
     labels,enabled,warnings=[],[],[]
     monkeypatch.setattr(module.QMessageBox,"critical",lambda *args: None)
-    window=SimpleNamespace(generate=SimpleNamespace(setText=labels.append,setEnabled=enabled.append),gpx_path=Path("route.gpx"),add_warning=warnings.append)
+    window=SimpleNamespace(generate=SimpleNamespace(setText=labels.append,setEnabled=enabled.append),gpx_path=Path("route.gpx"),add_warning=warnings.append,save=SimpleNamespace(setEnabled=lambda value: None),preview_view=SimpleNamespace(setHtml=lambda value: None))
     module.MemoryMapWindow._generation_failed(window,"offline")
     module.MemoryMapWindow._generation_finished(window)
     assert labels==["Retry generation"]

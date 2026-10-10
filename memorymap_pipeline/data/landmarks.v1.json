@@ -1,12 +1,21 @@
 {
   "schema_version": 1,
-  "registry_version": "2026.1",
+  "registry_version": "2026.2-city-relief",
   "landmarks": [
     {
       "key": "daikin-park",
       "display_name": "Daikin Park",
-      "aliases": ["Minute Maid Park", "Enron Field", "Astros Field"],
-      "identifiers": {"wikidata": ["Q1193671"], "osm": {}},
+      "aliases": [
+        "Minute Maid Park",
+        "Enron Field",
+        "Astros Field"
+      ],
+      "identifiers": {
+        "wikidata": [
+          "Q1193671"
+        ],
+        "osm": {}
+      },
       "tag_corrections": {
         "building": "stadium",
         "memorymap:class": "stadium"
@@ -22,6 +31,78 @@
           "closed_roof_band_width_mm": 1.2,
           "closed_roof_band_height_mm": 0.32
         }
+      }
+    },
+    {
+      "key": "la-city-hall",
+      "display_name": "Los Angeles City Hall",
+      "aliases": [],
+      "identifiers": {
+        "wikidata": [
+          "Q368489"
+        ],
+        "osm": {
+          "relation": [
+            6333145
+          ]
+        }
+      },
+      "tag_corrections": {
+        "memorymap:class": "landmark"
+      }
+    },
+    {
+      "key": "la-disney-concert-hall",
+      "display_name": "Walt Disney Concert Hall",
+      "aliases": [],
+      "identifiers": {
+        "wikidata": [
+          "Q474326"
+        ],
+        "osm": {
+          "relation": [
+            6333150
+          ]
+        }
+      },
+      "tag_corrections": {
+        "memorymap:class": "landmark"
+      }
+    },
+    {
+      "key": "la-beverly-hills-city-hall",
+      "display_name": "Beverly Hills City Hall",
+      "aliases": [],
+      "identifiers": {
+        "wikidata": [
+          "Q15873088"
+        ],
+        "osm": {
+          "way": [
+            425413646
+          ]
+        }
+      },
+      "tag_corrections": {
+        "memorymap:class": "landmark"
+      }
+    },
+    {
+      "key": "la-chinese-theatre",
+      "display_name": "TCL Chinese Theatre",
+      "aliases": [],
+      "identifiers": {
+        "wikidata": [
+          "Q1122565"
+        ],
+        "osm": {
+          "way": [
+            424105908
+          ]
+        }
+      },
+      "tag_corrections": {
+        "memorymap:class": "landmark"
       }
     }
   ]

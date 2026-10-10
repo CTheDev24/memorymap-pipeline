@@ -199,6 +199,16 @@
       controls.update();
     }
 
+    window.capturePreview = () => { renderer.render(scene, camera); return renderer.domElement.toDataURL("image/png"); };
+    // A fixed reference box lets validation renders compare physical scale.
+    window.setPreviewCamera = (view, bounds) => {
+      if (!modelBox || !["top", "side", "perspective"].includes(view)) return;
+      if (bounds) {
+        const box = new THREE.Box3(new THREE.Vector3(...bounds[0]), new THREE.Vector3(...bounds[1]));
+        box.getCenter(modelCenter); box.getSize(modelSize);
+      }
+      fitCamera(view);
+    };
     document.querySelectorAll("[data-camera]").forEach(button => {
       button.addEventListener("click", () => fitCamera(button.dataset.camera));
     });

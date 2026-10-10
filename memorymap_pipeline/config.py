@@ -213,6 +213,10 @@ DEFAULT_CONFIG = {
     "building_clip_threshold": 0.5,
     # retained for backwards compatibility but superseded by proportional height system
     "building_thickness": 0.3,
+    "building_appearance_mode": "existing",
+    "city_relief_detail": "balanced",
+    "city_relief_preset_version": "city-relief-v1",
+    "city_relief_landmark_emphasis": True,
     "buildings_debug": False,
 }
 
@@ -234,4 +238,6 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
             config[key] = value
 
     printer_thresholds(config)
+    from .city_relief import validate
+    validate(config)
     return config

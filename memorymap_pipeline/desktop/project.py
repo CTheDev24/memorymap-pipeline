@@ -41,6 +41,11 @@ class DesktopProject:
     building_grouping_enabled: bool = False
     building_generalization_mode: str = "manual"
     building_line_width_mm: float = 0.42
+    building_appearance_mode: str = "existing"
+    city_relief_detail: str = "balanced"
+    city_relief_preset_version: str = "city-relief-v1"
+    city_relief_landmark_emphasis: bool = True
+    existing_appearance_settings: dict[str, Any] = field(default_factory=dict)
     building_height_mode: str = "architectural_relief"
     building_height_multiplier: float = 1.0
     building_height_min_mm: float | None = None
@@ -63,28 +68,37 @@ class DesktopProject:
     ground_cover_sensitivity: str = "balanced"
     color_preset: str | None = None
     layer_colors: dict[str, str] = field(default_factory=dict)
-    version: int = field(default=3, init=False)
+    version: int = field(default=4, init=False)
 
     def __post_init__(self) -> None:
         import math
+        from ..city_relief import validate
+
+        validate(asdict(self))
         BuildingHeightPolicy.from_config(asdict(self))
         if not math.isfinite(self.max_print_height_mm) or self.max_print_height_mm <= 0:
             raise ValueError("Architectural relief ceiling must be positive and finite")
         from ..print_scale import printer_thresholds
-        printer_thresholds({"building_generalization_mode": self.building_generalization_mode,
-                            "line_width_mm": self.building_line_width_mm})
+
+        printer_thresholds(
+            {
+                "building_generalization_mode": self.building_generalization_mode,
+                "line_width_mm": self.building_line_width_mm,
+            }
+        )
         if self.style_profile not in STYLE_PROFILES:
-            raise ValueError(
-                f"Unsupported style profile: {self.style_profile!r}"
+            raise ValueError(f"Unsupported style profile: {self.style_profile!r}")
+        if (
+            min(
+                self.route_width_mm,
+                self.route_layer_height_mm,
+                self.terrain_relief_mm,
+                self.water_recess_mm,
+                self.surface_skin_thickness_mm,
+                self.minimum_waterway_width_mm,
             )
-        if min(
-            self.route_width_mm,
-            self.route_layer_height_mm,
-            self.terrain_relief_mm,
-            self.water_recess_mm,
-            self.surface_skin_thickness_mm,
-            self.minimum_waterway_width_mm,
-        ) <= 0:
+            <= 0
+        ):
             raise ValueError("Route, terrain, and style dimensions must be positive")
         if self.route_height_mm is not None and self.route_height_mm <= 0:
             raise ValueError("Route, terrain, and style dimensions must be positive")
@@ -104,6 +118,13 @@ class DesktopProject:
             "building_grouping_enabled": self.building_grouping_enabled,
             "building_generalization_mode": self.building_generalization_mode,
             "building_line_width_mm": self.building_line_width_mm,
+            "appearance": {
+                "mode": self.building_appearance_mode,
+                "detail": self.city_relief_detail,
+                "preset_version": self.city_relief_preset_version,
+                "landmark_emphasis": self.city_relief_landmark_emphasis,
+                "existing_settings": self.existing_appearance_settings,
+            },
             "building_heights": {
                 **BuildingHeightPolicy.from_config(asdict(self)).config(),
                 "max_print_height_mm": self.max_print_height_mm,
@@ -142,61 +163,58 @@ class DesktopProject:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "DesktopProject":
         version = value.get("version")
-        if version not in {1, 2, 3}:
+        if version not in {1, 2, 3, 4}:
             raise ValueError("Unsupported desktop project version")
         try:
             layers = value.get("layers", {})
             route = value.get("route", {})
             style = value.get("style", {})
             terrain = value.get("terrain", {})
-            heights = value.get("building_heights", {}) if version == 3 else {}
+            heights = value.get("building_heights", {}) if version >= 3 else {}
             return cls(
                 frame=MapFrame(**value["frame"]),
+                building_appearance_mode=value.get("appearance", {}).get("mode", "existing")
+                if version >= 4
+                else "existing",
+                city_relief_detail=value.get("appearance", {}).get("detail", "balanced"),
+                city_relief_landmark_emphasis=bool(
+                    value.get("appearance", {}).get("landmark_emphasis", True)
+                ),
+                city_relief_preset_version=str(
+                    value.get("appearance", {}).get("preset_version", "city-relief-v1")
+                ),
+                existing_appearance_settings=dict(
+                    value.get("appearance", {}).get("existing_settings", {})
+                ),
                 gpx_path=value.get("gpx_path"),
                 include_roads=bool(layers.get("roads", True)),
                 include_buildings=bool(layers.get("buildings", True)),
                 building_grouping_enabled=bool(value.get("building_grouping_enabled", False)),
-                building_generalization_mode=str(value.get("building_generalization_mode", "manual")),
+                building_generalization_mode=str(
+                    value.get("building_generalization_mode", "manual")
+                ),
                 building_line_width_mm=float(value.get("building_line_width_mm", 0.42)),
                 **BuildingHeightPolicy.from_config(heights).config(),
                 max_print_height_mm=float(heights.get("max_print_height_mm", 30.0)),
                 extra_generation_settings=dict(value.get("extra_generation_settings", {})),
                 include_terrain=bool(layers.get("terrain", False)),
                 include_water=bool(layers.get("water", False)),
-                flat_border_enabled=bool(
-                    value.get("flat_border_enabled", False)
-                ),
+                flat_border_enabled=bool(value.get("flat_border_enabled", False)),
                 terrain_relief_mm=float(terrain.get("relief_mm", 3.0)),
                 water_recess_mm=float(terrain.get("water_recess_mm", 0.4)),
                 route_width_mm=float(route.get("width_mm", 1.2)),
                 route_height_mm=(
-                    float(
-                        2.0
-                        if route.get("height_mm") is None
-                        else route["height_mm"]
-                    )
+                    float(2.0 if route.get("height_mm") is None else route["height_mm"])
                     if version == 1
-                    else (
-                        None
-                        if route.get("height_mm") is None
-                        else float(route["height_mm"])
-                    )
+                    else (None if route.get("height_mm") is None else float(route["height_mm"]))
                 ),
                 route_layer_height_mm=float(route.get("layer_height_mm", 0.16)),
-                route_markers=(
-                    "none" if version == 1 else str(route.get("markers", "none"))
-                ),
+                route_markers=("none" if version == 1 else str(route.get("markers", "none"))),
                 style_profile=str(style.get("profile", STYLE_PROFILE_URBAN)),
-                surface_skin_thickness_mm=float(
-                    style.get("surface_skin_thickness_mm", 0.4)
-                ),
-                minimum_waterway_width_mm=float(
-                    style.get("minimum_waterway_width_mm", 0.8)
-                ),
+                surface_skin_thickness_mm=float(style.get("surface_skin_thickness_mm", 0.4)),
+                minimum_waterway_width_mm=float(style.get("minimum_waterway_width_mm", 0.8)),
                 ground_cover_mode=str(style.get("ground_cover_mode", "auto")),
-                ground_cover_sensitivity=str(
-                    style.get("ground_cover_sensitivity", "balanced")
-                ),
+                ground_cover_sensitivity=str(style.get("ground_cover_sensitivity", "balanced")),
                 color_preset=style.get("color_preset"),
                 layer_colors=dict(style.get("layer_colors", {})),
             )

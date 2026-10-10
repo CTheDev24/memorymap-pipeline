@@ -28,6 +28,8 @@ def group_footprints(
     gap_mm=0.4,
     span_mm=4.0,
     maximum_members=128,
+    maximum_area_expansion=8.0,
+    maximum_candidate_neighbors=None,
     allowed_region=None,
     diagnostics=None,
     progress_callback=None,
@@ -52,7 +54,7 @@ def group_footprints(
     def blocked(polygon):
         if allowed_region is not None and not allowed_region.covers(polygon):
             return True
-        if prepared.intersects(polygon) and protected_area.exceeds(polygon, 1e-10):
+        if protected_area.exceeds(polygon, 1e-10) and prepared.intersects(polygon):
             return True
         return accepted_tree is not None and any(
             polygon.intersection(accepted_shapes[int(i)]).area > 1e-10
@@ -98,7 +100,9 @@ def group_footprints(
             }
             if not extras:
                 return (
-                    (mass, members) if substantial(mass) and mass.area <= 8 * source_area else None
+                    (mass, members)
+                    if substantial(mass) and mass.area <= maximum_area_expansion * source_area
+                    else None
                 )
             if len(members) + len(extras) > maximum_members or not extras <= available:
                 return None
@@ -124,7 +128,13 @@ def group_footprints(
 
     def candidates(members, hull, source_area):
         options = []
-        for candidate in tree.query(hull.buffer(gap_mm)):
+        neighbors = tree.query(hull.buffer(gap_mm))
+        if maximum_candidate_neighbors is not None:
+            neighbors = sorted(
+                (int(i) for i in neighbors if int(i) in available and int(i) not in members),
+                key=lambda i: (hull.distance(footprints[i]), order(i)),
+            )[:maximum_candidate_neighbors]
+        for candidate in neighbors:
             i = int(candidate)
             if i not in available or i in members:
                 continue
@@ -135,7 +145,7 @@ def group_footprints(
             x0, y0, x1, y1 = candidate_hull.bounds
             if max(x1 - x0, y1 - y0) > span_mm:
                 continue
-            if candidate_hull.area > 8 * (source_area + footprints[i].area):
+            if candidate_hull.area > maximum_area_expansion * (source_area + footprints[i].area):
                 continue
             if blocked(candidate_hull):
                 continue
@@ -146,8 +156,10 @@ def group_footprints(
     failed_seeds = set()
     for position, seed in enumerate(sorted(available, key=order)):
         if progress_callback is not None and position % 100 == 0:
-            progress_callback(.65 * position / max(1, len(initially_available)),
-                              f"Grouping building seeds {position}/{len(initially_available)}")
+            progress_callback(
+                0.65 * position / max(1, len(initially_available)),
+                f"Grouping building seeds {position}/{len(initially_available)}",
+            )
         if (
             seed not in available
             or seed in failed_seeds
@@ -184,8 +196,10 @@ def group_footprints(
     remaining_count = len(available)
     for position, seed in enumerate(sorted(available, key=order)):
         if progress_callback is not None and position % 100 == 0:
-            progress_callback(.65 + .35 * position / max(1, remaining_count),
-                              f"Checking alternate building groups {position}/{remaining_count}")
+            progress_callback(
+                0.65 + 0.35 * position / max(1, remaining_count),
+                f"Checking alternate building groups {position}/{remaining_count}",
+            )
         if maximum_members < 2:
             break
         if seed not in available or substantial(footprints[seed]) or blocked(footprints[seed]):

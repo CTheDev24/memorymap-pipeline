@@ -1,4 +1,5 @@
 """Offline packaged-app smoke test: real Qt, generation, export and WebEngine."""
+
 from __future__ import annotations
 
 import json
@@ -36,6 +37,7 @@ def run(report_path: str) -> int:
         record(stage="window creation", qt_version=qVersion())
         if sys.platform == "win32":
             import ctypes
+
             kernel = ctypes.WinDLL("kernel32", use_last_error=True)
             kernel.GetModuleHandleW.restype = ctypes.c_void_p
             kernel.GetModuleFileNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint]
@@ -57,10 +59,12 @@ def run(report_path: str) -> int:
         record(stage="offline generation", window_created=True)
         model, preview = _generate_fixture(work)
         record(stage="WebEngine preview", model_exported=str(model), preview_exported=str(preview))
-        window.preview_view.loadFinished.connect(lambda ok: record(
-            page_load_ok=ok, page_url=window.preview_view.url().toString()))
-        window.preview_view.page().renderProcessTerminated.connect(lambda status, code: record(
-            renderer_exit_status=str(status), renderer_exit_code=code))
+        window.preview_view.loadFinished.connect(
+            lambda ok: record(page_load_ok=ok, page_url=window.preview_view.url().toString())
+        )
+        window.preview_view.page().renderProcessTerminated.connect(
+            lambda status, code: record(renderer_exit_status=str(status), renderer_exit_code=code)
+        )
         window._generation_height_revision = window._height_revision
         window.set_result(str(model), str(preview))
         timer = QTimer(app)
@@ -84,7 +88,8 @@ def run(report_path: str) -> int:
                 "error: !!document.getElementById('status')?.classList.contains('error'), "
                 "status: document.getElementById('status')?.textContent, "
                 "info: document.getElementById('info')?.textContent, "
-                "canvas: !!document.querySelector('canvas'), url: location.href, title: document.title})", inspect,
+                "canvas: !!document.querySelector('canvas'), url: location.href, title: document.title})",
+                inspect,
             )
 
         def timeout():
@@ -117,16 +122,55 @@ def _generate_fixture(work: Path) -> tuple[Path, Path]:
     route = Route([RoutePoint(float(a), float(b)) for a, b in zip(lat, lon)])
     lat, lon = frame.print_to_lonlat(np.array([40, 60, 60, 40, 40]), np.array([40, 40, 60, 60, 40]))
     source = work / "building.geojson"
-    source.write_text(json.dumps({"type": "FeatureCollection", "features": [{
-        "type": "Feature", "properties": {"building": "yes", "height": 10},
-        "geometry": {"type": "Polygon", "coordinates": [list(zip(lon.tolist(), lat.tolist()))]},
-    }]}), encoding="utf-8")
-    result = generate_memory_map(GenerationRequest(
-        route=route, frame=frame, output_path=work / "smoke.3mf", include_roads=False,
-        buildings_file=source, config={"building_height_mode": "proportional", "building_height_multiplier": 2},
-    ))
+    source.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"building": "yes", "height": 10},
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [list(zip(lon.tolist(), lat.tolist()))],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = generate_memory_map(
+        GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=work / "smoke.3mf",
+            include_roads=False,
+            buildings_file=source,
+            config={"building_height_mode": "proportional", "building_height_multiplier": 2},
+        )
+    )
     if result.buildings_mesh is None or abs(result.buildings_mesh.bounds[1, 2] - 2) > 1e-6:
         raise ValueError("Packaged proportional-height generation produced the wrong roof height")
+    empty_roads = work / "roads.geojson"
+    empty_roads.write_text(json.dumps({"type": "FeatureCollection", "features": []}))
+    city = generate_memory_map(
+        GenerationRequest(
+            route=route,
+            frame=frame,
+            output_path=work / "city-relief-smoke.3mf",
+            roads_file=empty_roads,
+            include_roads=False,
+            buildings_file=source,
+            water_polygons=[],
+            open_space_polygons=[],
+            config={"building_appearance_mode": "city_relief"},
+        )
+    )
+    if city.buildings_mesh is None or city.stats["layer_states"]["buildings"] != "complete":
+        raise ValueError("Packaged City relief generation lost the building layer")
+    if not city.buildings_mesh.is_watertight or not city.buildings_mesh.is_winding_consistent:
+        raise ValueError("Packaged City relief building mesh failed closure checks")
     preview = work / "smoke.glb"
     export_preview_glb(result.meshes, preview)
     return result.output_path, preview

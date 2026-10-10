@@ -1,4 +1,5 @@
 """Qt worker for running the in-process generation service off the UI thread."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -24,6 +25,15 @@ class GenerationWorker(QObject):
 
             request = GenerationRequest(**self.request_data)
             result = generate_memory_map(request, progress_callback=self._progress)
+            stats = getattr(result, "stats", {})
+            states = stats.get("layer_states", {})
+            buildings = stats.get("building_generalization", {}) or {}
+            self.progress.emit(
+                100,
+                "Layers: "
+                + ", ".join(f"{k}: {v}" for k, v in states.items())
+                + f"; buildings: {buildings.get('source_building_count', 0)} source, {buildings.get('represented_source_count', 0)} represented, {buildings.get('omitted_count', 0)} omitted, {buildings.get('unresolved_count', 0)} unresolved",
+            )
             for warning in result.warnings:
                 self.warning.emit(str(warning))
             preview_path = Path(result.output_path).with_name("memorymap-preview.glb")
@@ -39,7 +49,9 @@ class GenerationWorker(QObject):
                 )
             self.completed.emit(str(result.output_path), preview_value)
         except Exception as exc:  # worker boundary: surface all pipeline failures
-            self.failed.emit(str(exc))
+            states = getattr(exc, "layer_states", {})
+            state_text = "; ".join(f"{layer}: {state}" for layer, state in states.items())
+            self.failed.emit((state_text + ". " if state_text else "") + str(exc))
         finally:
             self.finished.emit()
 

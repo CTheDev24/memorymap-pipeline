@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Iterable, Mapping
-import logging
 
+import numpy as np
 import shapely.geometry as geom
 import shapely.ops as ops
-import numpy as np
 
-from .projection import apply_transform, project_lonlat_array
 from .geometry import repair_polygon
 from .mesh import route_mesh_from_polygon
+from .projection import apply_transform, project_lonlat_array
 
 
 @dataclass(frozen=True)
@@ -33,49 +33,90 @@ class RoadStyle:
 
 
 URBAN_ROAD_TYPES = (
-    "motorway", "motorway_link", "trunk", "trunk_link", "primary",
-    "primary_link", "secondary", "secondary_link", "tertiary",
-    "tertiary_link", "residential", "living_street", "unclassified",
-    "service", "cycleway",
+    "motorway",
+    "motorway_link",
+    "trunk",
+    "trunk_link",
+    "primary",
+    "primary_link",
+    "secondary",
+    "secondary_link",
+    "tertiary",
+    "tertiary_link",
+    "residential",
+    "living_street",
+    "unclassified",
+    "service",
+    "cycleway",
 )
-URBAN_ROAD_WIDTHS_MM = MappingProxyType({
-    "motorway": 2.4, "motorway_link": 2.0, "trunk": 2.0,
-    "trunk_link": 1.8, "primary": 2.0, "primary_link": 1.8,
-    "secondary": 1.6, "secondary_link": 1.4, "tertiary": 1.4,
-    "tertiary_link": 1.2, "residential": 1.1, "living_street": 1.0,
-    "unclassified": 1.0, "service": 0.8, "pedestrian": 1.0,
-    "cycleway": 0.7, "footway": 0.6, "path": 0.5, "track": 0.7,
-})
+URBAN_ROAD_WIDTHS_MM = MappingProxyType(
+    {
+        "motorway": 2.4,
+        "motorway_link": 2.0,
+        "trunk": 2.0,
+        "trunk_link": 1.8,
+        "primary": 2.0,
+        "primary_link": 1.8,
+        "secondary": 1.6,
+        "secondary_link": 1.4,
+        "tertiary": 1.4,
+        "tertiary_link": 1.2,
+        "residential": 1.1,
+        "living_street": 1.0,
+        "unclassified": 1.0,
+        "service": 0.8,
+        "pedestrian": 1.0,
+        "cycleway": 0.7,
+        "footway": 0.6,
+        "path": 0.5,
+        "track": 0.7,
+    }
+)
 URBAN_ROAD_HEIGHT_MM = 0.8
 URBAN_ROAD_TERRAIN_SMOOTHING_TYPES = (
-    "motorway", "motorway_link", "trunk", "trunk_link",
+    "motorway",
+    "motorway_link",
+    "trunk",
+    "trunk_link",
 )
 
 LANDSCAPE_ROAD_TYPES = (
-    "motorway", "motorway_link", "trunk", "trunk_link", "primary",
+    "motorway",
+    "motorway_link",
+    "trunk",
+    "trunk_link",
+    "primary",
     "primary_link",
 )
-LANDSCAPE_ROAD_WIDTHS_MM = MappingProxyType({
-    "motorway": 1.4, "motorway_link": 1.1, "trunk": 1.2,
-    "trunk_link": 1.0, "primary": 1.0, "primary_link": 0.8,
-})
+LANDSCAPE_ROAD_WIDTHS_MM = MappingProxyType(
+    {
+        "motorway": 1.4,
+        "motorway_link": 1.1,
+        "trunk": 1.2,
+        "trunk_link": 1.0,
+        "primary": 1.0,
+        "primary_link": 0.8,
+    }
+)
 LANDSCAPE_ROAD_HEIGHT_MM = 0.4
 LANDSCAPE_ROAD_TERRAIN_SMOOTHING_TYPES = LANDSCAPE_ROAD_TYPES
 
-_ROAD_STYLES = MappingProxyType({
-    "urban": RoadStyle(
-        URBAN_ROAD_TYPES,
-        URBAN_ROAD_WIDTHS_MM,
-        URBAN_ROAD_HEIGHT_MM,
-        URBAN_ROAD_TERRAIN_SMOOTHING_TYPES,
-    ),
-    "landscape": RoadStyle(
-        LANDSCAPE_ROAD_TYPES,
-        LANDSCAPE_ROAD_WIDTHS_MM,
-        LANDSCAPE_ROAD_HEIGHT_MM,
-        LANDSCAPE_ROAD_TERRAIN_SMOOTHING_TYPES,
-    ),
-})
+_ROAD_STYLES = MappingProxyType(
+    {
+        "urban": RoadStyle(
+            URBAN_ROAD_TYPES,
+            URBAN_ROAD_WIDTHS_MM,
+            URBAN_ROAD_HEIGHT_MM,
+            URBAN_ROAD_TERRAIN_SMOOTHING_TYPES,
+        ),
+        "landscape": RoadStyle(
+            LANDSCAPE_ROAD_TYPES,
+            LANDSCAPE_ROAD_WIDTHS_MM,
+            LANDSCAPE_ROAD_HEIGHT_MM,
+            LANDSCAPE_ROAD_TERRAIN_SMOOTHING_TYPES,
+        ),
+    }
+)
 
 
 def resolve_road_style(style_profile: str) -> RoadStyle:
@@ -94,11 +135,7 @@ def _normalize_highway_value(highway):
 
 def _normalized_tag_values(value: object) -> set[str]:
     if isinstance(value, (list, tuple, set)):
-        return {
-            str(item).strip().lower()
-            for item in value
-            if str(item).strip()
-        }
+        return {str(item).strip().lower() for item in value if str(item).strip()}
     if value is None:
         return set()
     normalized = str(value).strip().lower()
@@ -125,11 +162,7 @@ def _polygon_parts(shape) -> list[geom.Polygon]:
     if isinstance(shape, geom.MultiPolygon):
         return [part for part in shape.geoms if not part.is_empty]
     if hasattr(shape, "geoms"):
-        return [
-            part
-            for child in shape.geoms
-            for part in _polygon_parts(child)
-        ]
+        return [part for child in shape.geoms for part in _polygon_parts(child)]
     return []
 
 
@@ -141,24 +174,16 @@ def _bisect_polygon(polygon: geom.Polygon) -> list[geom.Polygon]:
     padding = max(width, height, 1.0) + 1.0
     if width >= height:
         midpoint = (min_x + max_x) / 2.0
-        cutter = geom.LineString(
-            [(midpoint, min_y - padding), (midpoint, max_y + padding)]
-        )
+        cutter = geom.LineString([(midpoint, min_y - padding), (midpoint, max_y + padding)])
     else:
         midpoint = (min_y + max_y) / 2.0
-        cutter = geom.LineString(
-            [(min_x - padding, midpoint), (max_x + padding, midpoint)]
-        )
+        cutter = geom.LineString([(min_x - padding, midpoint), (max_x + padding, midpoint)])
 
     try:
         pieces = _polygon_parts(ops.split(polygon, cutter))
     except Exception:
         return []
-    return [
-        piece
-        for piece in pieces
-        if piece.area >= _ROAD_EXTRUSION_MIN_AREA_MM2
-    ]
+    return [piece for piece in pieces if piece.area >= _ROAD_EXTRUSION_MIN_AREA_MM2]
 
 
 def _extrude_road_polygon(
@@ -259,6 +284,11 @@ def download_and_build_roads(
     priority_region: geom.base.BaseGeometry | None = None,
     barrier_types: Iterable[str] = (),
     barrier_polygons: list | None = None,
+    road_heights_mm: dict | None = None,
+    grouping_barrier_widths_mm: dict | None = None,
+    local_road_region: geom.base.BaseGeometry | None = None,
+    major_road_types: Iterable[str] = (),
+    acquisition_stats: dict | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download OSM drivable roads within bbox (lat_min, lat_max, lon_min, lon_max), buffer them
     using widths from road_widths (mm). ``road_height_mm`` is the visible height above
@@ -266,6 +296,9 @@ def download_and_build_roads(
 
     Returns (buffered_polygons (shapely), mesh_or_none).
     """
+    if acquisition_stats is not None:
+        acquisition_stats.update(state="failed", source_count=0)
+    raised_polys = []
     # If a local roads file is provided, use geopandas to load it instead of OSMnx
     LineString = None
     MultiPolygon = None
@@ -293,7 +326,9 @@ def download_and_build_roads(
             try:
                 ox.settings.overpass_endpoint = endpoint
                 if radius_m is not None:
-                    G = ox.graph_from_point((center_lat, center_lon), dist=radius_m, network_type=network_type)
+                    G = ox.graph_from_point(
+                        (center_lat, center_lon), dist=radius_m, network_type=network_type
+                    )
                 else:
                     lat_min, lat_max, lon_min, lon_max = bbox
                     bbox_tuple = (lat_max, lat_min, lon_max, lon_min)
@@ -307,6 +342,10 @@ def download_and_build_roads(
         if edges is None:
             return None, None
 
+    if acquisition_stats is not None:
+        acquisition_stats.update(
+            state="complete" if len(edges) else "empty", source_count=len(edges)
+        )
     road_types = set(road_types)
     barrier_types = set(barrier_types)
     buffered_polys = []
@@ -314,17 +353,11 @@ def download_and_build_roads(
     smoothing_corridors = []
     smoothing_corridor_keys = set()
     smoothing_types = set(terrain_smoothing_types)
-    blocked_service_types = {
-        str(value).strip().lower() for value in excluded_service_types
-    }
-    blocked_access = {
-        str(value).strip().lower() for value in excluded_access
-    }
+    blocked_service_types = {str(value).strip().lower() for value in excluded_service_types}
+    blocked_access = {str(value).strip().lower() for value in excluded_access}
 
     # Create clipping boundary to keep roads within map bounds
-    clip_box = geom.box(
-        margin_mm, margin_mm, map_width_mm - margin_mm, map_height_mm - margin_mm
-    )
+    clip_box = geom.box(margin_mm, margin_mm, map_width_mm - margin_mm, map_height_mm - margin_mm)
 
     for _, row in edges.iterrows():
         hw = row.get("highway")
@@ -335,8 +368,7 @@ def download_and_build_roads(
             continue
         if (
             hw_norm == "service"
-            and _normalized_tag_values(row.get("service"))
-            & blocked_service_types
+            and _normalized_tag_values(row.get("service")) & blocked_service_types
         ):
             continue
         if _normalized_tag_values(row.get("access")) & blocked_access:
@@ -355,11 +387,21 @@ def download_and_build_roads(
 
         projected = project_lonlat_array(lats, lons, center_lat=center_lat, center_lon=center_lon)
         frame = transform.get("map_frame")
-        transformed = frame.transform_projected(projected) if frame is not None else apply_transform(projected, transform)
+        transformed = (
+            frame.transform_projected(projected)
+            if frame is not None
+            else apply_transform(projected, transform)
+        )
 
         # build shapely LineString in mm coordinates
         line = LineString([(float(x), float(y)) for x, y in transformed])
 
+        if grouping_barrier_widths_mm is not None and barrier_polygons is not None:
+            boundary = line.buffer(
+                float(grouping_barrier_widths_mm.get(hw_norm, 0.1)) / 2, cap_style=2, join_style=1
+            ).intersection(clip_box)
+            if not boundary.is_empty:
+                barrier_polygons.append(boundary)
         width_mm = float(road_widths.get(hw_norm, 1.0))
         poly = line.buffer(width_mm / 2.0, resolution=16, cap_style=2, join_style=1)
         if not poly.is_empty:
@@ -367,11 +409,20 @@ def download_and_build_roads(
             try:
                 clipped = poly.intersection(clip_box)
                 if not clipped.is_empty:
-                    if barrier_polygons is not None and hw_norm in barrier_types:
+                    if grouping_barrier_widths_mm is None and barrier_polygons is not None:
                         barrier_polygons.append(clipped)
                     if hw_norm not in road_types:
                         continue
+                    if local_road_region is not None and hw_norm not in major_road_types:
+                        clipped = clipped.intersection(local_road_region)
+                        if clipped.is_empty:
+                            continue
                     buffered_polys.append(clipped)
+                    if (
+                        road_heights_mm
+                        and road_heights_mm.get(hw_norm, road_height_mm) >= road_height_mm
+                    ):
+                        raised_polys.append(clipped)
                     if hw_norm in smoothing_types:
                         smoothing_polys.append(clipped)
                         key = (hw_norm, line.normalize().wkb)
@@ -414,21 +465,25 @@ def download_and_build_roads(
     if not unioned.is_valid:
         unioned, ok, explanation = repair_polygon(unioned)
 
-    # extrude polygons to mesh
+    # Disjoint planar partitions preserve local/major road hierarchy without
+    # coincident volumes at intersections.
+    regions = [(unioned, road_height_mm)]
+    if road_heights_mm:
+        major = ops.unary_union(raised_polys).intersection(unioned)
+        local = unioned.difference(major)
+        regions = [(major, road_height_mm), (local, min(road_heights_mm.values()))]
     meshes = []
     try:
-        if isinstance(unioned, (MultiPolygon, Polygon)):
-            parts = [unioned] if isinstance(unioned, Polygon) else list(unioned.geoms)
-            for p in parts:
-                if p.is_empty:
-                    continue
-                meshes.extend(
-                    _extrude_road_polygon(
-                        p,
-                        height_mm=road_height_mm + embed_depth_mm,
-                        z_offset=z_offset,
-                    )
-                )
+        for region, visible_height in regions:
+            if isinstance(region, (MultiPolygon, Polygon)):
+                parts = [region] if isinstance(region, Polygon) else list(region.geoms)
+                for p in parts:
+                    if not p.is_empty and (not road_heights_mm or p.area > 1e-8):
+                        meshes.extend(
+                            _extrude_road_polygon(
+                                p, height_mm=visible_height + embed_depth_mm, z_offset=z_offset
+                            )
+                        )
     except Exception as exc:  # pragma: no cover - mesh library issues
         logging.warning("Failed creating road meshes: %s", exc)
 
@@ -445,9 +500,7 @@ def download_and_build_roads(
             final_mesh.metadata["terrain_smoothing_region"] = ops.unary_union(
                 smoothing_polys
             ).intersection(clip_box)
-            final_mesh.metadata["terrain_profile_corridors"] = tuple(
-                smoothing_corridors
-            )
+            final_mesh.metadata["terrain_profile_corridors"] = tuple(smoothing_corridors)
 
     if debug:
         try:

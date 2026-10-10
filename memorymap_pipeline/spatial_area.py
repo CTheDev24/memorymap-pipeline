@@ -15,6 +15,7 @@ class AreaMask:
 
     def __init__(self, geometry, *, maximum_coordinates=2048):
         self.geometry = geometry
+        self.reference_areas = {}
         pieces = []
 
         def partition(part, depth=0):
@@ -41,10 +42,12 @@ class AreaMask:
         indices = self.tree.query(polygon, predicate="intersects")
         if not len(indices):
             return 0.0 > threshold
-        area = sum(
-            polygon.intersection(self.pieces[int(i)]).area
-            for i in indices
-        )
+        area = sum(polygon.intersection(self.pieces[int(i)]).area for i in indices)
         if abs(area - threshold) <= max(1e-9, abs(threshold) * 1e-6):
-            area = polygon.intersection(self.geometry).area
+            key = polygon.wkb
+            if key not in self.reference_areas:
+                if len(self.reference_areas) >= 65536:
+                    del self.reference_areas[next(iter(self.reference_areas))]
+                self.reference_areas[key] = polygon.intersection(self.geometry).area
+            area = self.reference_areas[key]
         return area > threshold

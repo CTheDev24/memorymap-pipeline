@@ -16,6 +16,7 @@ from .palettes import resolve_palette, rgba
 
 DEFAULT_FEATURE_EMBED_DEPTH_MM = 0.2
 
+
 def embedded_feature_dimensions(
     visible_height_mm: float,
     base_thickness_mm: float,
@@ -55,13 +56,9 @@ def split_overconnected_vertex_fans(mesh: Trimesh) -> Trimesh:
 
     edge_faces: dict[int, list[int]] = {}
     for occurrence, edge_id in enumerate(mesh.edges_unique_inverse):
-        edge_faces.setdefault(int(edge_id), []).append(
-            int(mesh.edges_face[occurrence])
-        )
+        edge_faces.setdefault(int(edge_id), []).append(int(mesh.edges_face[occurrence]))
 
-    vertex_edges: dict[int, list[int]] = {
-        int(vertex): [] for vertex in affected_vertices
-    }
+    vertex_edges: dict[int, list[int]] = {int(vertex): [] for vertex in affected_vertices}
     for edge_id, edge in enumerate(mesh.edges_unique):
         for vertex in edge:
             vertex_id = int(vertex)
@@ -142,22 +139,28 @@ def build_route_mesh(points: np.ndarray, route_width_mm: float, height_mm: float
             verts.append(point)
 
         base_index = len(verts) - 4
-        faces.extend([
-            [base_index + 0, base_index + 1, base_index + 2],
-            [base_index + 1, base_index + 3, base_index + 2],
-        ])
+        faces.extend(
+            [
+                [base_index + 0, base_index + 1, base_index + 2],
+                [base_index + 1, base_index + 3, base_index + 2],
+            ]
+        )
 
         top_index = len(verts)
-        verts.extend([
-            (p1[0], p1[1], height_mm),
-            (p2[0], p2[1], height_mm),
-            (p3[0], p3[1], height_mm),
-            (p4[0], p4[1], height_mm),
-        ])
-        faces.extend([
-            [top_index + 0, top_index + 1, top_index + 2],
-            [top_index + 1, top_index + 3, top_index + 2],
-        ])
+        verts.extend(
+            [
+                (p1[0], p1[1], height_mm),
+                (p2[0], p2[1], height_mm),
+                (p3[0], p3[1], height_mm),
+                (p4[0], p4[1], height_mm),
+            ]
+        )
+        faces.extend(
+            [
+                [top_index + 0, top_index + 1, top_index + 2],
+                [top_index + 1, top_index + 3, top_index + 2],
+            ]
+        )
 
     if len(verts) == 0:
         raise ValueError("Could not create route mesh")
@@ -207,7 +210,7 @@ def route_mesh_from_polygon(polygon, height_mm: float, z_offset: float = 0.0) ->
     if not mesh.is_watertight and polygon.is_valid and polygon.geom_type == "Polygon":
         # A courtyard touching the exterior at a point extrudes to a four-face
         # edge. Partition through that contact without filling or widening it.
-        from shapely.geometry import LineString
+        from shapely.geometry import LineString, Polygon
         from shapely.ops import split
         from trimesh.util import concatenate
 
@@ -215,12 +218,20 @@ def route_mesh_from_polygon(polygon, height_mm: float, z_offset: float = 0.0) ->
         for ring in polygon.interiors:
             contact = polygon.exterior.intersection(ring)
             if contact.geom_type == "Point":
-                contacts.append(contact)
+                contacts.append((contact, Polygon(ring).representative_point()))
             elif contact.geom_type == "MultiPoint":
-                contacts.extend(contact.geoms)
+                contacts.extend(
+                    (point, Polygon(ring).representative_point()) for point in contact.geoms
+                )
         x0, y0, x1, y1 = polygon.bounds
-        for contact in contacts:
+        for contact, interior in contacts:
+            direction = np.array([interior.x - contact.x, interior.y - contact.y])
+            direction = (
+                direction / max(np.linalg.norm(direction), 1e-12) * max(x1 - x0, y1 - y0, 1) * 3
+            )
+            origin = np.array([contact.x, contact.y])
             for line in (
+                LineString([origin - direction, origin, origin + direction]),
                 LineString([(x0 - 1, contact.y), (x1 + 1, contact.y)]),
                 LineString([(contact.x, y0 - 1), (contact.x, y1 + 1)]),
             ):
@@ -276,13 +287,9 @@ def refine_mesh_edges(
     vertices = np.asarray(mesh.vertices, dtype=float).copy()
     faces = np.asarray(mesh.faces, dtype=np.int64).copy()
     for _iteration in range(maximum_iterations):
-        edge_pairs = np.stack(
-            (faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]), axis=1
-        )
+        edge_pairs = np.stack((faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]), axis=1)
         canonical = np.sort(edge_pairs, axis=2)
-        unique_edges, inverse = np.unique(
-            canonical.reshape(-1, 2), axis=0, return_inverse=True
-        )
+        unique_edges, inverse = np.unique(canonical.reshape(-1, 2), axis=0, return_inverse=True)
         edge_lengths = np.linalg.norm(
             vertices[unique_edges[:, 1]] - vertices[unique_edges[:, 0]], axis=1
         )
@@ -321,9 +328,7 @@ def refine_mesh_edges(
         split = split_unique[face_edge_indices]
         midpoints = midpoint_indices[face_edge_indices]
         refined_faces: list[list[int]] = []
-        for (a, b, c), flags, (ab, bc, ca) in zip(
-            faces, split, midpoints, strict=True
-        ):
+        for (a, b, c), flags, (ab, bc, ca) in zip(faces, split, midpoints, strict=True):
             mask = int(flags[0]) | (int(flags[1]) << 1) | (int(flags[2]) << 2)
             if mask == 0:
                 refined_faces.append([a, b, c])
@@ -340,9 +345,7 @@ def refine_mesh_edges(
             elif mask == 5:
                 refined_faces.extend(([a, ab, ca], [c, ca, b], [ca, ab, b]))
             else:
-                refined_faces.extend(
-                    ([a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca])
-                )
+                refined_faces.extend(([a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]))
         faces = np.asarray(refined_faces, dtype=np.int64)
 
     if allow_partial:
@@ -383,7 +386,11 @@ def _apply_3mf_materials(
         entries = [(info, source.read(info.filename)) for info in source.infolist()]
 
     model_index = next(
-        (index for index, (info, _data) in enumerate(entries) if info.filename.lower().endswith(".model")),
+        (
+            index
+            for index, (info, _data) in enumerate(entries)
+            if info.filename.lower().endswith(".model")
+        ),
         None,
     )
     if model_index is None:
@@ -400,17 +407,11 @@ def _apply_3mf_materials(
     material_xml = [f'<basematerials id="{material_id}">']
     material_indices: dict[str, int] = {}
     for index, (object_name, (material_name, display_color)) in enumerate(materials.items()):
-        material_xml.append(
-            f'<base name="{material_name}" displaycolor="{display_color}" />'
-        )
+        material_xml.append(f'<base name="{material_name}" displaycolor="{display_color}" />')
         material_indices[object_name] = index
     material_xml.append("</basematerials>")
     insertion_point = resource_match.end()
-    model_text = (
-        model_text[:insertion_point]
-        + "".join(material_xml)
-        + model_text[insertion_point:]
-    )
+    model_text = model_text[:insertion_point] + "".join(material_xml) + model_text[insertion_point:]
 
     component_ids: list[int] = []
     for object_name, material_index in material_indices.items():
@@ -440,15 +441,13 @@ def _apply_3mf_materials(
     )
     assembly_xml = (
         f'<object id="{assembly_id}" name="MemoryMap" type="model">'
-        f'<components>{components_xml}</components></object>'
+        f"<components>{components_xml}</components></object>"
     )
     resources_end = re.search(r"</(?:[A-Za-z_][\w.-]*:)?resources>", model_text)
     if resources_end is None:
         raise ValueError("Exported 3MF model has no resources closing tag")
     model_text = (
-        model_text[: resources_end.start()]
-        + assembly_xml
-        + model_text[resources_end.start() :]
+        model_text[: resources_end.start()] + assembly_xml + model_text[resources_end.start() :]
     )
 
     build_pattern = re.compile(
@@ -572,9 +571,7 @@ def export_3mf(
         color_mesh(roads_mesh, "Roads_Black", "Roads", "roads")
 
     if buildings_mesh is not None:
-        color_mesh(
-            buildings_mesh, "Buildings_Verification", "Buildings", "buildings"
-        )
+        color_mesh(buildings_mesh, "Buildings_Verification", "Buildings", "buildings")
 
     if water_mesh is not None:
         color_mesh(

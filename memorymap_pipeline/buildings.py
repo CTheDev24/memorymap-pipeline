@@ -12,14 +12,17 @@ from shapely.ops import triangulate
 from shapely.strtree import STRtree
 from trimesh import Trimesh
 
-from .building_download import tiles as building_download_tiles
 from .building_classification import BuildingClass, classify_building, preset_for
+from .building_download import tiles as building_download_tiles
 from .building_filtering import residential_omissions
-from .building_generalization import disposition_diagnostics, measure_footprints
+from .building_generalization import (
+    disposition_diagnostics,
+    local_core_width_mm,
+    measure_footprints,
+)
 from .building_grouping import group_footprints
 from .building_heights import BuildingHeightPolicy, assembly_roots
 from .building_optimization import optimize_buildings
-from .overpass_geometry import polygon_from_element as _overpass_geometry
 from .geometry import repair_polygon
 from .landmarks import (
     LandmarkDefinition,
@@ -27,6 +30,7 @@ from .landmarks import (
     load_default_landmark_registry,
 )
 from .mesh import route_mesh_from_polygon
+from .overpass_geometry import polygon_from_element as _overpass_geometry
 from .print_scale import PrintScaleContext
 from .projection import apply_transform, project_lonlat_array
 from .stadiums import StadiumRecipe, build_stadium_mesh
@@ -307,6 +311,13 @@ def _transform_shapely_polygon(
     """
     if polygon.is_empty:
         return polygon
+    if polygon.geom_type == "MultiPolygon":
+        return geom.MultiPolygon(
+            [
+                _transform_shapely_polygon(part, center_lat, center_lon, transform)
+                for part in polygon.geoms
+            ]
+        )
 
     def _transform_ring(coords):
         coords = np.array(coords)
@@ -327,8 +338,8 @@ def _transform_shapely_polygon(
     interiors = [_transform_ring(r.coords) for r in polygon.interiors]
     try:
         return geom.Polygon(exterior, interiors)
-    except Exception:
-        return polygon
+    except Exception as exc:
+        raise ValueError("Projected polygon construction failed") from exc
 
 
 def _extract_real_height_m(
@@ -423,7 +434,8 @@ def _tags_from_gdf_row(row, columns: list[str]) -> dict:
     # objects (including lists/arrays) and the original index identity below.
     values = (
         dict(zip(row.index, row.to_numpy(copy=False)))
-        if hasattr(row, "to_numpy") and row.index.is_unique else row
+        if hasattr(row, "to_numpy") and row.index.is_unique
+        else row
     )
     tags: dict = {}
     for col in columns:
@@ -471,7 +483,6 @@ def _configure_overpass(osmnx: object, endpoint: str) -> None:
         settings.overpass_endpoint = endpoint
     if hasattr(settings, "requests_timeout"):
         settings.requests_timeout = OVERPASS_TIMEOUT
-
 
 
 def _adaptive_height_mapper(
@@ -553,9 +564,7 @@ def _tiered_building_height_mapper(
         if item.height_source in {"height", "levels"}
     )
     regular_high_reference = (
-        max(9.0, float(np.percentile(confident_storeys, 90)))
-        if confident_storeys
-        else 9.0
+        max(9.0, float(np.percentile(confident_storeys, 90))) if confident_storeys else 9.0
     )
     exceptional_reference = (
         max(regular_high_reference, confident_storeys[-1])
@@ -634,9 +643,7 @@ def _tiered_building_height_mapper(
                 / (exceptional_reference - regular_high_reference),
             ),
         )
-        visible = regular_ceiling + (fraction**1.25) * (
-            scaled_ceiling - regular_ceiling
-        )
+        visible = regular_ceiling + (fraction**1.25) * (scaled_ceiling - regular_ceiling)
         return min(visible, scaled_ceiling)
 
     return mapped
@@ -730,9 +737,8 @@ def _is_numerical_fragment(polygon: geom.Polygon) -> bool:
     """Identify boolean-operation residue at coordinate roundoff precision."""
     x0, y0, x1, y1 = polygon.bounds
     precision = 8 * np.spacing(max(1.0, abs(x0), abs(y0), abs(x1), abs(y1)))
-    return (
-        polygon.minimum_clearance <= precision
-        and polygon.area <= precision * max(x1 - x0, y1 - y0)
+    return polygon.minimum_clearance <= precision and polygon.area <= precision * max(
+        x1 - x0, y1 - y0
     )
 
 
@@ -746,7 +752,8 @@ def _supported_elevated_elements(
         ]
     ],
     vertical_bounds: list[tuple[float, float]] | None = None,
-    *, preserve_top: bool = False,
+    *,
+    preserve_top: bool = False,
 ) -> dict[int, float]:
     """Map supported parts to bottoms that retain contact after height mapping."""
     if vertical_bounds is not None:
@@ -777,8 +784,9 @@ def _supported_elevated_elements(
                 if footprint.intersection(support_footprint).area <= 1e-8:
                     continue
                 bottom = (
-                    dimensions.min_height_m if vertical_bounds is None else
-                    min(vertical_bounds[index][0], vertical_bounds[support_index][1])
+                    dimensions.min_height_m
+                    if vertical_bounds is None
+                    else min(vertical_bounds[index][0], vertical_bounds[support_index][1])
                 )
                 newly_supported[index] = max(newly_supported.get(index, 0.0), bottom)
         if not newly_supported:
@@ -786,7 +794,10 @@ def _supported_elevated_elements(
         if vertical_bounds is not None:
             for index, bottom in newly_supported.items():
                 old_bottom, old_top = vertical_bounds[index]
-                vertical_bounds[index] = (bottom, old_top if preserve_top else old_top - (old_bottom - bottom))
+                vertical_bounds[index] = (
+                    bottom,
+                    old_top if preserve_top else old_top - (old_bottom - bottom),
+                )
         supported.update(newly_supported)
         pending.difference_update(newly_supported)
     return supported
@@ -827,6 +838,9 @@ def download_and_build_buildings(
     route_exclusion: geom.base.BaseGeometry | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
     height_policy: BuildingHeightPolicy | None = None,
+    appearance_mode: str = "existing",
+    city_detail: str = "balanced",
+    landmark_emphasis: bool = True,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download building footprints within bbox and return (unioned_polygons, mesh).
 
@@ -839,6 +853,12 @@ def download_and_build_buildings(
     ``embed_depth_mm`` extends every building below the base top without reducing that
     visible height. All extruded buildings are concatenated into a single mesh.
     """
+    from . import city_relief
+
+    city = appearance_mode == "city_relief"
+    city_relief.validate(
+        {"building_appearance_mode": appearance_mode, "city_relief_detail": city_detail}
+    )
     height_policy = height_policy or BuildingHeightPolicy()
     if generalization_mode not in {"manual", "print_optimized"}:
         raise ValueError("Unsupported building generalization mode")
@@ -850,7 +870,8 @@ def download_and_build_buildings(
     width_cache = {}
     stage_seconds = (
         generalization_stats.setdefault("stage_seconds", {})
-        if generalization_stats is not None else {}
+        if generalization_stats is not None
+        else {}
     )
     stage_name = None
     stage_started = perf_counter()
@@ -864,7 +885,9 @@ def download_and_build_buildings(
         now = perf_counter()
         if stage_name is not None:
             stage_seconds[stage_name] = now - stage_started
-            logging.getLogger(__name__).info("Building stage %s: %.3fs", stage_name, now - stage_started)
+            logging.getLogger(__name__).info(
+                "Building stage %s: %.3fs", stage_name, now - stage_started
+            )
         stage_name, stage_started = name, now
         progress(fraction, message)
 
@@ -872,10 +895,16 @@ def download_and_build_buildings(
 
     def report_generalization(footprints):
         if generalization_stats is not None and print_scale_context is not None:
-            generalization_stats.update(measure_footprints(
-                footprints, print_scale_context, width_cache=width_cache,
-                progress_callback=lambda f: progress(.86 + .04 * f, "Measuring source building widths"),
-            ))
+            generalization_stats.update(
+                measure_footprints(
+                    footprints,
+                    print_scale_context,
+                    width_cache=width_cache,
+                    progress_callback=lambda f: progress(
+                        0.86 + 0.04 * f, "Measuring source building widths"
+                    ),
+                )
+            )
             generalization_stats.update(disposition_diagnostics(records))
             generalization_stats["measurement_status"] = "measured"
 
@@ -892,8 +921,7 @@ def download_and_build_buildings(
                 g = row.geometry
                 geo_with_tags.append((g, _tags_from_gdf_row(row, cols)))
         except Exception as exc:
-            logging.warning("Failed to read local buildings file %s: %s", buildings_file, exc)
-            return None, None
+            raise RuntimeError(f"Building file could not be read: {exc}") from exc
     elif bbox is not None and len(building_download_tiles(bbox)) > 16:
         from .building_download import download_tiles
 
@@ -910,9 +938,9 @@ def download_and_build_buildings(
         try:
             import osmnx as ox
         except Exception as exc:
-            logging.warning("OSMnx not available or failed to import: %s", exc)
-            return None, None
+            raise RuntimeError(f"Building acquisition unavailable: {exc}") from exc
 
+        acquisition_complete = False
         bbox_for_query: tuple | None = None
 
         for endpoint in OVERPASS_ENDPOINTS:
@@ -935,6 +963,7 @@ def download_and_build_buildings(
                             if g is None:
                                 continue
                             geo_with_tags.append((g, _tags_from_gdf_row(row, cols)))
+                        acquisition_complete = True
                         break
                     except Exception:
                         lat_delta = radius_m / 111000.0
@@ -972,6 +1001,7 @@ def download_and_build_buildings(
                             if g is None:
                                 continue
                             geo_with_tags.append((g, _tags_from_gdf_row(row, cols)))
+                        acquisition_complete = True
                         break
                     except Exception:
                         bbox_for_query = (lat_min, lon_min, lat_max, lon_max)
@@ -1005,7 +1035,10 @@ def download_and_build_buildings(
                     )
                     resp.raise_for_status()
                     data = resp.json()
-                    elements = data.get("elements", [])
+                    if not isinstance(data.get("elements"), list) or data.get("remark"):
+                        raise ValueError("Incomplete building response")
+                    acquisition_complete = True
+                    elements = data["elements"]
                     for el in elements:
                         el_tags = dict(el.get("tags", {}))
                         if el.get("type") in {"node", "way", "relation"}:
@@ -1013,10 +1046,8 @@ def download_and_build_buildings(
                         if el.get("id") is not None:
                             el_tags["_osm_id"] = el["id"]
                         polygon = _overpass_geometry(el)
-                        if polygon is not None:
-                            geo_with_tags.append((polygon, el_tags))
-                    if geo_with_tags:
-                        break
+                        geo_with_tags.append((polygon, el_tags))
+                    break
                 except Exception as exc:
                     logging.warning("Overpass HTTP fetch failed via %s: %s", endpoint, exc)
                     geo_with_tags = []
@@ -1027,8 +1058,14 @@ def download_and_build_buildings(
                 geo_with_tags = []
                 continue
 
-        if not geo_with_tags:
-            return None, None
+        if not acquisition_complete:
+            raise RuntimeError(
+                "Building download failed at every endpoint. Retry to reuse cached data, or disable Buildings for a roads-only map."
+            )
+
+    if generalization_stats is not None:
+        generalization_stats["acquired_source_count"] = len(geo_with_tags)
+        generalization_stats["layer_state"] = "complete" if geo_with_tags else "empty"
 
     try:
         landmark_registry = load_default_landmark_registry()
@@ -1036,14 +1073,21 @@ def download_and_build_buildings(
         logging.warning("Landmark enhancements unavailable: %s", exc)
         landmark_registry = None
 
+    if city:
+        geo_with_tags.sort(
+            key=lambda item: (
+                str(item[1].get("_osm_type", "")),
+                str(item[1].get("_osm_id", "")),
+                item[0].normalize().wkb_hex if item[0] is not None else "",
+            )
+        )
+
     # Margin-inset plate boundary used for clip/omit decisions
-    stage("footprint_preparation", .08, "Preparing and classifying building footprints")
+    stage("footprint_preparation", 0.08, "Preparing and classifying building footprints")
     plate_box = geom.box(margin_mm, margin_mm, map_width_mm - margin_mm, map_height_mm - margin_mm)
     frame = transform.get("map_frame")
     horizontal_scale_mm_per_m = (
-        frame.mm_per_meter
-        if frame is not None
-        else float(transform.get("scale", 1.0))
+        frame.mm_per_meter if frame is not None else float(transform.get("scale", 1.0))
     )
 
     # Transform each polygon to mm coords, extract its height, clip, and filter
@@ -1054,8 +1098,10 @@ def download_and_build_buildings(
     diagnostic_by_geometry: dict[int, dict] = {}
     for source_index, (g, tags) in enumerate(geo_with_tags, 1):
         if source_index % 100 == 0:
-            progress(.08 + .10 * source_index / len(geo_with_tags),
-                     f"Preparing building footprints {source_index}/{len(geo_with_tags)}")
+            progress(
+                0.08 + 0.10 * source_index / len(geo_with_tags),
+                f"Preparing building footprints {source_index}/{len(geo_with_tags)}",
+            )
         if g is not None and g.geom_type == "Polygon":
             polys = [g]
         elif g is not None and g.geom_type == "MultiPolygon":
@@ -1064,7 +1110,8 @@ def download_and_build_buildings(
             record = {
                 "id": f"b{source_index:06d}-p0",
                 "source_id": str(tags.get("_osm_id", tags.get("id", source_index))),
-                "status": "unresolved", "reason": "unsupported_or_null_geometry",
+                "status": "unresolved",
+                "reason": "unsupported_or_null_geometry",
                 "output_face_ranges": [],
             }
             records.append(record)
@@ -1083,6 +1130,8 @@ def download_and_build_buildings(
                 )
             except LandmarkRegistryError as exc:
                 logging.warning("Skipping conflicting landmark identifiers: %s", exc)
+            if landmark is not None and landmark.key.startswith("la-") and not city:
+                landmark = None
             if landmark is not None:
                 effective_tags.update(landmark.tag_corrections)
 
@@ -1160,16 +1209,30 @@ def download_and_build_buildings(
             diagnostic_by_geometry[id(clipped)] = record
             record.update(status="unresolved", reason="not_meshed")
 
+    if generalization_stats is not None:
+        generalization_stats["decoded_polygon_count"] = len(records)
+        generalization_stats["in_frame_element_count"] = len(elements)
     if not elements:
-        stage("width_diagnostics", .85, "Measuring building widths")
+        stage("width_diagnostics", 0.85, "Measuring building widths")
         report_generalization([])
         stage(None, 1.0, "No building footprints in frame")
         return None, None
 
     assembly_by_dims = {}
     assembly_sizes = {}
+    if city and landmark_emphasis:
+        roots = assembly_roots(elements)
+        enlarged, reports = city_relief.enlarge_landmarks(
+            elements, roots, plate_box, grouping_barriers, route_exclusion
+        )
+        for i, item in enumerate(enlarged):
+            record = diagnostic_by_geometry[id(elements[i][0])]
+            if i in reports:
+                record["landmark_emphasis"] = reports[i]
+            diagnostic_by_geometry[id(item[0])] = record
+        elements = enlarged
     assembly_source_elements = list(elements)
-    if height_policy.active:
+    if height_policy.active or city:
         roots = assembly_roots(elements)
         assembly_by_dims = {id(item[1]): root for item, root in zip(elements, roots)}
         for root in roots:
@@ -1203,6 +1266,7 @@ def download_and_build_buildings(
         max_print_height_mm,
         map_scale_mm_per_m=building_scale_mm_per_m,
     )
+
     def real_area_m2(polygon: geom.base.BaseGeometry) -> float:
         return polygon.area / max(horizontal_scale_mm_per_m**2, 1e-12)
 
@@ -1213,7 +1277,16 @@ def download_and_build_buildings(
     ) -> float:
         """Apply tiered massing while preserving roof and elevated-part proportions."""
         preset = preset_for(dimensions.building_class)
-        total_visible = tier_height(dimensions, dimensions.total_height_m, footprint_area_m2)
+        total_visible = (
+            city_relief.height(
+                dimensions,
+                landmark=landmark_emphasis
+                and dimensions.building_class
+                in {BuildingClass.LANDMARK, BuildingClass.STADIUM_ARENA},
+            )
+            if city
+            else tier_height(dimensions, dimensions.total_height_m, footprint_area_m2)
+        )
         if dimensions.height_source not in {"height", "levels"}:
             total_visible = min(total_visible, preset.max_visual_height_mm)
         fraction = np.clip(real_height_m / max(dimensions.total_height_m, 1e-9), 0.0, 1.0)
@@ -1221,39 +1294,76 @@ def download_and_build_buildings(
 
     classified_height = legacy_classified_height
     assembly_ground = {}
-    if height_policy.active:
+    if height_policy.active or city:
         raw_heights = {}
         envelope_heights = {}
+        city_assembly_shapes = {}
+        if city and not height_policy.active:
+            tall_roots = {
+                assembly_by_dims[id(d)]
+                for _p, d, _part, _landmark in assembly_source_elements
+                if d.total_height_m > 15
+            }
+            for p, d, _part, _landmark in assembly_source_elements:
+                root = assembly_by_dims[id(d)]
+                if root in tall_roots:
+                    city_assembly_shapes.setdefault(root, []).append(p)
+            city_assembly_widths = {
+                key: local_core_width_mm(ops.unary_union(shapes), cache=width_cache)
+                for key, shapes in city_assembly_shapes.items()
+            }
         for _poly, dims, _part, _landmark in assembly_source_elements:
-            raw = (dims.total_height_m * horizontal_scale_mm_per_m
-                   if height_policy.mode == "proportional" else
-                   legacy_classified_height(dims, dims.total_height_m, dims.footprint_area_m2))
+            raw = (
+                dims.total_height_m * horizontal_scale_mm_per_m
+                if height_policy.mode == "proportional"
+                else legacy_classified_height(dims, dims.total_height_m, dims.footprint_area_m2)
+            )
+            if city and not height_policy.active and dims.total_height_m > 15:
+                raw = min(raw, max(1.2, 6 * city_assembly_widths[assembly_by_dims[id(dims)]]))
             raw_heights[id(dims)] = raw
         # A parent completely replaced by parts has no visible roof. Its source
         # height must not prevent the surviving assembly from reaching the floor.
         for _poly, dims, _part, _landmark in elements:
             assembly = assembly_by_dims[id(dims)]
-            envelope_heights[assembly] = max(raw_heights[id(dims)], envelope_heights.get(assembly, 0.0))
+            envelope_heights[assembly] = max(
+                raw_heights[id(dims)], envelope_heights.get(assembly, 0.0)
+            )
         resolved = {key: height_policy.resolve(value) for key, value in envelope_heights.items()}
 
         def classified_height(dimensions, real_height_m, footprint_area_m2):
             assembly = assembly_by_dims[id(dimensions)]
             scale = resolved[assembly][0] / envelope_heights[assembly]
-            return float(raw_heights[id(dimensions)] * scale * np.clip(
-                real_height_m / dimensions.total_height_m, 0.0, 1.0,
-            ))
+            return float(
+                raw_heights[id(dimensions)]
+                * scale
+                * np.clip(
+                    real_height_m / dimensions.total_height_m,
+                    0.0,
+                    1.0,
+                )
+            )
 
         for poly, dims, _part, _landmark in elements:
             assembly = assembly_by_dims[id(dims)]
             details = {
-                "mode": height_policy.mode, "multiplier": height_policy.multiplier,
-                "source_height_m": dims.total_height_m, "height_source": dims.height_source,
+                "mode": height_policy.mode,
+                "multiplier": height_policy.multiplier,
+                "source_height_m": dims.total_height_m,
+                "height_source": dims.height_source,
                 "true_scale_top_mm": dims.total_height_m * horizontal_scale_mm_per_m,
                 "mapped_top_mm": raw_heights[id(dims)],
-                "requested_top_mm": classified_height(dims, dims.total_height_m, dims.footprint_area_m2),
+                "requested_top_mm": classified_height(
+                    dims, dims.total_height_m, dims.footprint_area_m2
+                ),
                 "assembly_id": f"assembly-{assembly}",
-                "assembly_top_mm": resolved[assembly][0], "limit_applied": resolved[assembly][1],
+                "assembly_top_mm": resolved[assembly][0],
+                "limit_applied": resolved[assembly][1],
                 "datum": "local assembly ground surface, excluding embed depth",
+                "appearance": appearance_mode,
+                "preset_aspect_limit_applied": city
+                and not height_policy.active
+                and raw_heights[id(dims)]
+                < legacy_classified_height(dims, dims.total_height_m, dims.footprint_area_m2),
             }
             diagnostic_by_geometry[id(poly)]["height_control"] = details
         if terrain_height_at is not None:
@@ -1263,14 +1373,17 @@ def download_and_build_buildings(
                     coordinates = list(shape.exterior.coords)
                     for interior in shape.interiors:
                         coordinates.extend(interior.coords)
-                    coordinates.extend((shape.centroid.coords[0], shape.representative_point().coords[0]))
+                    coordinates.extend(
+                        (shape.centroid.coords[0], shape.representative_point().coords[0])
+                    )
                     samples = np.asarray(coordinates)
                     ground = float(np.min(terrain_height_at(samples[:, 0], samples[:, 1])))
                     assembly = assembly_by_dims[id(dims)]
                     assembly_ground[assembly] = min(ground, assembly_ground.get(assembly, ground))
         if generalization_stats is not None:
             generalization_stats["height_controls"] = {
-                **height_policy.config(), "assembly_count": len(resolved),
+                **height_policy.config(),
+                "assembly_count": len(resolved),
                 "raised_assemblies": sum(reason == "floor" for _, reason in resolved.values()),
                 "capped_assemblies": sum(reason == "cap" for _, reason in resolved.values()),
             }
@@ -1281,18 +1394,69 @@ def download_and_build_buildings(
     ]
     measurement_footprints = [p for p, _d, part, lm in elements if not part and lm is None]
     optimization = None
-    stage("optimization", .20, "Applying building policy")
+    stage("optimization", 0.20, "Applying building policy")
+    if city and generalization_stats is not None:
+        effective = city_relief.context_for(print_scale_context, city_detail)
+        generalization_stats["city_relief"] = {
+            "preset_version": city_relief.PRESET_VERSION,
+            "detail": city_detail,
+            "preferred_width_mm": effective.robust_width_mm,
+            "merge_gap_mm": effective.merge_gap_mm,
+            "cluster_span_mm": effective.group_span_mm,
+            "representation": "bounded_source_oriented_forms",
+            "representative_length_to_width": 1.2,
+            "occupied_envelope_expansion_mm": 0.75 * effective.robust_width_mm,
+            "fallback_width_mm": print_scale_context.robust_width_mm,
+            "landmark_emphasis": landmark_emphasis,
+        }
     if optimized:
         optimization = optimize_buildings(
-            elements, rendered_element_heights, print_scale_context,
-            allowed_region=plate_box, barriers=grouping_barriers,
-            route_exclusion=route_exclusion, allow_grouping=grouping is not None,
-            max_group_height_mm=grouping["max_height_mm"] if grouping else 3.0,
+            elements,
+            rendered_element_heights,
+            (
+                city_relief.context_for(print_scale_context, city_detail)
+                if city
+                else print_scale_context
+            ),
+            allowed_region=plate_box,
+            barriers=grouping_barriers,
+            route_exclusion=route_exclusion,
+            allow_grouping=grouping is not None and not city,
+            max_group_height_mm=6.0 if city else (grouping["max_height_mm"] if grouping else 3.0),
             width_cache=width_cache,
-            progress_callback=lambda f, message: progress(.20 + .40 * f, message),
-            timings=(generalization_stats.setdefault("optimization_seconds", {})
-                     if generalization_stats is not None else None),
+            maximum_area_expansion=64.0 if city else 8.0,
+            maximum_group_members=16 if city else 128,
+            maximum_candidate_neighbors=8 if city else None,
+            preserve_large_footprints=city,
+            progress_callback=lambda f, message: progress(0.20 + 0.40 * f, message),
+            timings=(
+                generalization_stats.setdefault("optimization_seconds", {})
+                if generalization_stats is not None
+                else None
+            ),
         )
+        if city:
+            optimization = city_relief.typify_neighborhoods(
+                optimization,
+                elements,
+                rendered_element_heights,
+                city_relief.context_for(print_scale_context, city_detail),
+                plate_box,
+                grouping_barriers,
+                route_exclusion,
+                print_scale_context.robust_width_mm,
+                progress_callback=lambda f, message: progress(0.59, message),
+            )
+            for g in optimization.groups:
+                for i in g.members:
+                    optimization.decisions[i].update(
+                        action="typified",
+                        reason=optimization.decisions[i].get("reason")
+                        if optimization.decisions[i].get("preferred_width_unmet")
+                        or optimization.decisions[i].get("connected_massing")
+                        else "stepped_neighborhood_representative",
+                        representative_source_indices=list(g.members),
+                    )
         updated = []
         for i, (poly, dims, part, landmark) in enumerate(elements):
             record = diagnostic_by_geometry[id(poly)]
@@ -1304,7 +1468,7 @@ def download_and_build_buildings(
             diagnostic_by_geometry[id(result)] = record
             updated.append((result, dims, part, landmark))
         elements = updated
-    stage("support_and_manual_grouping", .60, "Resolving building supports and groups")
+    stage("support_and_manual_grouping", 0.60, "Resolving building supports and groups")
     # Real-world support does not guarantee contact after visual height mapping:
     # each building's tier and footprint can change its vertical scale.
     vertical_bounds = []
@@ -1321,7 +1485,9 @@ def download_and_build_buildings(
             max(bottom + minimum_body, classified_height(dims, dims.eave_height_m, area_m2)),
         )
         vertical_bounds.append((bottom, eave))
-    supported_elevated = _supported_elevated_elements(elements, vertical_bounds, preserve_top=height_policy.active)
+    supported_elevated = _supported_elevated_elements(
+        elements, vertical_bounds, preserve_top=height_policy.active
+    )
     if extend_elevated_parts_to_ground and not height_policy.active:
         for index, bottom in supported_elevated.items():
             rendered_element_heights[index] -= max(0.0, vertical_bounds[index][0] - bottom)
@@ -1358,30 +1524,44 @@ def download_and_build_buildings(
             grouped_members.update(group.members)
     elif grouping is not None:
         eligible = [
-            i for i, (poly, dims, is_part, landmark) in enumerate(elements)
-            if not is_part and landmark is None and dims.min_height_m == 0
-            and dims.building_class not in {
-                BuildingClass.LANDMARK, BuildingClass.STADIUM_ARENA,
-                BuildingClass.RELIGIOUS, BuildingClass.CIVIC_INSTITUTIONAL,
+            i
+            for i, (poly, dims, is_part, landmark) in enumerate(elements)
+            if not is_part
+            and landmark is None
+            and dims.min_height_m == 0
+            and dims.building_class
+            not in {
+                BuildingClass.LANDMARK,
+                BuildingClass.STADIUM_ARENA,
+                BuildingClass.RELIGIOUS,
+                BuildingClass.CIVIC_INSTITUTIONAL,
             }
             and (not height_policy.active or assembly_sizes[assembly_by_dims[id(dims)]] == 1)
-            and poly.geom_type == "Polygon" and not poly.interiors
+            and poly.geom_type == "Polygon"
+            and not poly.interiors
             and rendered_element_heights[i] <= grouping["max_height_mm"]
         ]
         groups = group_footprints(
-            [element[0] for element in elements], eligible, grouping_barriers,
-            width_mm=grouping["width_mm"], gap_mm=grouping["gap_mm"],
-            span_mm=grouping["span_mm"], allowed_region=plate_box,
+            [element[0] for element in elements],
+            eligible,
+            grouping_barriers,
+            width_mm=grouping["width_mm"],
+            gap_mm=grouping["gap_mm"],
+            span_mm=grouping["span_mm"],
+            allowed_region=plate_box,
             diagnostics=grouping_diagnostics,
-            progress_callback=lambda f, message: progress(.60 + .05 * f, message),
+            progress_callback=lambda f, message: progress(0.60 + 0.05 * f, message),
         )
         for group in groups:
             grouped_at[group.members[0]] = group
             grouped_members.update(group.members)
     else:
         groups = []
-    omitted_residential = (optimization.omitted if optimization is not None else
-                           residential_omissions(elements, groups, residential_min_width_mm))
+    omitted_residential = (
+        optimization.omitted
+        if optimization is not None
+        else residential_omissions(elements, groups, residential_min_width_mm)
+    )
     if filter_stats is not None:
         filter_stats.update(
             minimum_width_mm=0.0 if optimized else residential_min_width_mm,
@@ -1397,21 +1577,28 @@ def download_and_build_buildings(
             )
         for i in omitted_residential:
             diagnostic_by_geometry[id(elements[i][0])].update(
-                status="omitted", reason=(optimization.decisions[i]["reason"] if optimized else
-                                          "residential_below_minimum_print_width"),
-                minimum_print_width_mm=residential_min_width_mm, output_print_geometry=None,
+                status="omitted",
+                reason=(
+                    optimization.decisions[i]["reason"]
+                    if optimized
+                    else "residential_below_minimum_print_width"
+                ),
+                minimum_print_width_mm=residential_min_width_mm,
+                output_print_geometry=None,
             )
     output_footprints = []
 
-    stage("extrusion", .65, "Extruding building meshes")
+    stage("extrusion", 0.65, "Extruding building meshes")
     # Extrude each building individually then concatenate into one mesh
     meshes = []
     face_cursor = 0
     surface_z = z_offset + embed_depth_mm
     for element_index, (poly, dimensions, _is_part, landmark) in enumerate(elements):
         if element_index % 100 == 0:
-            progress(.65 + .20 * element_index / len(elements),
-                     f"Extruding buildings {element_index}/{len(elements)}")
+            progress(
+                0.65 + 0.20 * element_index / len(elements),
+                f"Extruding buildings {element_index}/{len(elements)}",
+            )
         if element_index in omitted_residential:
             continue
         if element_index in grouped_members and element_index not in grouped_at:
@@ -1423,8 +1610,11 @@ def download_and_build_buildings(
         if group is not None:
             poly = group.geometry
             group_records = [diagnostic_by_geometry[id(elements[i][0])] for i in group.members]
-            group_height = (optimization.group_heights[group.members[0]] if optimized else
-                            max(rendered_element_heights[i] for i in group.members))
+            group_height = (
+                optimization.group_heights[group.members[0]]
+                if optimized
+                else max(rendered_element_heights[i] for i in group.members)
+            )
             group_id = "group-" + min(item["id"] for item in group_records)
             for item in group_records:
                 item.update(group_id=group_id, group_source_ids=[r["id"] for r in group_records])
@@ -1434,6 +1624,17 @@ def download_and_build_buildings(
         if diagnostics is not None:
             record["output_print_geometry"] = geom.mapping(poly)
         parts: list[geom.Polygon] = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
+        city_part_heights = {}
+        if city and group is not None:
+            stepped = city_relief.stepped_parts(
+                poly,
+                group.members,
+                elements,
+                rendered_element_heights,
+                print_scale_context.robust_width_mm,
+            )
+            parts = [p for p, h in stepped]
+            city_part_heights = {id(p): h for p, h in stepped}
         numerical = [part for part in parts if _is_numerical_fragment(part)]
         if numerical:
             parts = [part for part in parts if not _is_numerical_fragment(part)]
@@ -1472,15 +1673,21 @@ def download_and_build_buildings(
                             part,
                             recipe=landmark_recipe or StadiumRecipe(),
                         )
-                        if height_policy.active:
+                        if height_policy.active or city:
                             target_top = classified_height(
-                                dimensions, dimensions.total_height_m, footprint_area_m2,
+                                dimensions,
+                                dimensions.total_height_m,
+                                footprint_area_m2,
                             )
                             # Scale all recipe bodies/roofs/supports together, then
                             # keep the same physical embedding below ground.
-                            stadium.vertices[:, 2] *= (target_top + embed_depth_mm) / stadium.bounds[1, 2]
+                            stadium.vertices[:, 2] *= (
+                                target_top + embed_depth_mm
+                            ) / stadium.bounds[1, 2]
                             record["height_control"]["recipe_adapter"] = "whole_recipe_envelope"
-                            record["height_control"].setdefault("effective_tops_mm", []).append(target_top)
+                            record["height_control"].setdefault("effective_tops_mm", []).append(
+                                target_top
+                            )
                         stadium.apply_translation(
                             (0.0, 0.0, surface_z + terrain_z - embed_depth_mm)
                         )
@@ -1529,7 +1736,7 @@ def download_and_build_buildings(
                         group_height = min(group_height, height_policy.maximum_mm)
                 if group_height is not None:
                     bottom_mm = 0.0
-                    eave_mm = total_mm = group_height
+                    eave_mm = total_mm = city_part_heights.get(id(part), group_height)
                 if extend_elevated_parts_to_ground and element_index in supported_elevated:
                     # Legacy mapping translates upper parts as a unit. Explicit
                     # height controls preserve the requested top and extend support.
@@ -1539,15 +1746,22 @@ def download_and_build_buildings(
                         eave_mm -= shift
                         total_mm -= shift
                     if diagnostics is not None and shift > 1e-9:
-                        record.setdefault("support_adjustments", []).append({
-                            "part_index": part_index,
-                            "downward_translation_mm": shift,
-                            "reason": ("extend_support_without_changing_top" if height_policy.active
-                                       else "preserve_contact_after_height_mapping"),
-                        })
-                if height_policy.active:
+                        record.setdefault("support_adjustments", []).append(
+                            {
+                                "part_index": part_index,
+                                "downward_translation_mm": shift,
+                                "reason": (
+                                    "extend_support_without_changing_top"
+                                    if height_policy.active
+                                    else "preserve_contact_after_height_mapping"
+                                ),
+                            }
+                        )
+                if height_policy.active or city:
                     for output_record in group_records or [record]:
-                        output_record["height_control"].setdefault("effective_tops_mm", []).append(total_mm)
+                        output_record["height_control"].setdefault("effective_tops_mm", []).append(
+                            total_mm
+                        )
                 effective_embed = (
                     embed_depth_mm if bottom_mm <= 1e-9 else min(embed_depth_mm, bottom_mm)
                 )
@@ -1570,18 +1784,24 @@ def download_and_build_buildings(
                     orientation=dimensions.roof_orientation,
                     base_overlap_mm=embed_depth_mm,
                 )
-                if optimized and total_mm - eave_mm > 1e-9 and (
-                    roof is None or not roof.is_watertight or not roof.is_winding_consistent
+                if (
+                    optimized
+                    and total_mm - eave_mm > 1e-9
+                    and (roof is None or not roof.is_watertight or not roof.is_winding_consistent)
                 ):
                     # Boolean-cut outlines can expose unstable ridge triangulations.
                     # Preserve the final footprint and height with a closed flat cap.
                     roof = route_mesh_from_polygon(
-                        part, height_mm=total_mm - eave_mm + embed_depth_mm,
+                        part,
+                        height_mm=total_mm - eave_mm + embed_depth_mm,
                         z_offset=surface_z + terrain_z + eave_mm - embed_depth_mm,
                     )
-                    record.setdefault("roof_fallbacks", []).append({
-                        "part_index": part_index, "reason": "closed_cap_after_roof_triangulation_failure",
-                    })
+                    record.setdefault("roof_fallbacks", []).append(
+                        {
+                            "part_index": part_index,
+                            "reason": "closed_cap_after_roof_triangulation_failure",
+                        }
+                    )
                 if roof is not None:
                     meshes.append(roof)
             except Exception as exc:
@@ -1601,34 +1821,91 @@ def download_and_build_buildings(
             for item in group_records:
                 item.update(
                     status="grouped" if face_count and not mesh_failed else "unresolved",
-                    reason="bounded_neighborhood_mass" if face_count and not mesh_failed else "mesh_failed",
+                    reason="bounded_neighborhood_mass"
+                    if face_count and not mesh_failed
+                    else "mesh_failed",
                     output_print_geometry=geom.mapping(poly),
-                    output_face_ranges=[[face_cursor, face_cursor + face_count]] if face_count else [],
+                    output_face_ranges=[[face_cursor, face_cursor + face_count]]
+                    if face_count
+                    else [],
                     grouped_height_mm=group_height,
                 )
         face_cursor += face_count
 
-    stage("width_diagnostics", .85, "Measuring building widths")
+    stage("width_diagnostics", 0.85, "Measuring building widths")
     report_generalization(measurement_footprints)
     if optimized and generalization_stats is not None:
         generalization_stats.update(
+            represented_source_count=sum(
+                r.get("status") in {"retained", "grouped"} for r in records
+            ),
+            output_representative_count=len(output_footprints),
+            source_footprint_area_mm2=sum(p.area for p in measurement_footprints),
+            output_footprint_area_mm2=sum(p.area for p in output_footprints),
             thresholds_applied_to_geometry=True,
             output_widths=measure_footprints(
-                output_footprints, print_scale_context, width_cache=width_cache,
-                progress_callback=lambda f: progress(.90 + .05 * f, "Measuring output building widths"),
+                output_footprints,
+                print_scale_context,
+                width_cache=width_cache,
+                progress_callback=lambda f: progress(
+                    0.90 + 0.05 * f, "Measuring output building widths"
+                ),
             ),
-            decisions={action: sum(r.get("optimization", {}).get("action") == action for r in records)
-                       for action in ("preserved", "simplified", "grouped", "enlarged", "omitted", "unresolved")},
+            decisions={
+                action: sum(r.get("optimization", {}).get("action") == action for r in records)
+                for action in (
+                    "preserved",
+                    "simplified",
+                    "grouped",
+                    "typified",
+                    "enlarged",
+                    "omitted",
+                    "unresolved",
+                )
+            },
         )
-    stage("assembly", .95, "Assembling building meshes")
+    if city and generalization_stats is not None:
+        cell_width = 10 * print_scale_context.xy_resolution_mm
+
+        def cells(polygons):
+            return {
+                (int(p.centroid.x // cell_width), int(p.centroid.y // cell_width))
+                for p in polygons
+                if not p.is_empty
+            }
+
+        occupied = cells(measurement_footprints)
+        represented = cells(output_footprints)
+        generalization_stats["neighborhood_coverage"] = {
+            "cell_width_mm": cell_width,
+            "source_occupied_cells": len(occupied),
+            "represented_occupied_cells": len(occupied & represented),
+            "fraction": len(occupied & represented) / len(occupied) if occupied else None,
+            "measurement": "centroid occupancy; source-to-output records provide exact dispositions",
+        }
+    stage("assembly", 0.95, "Assembling building meshes")
     final_mesh = None
+    if any(r.get("reason") == "mesh_failed" for r in records):
+        raise RuntimeError(
+            "Building meshing failed; export stopped to avoid a partial layer: "
+            + str(
+                [
+                    {
+                        "source_id": r.get("source_id"),
+                        "errors": r.get("mesh_errors", ["no generated faces"]),
+                    }
+                    for r in records
+                    if r.get("reason") == "mesh_failed"
+                ][:8]
+            )
+        )
     if meshes:
         try:
             from trimesh.util import concatenate
 
             final_mesh = concatenate(meshes)
-        except Exception:
-            final_mesh = meshes[0]
+        except Exception as exc:
+            raise RuntimeError("Building assembly failed; export stopped.") from exc
         final_mesh.metadata["building_height_distribution"] = height_distribution
         final_mesh.metadata["building_grouping"] = {
             **grouping_diagnostics,
@@ -1641,7 +1918,9 @@ def download_and_build_buildings(
                 and i not in omitted_residential
                 and poly.buffer(-grouping["width_mm"] / 2, join_style=2).is_empty
                 for i, (poly, _dims, _part, _landmark) in enumerate(elements)
-            ) if grouping else 0,
+            )
+            if grouping
+            else 0,
         }
 
     # Union of all clipped footprints (used for debug overlay and return value)
