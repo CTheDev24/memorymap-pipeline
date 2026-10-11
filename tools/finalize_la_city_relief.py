@@ -144,5 +144,5 @@ try:
     ):
         subprocess.run([sys.executable, script], check=True, creationflags=0x08000000)
 except Exception as error:
-    record("failed", error=f"{type(error).__name__}: {error}")
+    record("failed", passed=False, error=f"{type(error).__name__}: {error}")
     raise
