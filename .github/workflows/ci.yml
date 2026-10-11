@@ -53,7 +53,7 @@ jobs:
       - name: Require real desktop imports
         run: python -c "from PySide6.QtWidgets import QApplication; from memorymap_pipeline.desktop.window import MemoryMapWindow"
       - name: Run full suite with desktop coverage
-        run: pytest tests/ -v --junitxml=desktop-tests.xml
+        run: python -m pytest tests/ -v --junitxml=desktop-tests.xml
       - name: Require desktop regression execution
         run: |
           python - <<'PY'
