@@ -29,7 +29,8 @@ if (-not (Test-Path -LiteralPath $ReportPath)) {
 $report = Get-Content -LiteralPath $ReportPath -Raw | ConvertFrom-Json
 if ($smokeProcess.ExitCode -ne 0 -or -not $report.passed -or -not $report.frozen -or
     -not $report.window_created -or -not $report.preview.ready -or -not $report.preview.canvas) {
-    throw "Packaged startup/generation/preview check failed. See $ReportPath"
+    Write-Output (Get-Content -LiteralPath $ReportPath -Raw)
+    throw "Packaged startup/generation/preview check failed (exit $($smokeProcess.ExitCode)). See $ReportPath"
 }
 $systemIcu = Join-Path $env:SystemRoot "System32/icuuc.dll"
 if ([IO.Path]::GetFullPath($report.loaded_icuuc) -ine [IO.Path]::GetFullPath($systemIcu)) {
