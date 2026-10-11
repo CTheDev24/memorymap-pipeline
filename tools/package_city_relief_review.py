@@ -17,6 +17,8 @@ with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compressleve
         "full-validation-state.json",
         "full-performance-comparison.json",
         "building-loss-breakdown.json",
+        "performance-investigation.json",
+        "city-full-typification.speedscope.json",
     ):
         path = root / name
         if path.exists():
