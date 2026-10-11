@@ -20,7 +20,14 @@ $smokeProcess = Start-Process -FilePath $executablePath -WorkingDirectory (Split
     "--smoke-test", ('"{0}"' -f $ReportPath)
 )
 if (-not $smokeProcess.WaitForExit(120000)) {
-    $smokeProcess.Kill($true)
+    Write-Output (Get-Content -LiteralPath $ReportPath -Raw)
+    # Windows PowerShell 5 uses .NET Framework, whose Process.Kill has no
+    # tree-kill overload. Keep the same failure gate on both supported shells.
+    if ($PSVersionTable.PSVersion.Major -ge 7) {
+        $smokeProcess.Kill($true)
+    } else {
+        $smokeProcess.Kill()
+    }
     throw "Packaged startup test exceeded 120 seconds. See $ReportPath"
 }
 if (-not (Test-Path -LiteralPath $ReportPath)) {
