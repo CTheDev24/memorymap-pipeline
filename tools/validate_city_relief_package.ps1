@@ -1,6 +1,10 @@
-param([string]$Manifest = "benchmarks/outputs/city-relief/packaged-full-manifest.json")
+param(
+    [string]$Manifest = "benchmarks/outputs/city-relief/packaged-full-manifest.json",
+    [string]$Executable = "dist/city-relief-reviewed/Trace Studio.exe",
+    [ValidateSet("roads", "buildings")][string]$ExpectedLayerFailure
+)
 $ErrorActionPreference = "Stop"
-$exe = (Resolve-Path "dist/city-relief-reviewed/Trace Studio.exe").Path
+$exe = (Resolve-Path $Executable).Path
 $inputPath = (Resolve-Path $Manifest).Path
 $definition = Get-Content -LiteralPath $inputPath -Raw | ConvertFrom-Json
 $reportPath = $definition.report_path
@@ -23,5 +27,12 @@ $clock.Stop()
 $metrics = @{ executable = $exe; executable_sha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLower(); elapsed_wall_seconds = $clock.Elapsed.TotalSeconds; peak_process_working_set_bytes = $peak; exit_code = $job.ExitCode; report_path = $reportPath; measurement = "Maximum OS peak working set of executable parent or generation child; wall time includes one-file extraction" }
 $metrics | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath ([IO.Path]::ChangeExtension($reportPath, ".performance.json")) -Encoding utf8
 $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+if ($ExpectedLayerFailure) {
+    if ($report.passed -or $job.ExitCode -eq 0 -or $report.layer_states.$ExpectedLayerFailure -ne "failed") {
+        throw "Expected $ExpectedLayerFailure failure was not reported correctly: $reportPath"
+    }
+    Write-Output "Expected $ExpectedLayerFailure failure verified: $reportPath"
+    return
+}
 if (-not $report.passed -or $job.ExitCode -ne 0) { throw "Packaged generation failed: $reportPath" }
 Write-Output "Packaged generation passed: $reportPath"

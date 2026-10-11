@@ -978,6 +978,7 @@ def generate_memory_map(
 
     grouping_road_polygons = []
     road_source_stats = {}
+    road_processing_stats = {}
     city_internal_roads = (
         request.include_buildings and config["building_appearance_mode"] == "city_relief"
     )
@@ -1045,9 +1046,10 @@ def generate_memory_map(
                 barrier_polygons=grouping_road_polygons,
                 road_widths=road_widths,
                 road_height_mm=road_height_mm,
+                acquisition_stats=road_source_stats,
+                processing_stats=road_processing_stats,
                 **(
                     {
-                        "acquisition_stats": road_source_stats,
                         "grouping_barrier_widths_mm": {
                             kind: (
                                 road_widths.get(kind, 0.8)
@@ -1085,8 +1087,32 @@ def generate_memory_map(
                 excluded_access=config.get("excluded_road_access", ()),
                 priority_region=route_polygon if route_mesh is not None else None,
             )
+        except Exception as exc:
+            error = LayerGenerationError(
+                "roads" if request.include_roads else "buildings",
+                "Street geometry processing failed. No new model was exported.",
+            )
+            error.processing_stats = {"acquisition": road_source_stats, "meshing": road_processing_stats}
+            raise error from exc
         finally:
             logging.getLogger().removeHandler(collector)
+        if (
+            request.include_roads
+            and (
+                road_source_stats.get("state") == "failed"
+                or road_processing_stats.get("failed_polygon_count", 0)
+                or road_processing_stats.get("processing_error")
+                or (unioned_roads is not None and not unioned_roads.is_empty and roads_mesh is None)
+            )
+        ):
+            error = LayerGenerationError(
+                "roads",
+                "Road acquisition or processing failed; "
+                f"{road_processing_stats.get('failed_polygon_count', 0)} polygon fragments failed. "
+                "No new model was exported; retry after resolving the road geometry.",
+            )
+            error.processing_stats = {"acquisition": road_source_stats, "meshing": road_processing_stats}
+            raise error
         if roads_mesh is None and request.include_roads:
             warnings.append("No road geometry was available inside the selected frame.")
             warnings.extend(f"Road detail: {message}" for message in collector.messages[-4:])
@@ -1440,6 +1466,8 @@ def generate_memory_map(
         "route_height_source": "profile_default" if request.route_height_mm is None else "explicit",
         "flat_border_enabled": flat_border_enabled,
         "roads": _geometry_count(unioned_roads),
+        "road_acquisition": road_source_stats,
+        "road_processing": road_processing_stats,
         "road_style": (
             {
                 "profile": style_profile,

@@ -72,6 +72,12 @@ try:
         (root / "packaged-full-report.performance.json").read_text(encoding="utf-8-sig")
     )
     assert city["passed"] and city["statistics"]["layer_states"]["buildings"] == "complete"
+    missing = [
+        layer
+        for layer in ("buildings", "roads", "route")
+        if city["statistics"]["layer_states"].get(layer) != "complete"
+    ]
+    assert not missing, f"Required full LA layers did not complete: {missing}"
     # Existing baseline predates the City-only ancillary park-member repair.
     # Keep both actual identities; do not rewrite an already verified audit.
     baseline_build = baseline["statistics"]["build"]["source_sha256"]

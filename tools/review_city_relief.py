@@ -32,7 +32,7 @@ for area in ("downtown", "neighborhood", "landmark"):
                 f'<figure data-camera="{camera}"><img src="data:image/png;base64,{pixels}"><figcaption>{camera}</figcaption></figure>'
             )
         cards.append(
-            f"<article><h3>{mode.title()}</h3>{''.join(views)}<p>{values['represented_source_count']:,} sources represented; {values['output_representative_count']:,} output forms; {values['unresolved_count']:,} unresolved.</p><p>Generation: {metrics['elapsed_seconds']:.1f} s</p></article>"
+            f"<article><h3>{mode.title()}</h3>{''.join(views)}<p>{values['represented_source_count']:,} sources represented; {values['output_representative_count']:,} output forms; {values['unresolved_count']:,} unresolved.</p><p>Generation: {metrics['elapsed_seconds']:.1f} s</p><p>Source fingerprint: {html.escape(metrics['statistics']['build']['source_sha256'][:12])}. {'Reused earlier comparison; not regenerated for the Balanced validation.' if mode == 'dense' else 'Regenerated for the approved Balanced validation.'}</p></article>"
         )
     sections.append(
         f'<section><h2>{area.title()} — 24 × 24 mm</h2><div class="grid">{"".join(cards)}</div></section>'
@@ -42,16 +42,26 @@ page = """<!doctype html><meta charset="utf-8"><title>LA City relief review</tit
 <body data-view="perspective"><h1>LA City relief: candidate review</h1>
 <p>Actual exported geometry, frozen LA sources, identical cameras. Each square represents approximately 2.291 km at the full 240 × 190 mm map scale: 95.45 metres per printed millimetre. Outer-wall feature budget: 0.42 mm with a 0.4 mm nozzle.</p>
 <p>City relief is illustrative. The route stays geographically accurate. Local streets appear near the route; major roads remain visible across the map. Internal street, route, park and water barriers constrain buildings independently of visible roads.</p>
-<p><strong>Acceptance remains pending.</strong> Preserved thin assemblies remain unresolved. These renders do not establish toolpath survival, strength or physical print quality. Runtime samples were generated alongside other validation jobs; they are diagnostic, not an isolated release benchmark.</p>
+<p><strong>Physical acceptance remains pending.</strong> Preserved thin assemblies remain unresolved. These renders do not establish toolpath survival, strength or physical print quality. Existing and Balanced coupons were regenerated serially for this validation; Dense reuses the earlier comparison. Generation timings include different build provenance and are diagnostic, not a controlled release benchmark.</p>
 <nav><button onclick="document.body.dataset.view='top'">Top</button><button onclick="document.body.dataset.view='perspective'">Perspective</button><button onclick="document.body.dataset.view='side'">Side</button></nav>
 """ + "".join(sections)
 full_state = root / "full-validation-state.json"
-full_passed = full_state.exists() and json.loads(full_state.read_text()).get("passed")
+state = json.loads(full_state.read_text()) if full_state.exists() else {}
+full_passed = state.get("passed", False)
+full_available = (
+    bool(state.get("city_sha256")) and (root / "packaged-full/perspective.png").exists()
+)
+if state.get("validation_error"):
+    page += (
+        f"<p><strong>Full candidate failed:</strong> {html.escape(state['validation_error'])}</p>"
+    )
 if (root / "existing" / "perspective.png").exists():
     cards = []
     for folder, label in (("existing", "Existing"), ("packaged-full", "City relief")):
-        if folder == "packaged-full" and not full_passed:
-            cards.append("<article><h3>City relief</h3><p>Full-map validation is pending.</p></article>")
+        if folder == "packaged-full" and not full_available:
+            cards.append(
+                "<article><h3>City relief</h3><p>Full-map validation is pending.</p></article>"
+            )
             continue
         views = []
         for camera in ("top", "perspective", "side"):
@@ -59,15 +69,28 @@ if (root / "existing" / "perspective.png").exists():
             views.append(
                 f'<figure data-camera="{camera}"><img src="data:image/png;base64,{pixels}"><figcaption>{camera}</figcaption></figure>'
             )
+        if folder == "packaged-full" and not full_passed:
+            label += " — incomplete candidate"
         cards.append(f"<article><h3>{label}</h3>{''.join(views)}</article>")
-    status = "Both full exports and audit hashes verified." if full_passed else "Existing baseline export verified; full City relief validation pending."
+    status = (
+        "Both full exports and audit hashes verified."
+        if full_passed
+        else "Full City export hash verified, but the required Roads layer is missing; this candidate is not accepted."
+        if full_available
+        else "Existing baseline export verified; full City relief validation pending."
+    )
     page += f'<section><h2>Full LA frame — 240 × 190 mm</h2><div class="grid">{"".join(cards)}</div><p>{status} Physical and controlled performance acceptance remain pending.</p></section>'
 slice_report = root / "slicer" / "toolpath-survival.json"
 if slice_report.exists():
     page += "<h2>Actual A1 slicing</h2><p>0.4 mm nozzle, 0.42 mm outer walls, 0.16 mm layers, PLA Basic. Centerline presence above the base is evidence of toolpaths, not a strength or clearance guarantee.</p><ul>"
     for sample in json.loads(slice_report.read_text()):
         page += f"<li>{html.escape(sample['area'].title())}: {sample['forms_with_toolpaths']} / {sample['output_forms']} forms receive above-base toolpaths; {sample['seconds'] / 60:.1f} min; {sample['grams']:.2f} g.</li>"
-    page += "</ul><p>Inspect the disposition counts in toolpath-survival.json for representative and unresolved forms. Physically print and inspect the coupons before accepting the preset.</p>"
+    page += "</ul><p>These coupon slices predate the mixed-container road correction. Changed road geometry requires renewed slicing evidence. Inspect the disposition counts in toolpath-survival.json for representative and unresolved forms. Physical acceptance remains pending.</p>"
+    coupon_check = root / "roadfix-neighborhood-report.json"
+    if coupon_check.exists():
+        coupon = json.loads(coupon_check.read_text())
+        if coupon.get("layer_states", {}).get("roads") == "failed":
+            page += "<p><strong>The neighborhood coupon fails the current road guard. Its historical slice is incomplete road-validation evidence; repair and re-slice before physical acceptance.</strong></p>"
 page += "</body>"
 (root / "review.html").write_text(page, encoding="utf-8")
 (root / "prototype-summary.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")

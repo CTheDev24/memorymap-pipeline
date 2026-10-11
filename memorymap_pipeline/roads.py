@@ -192,6 +192,7 @@ def _extrude_road_polygon(
     height_mm: float,
     z_offset: float,
     split_depth: int = 0,
+    processing_stats: dict | None = None,
 ) -> list[object]:
     """Extrude a road polygon, subdividing only when triangulation is invalid.
 
@@ -233,6 +234,7 @@ def _extrude_road_polygon(
             split_depth >= _ROAD_EXTRUSION_MAX_SPLIT_DEPTH
             or polygon.area < 2.0 * _ROAD_EXTRUSION_MIN_AREA_MM2
         ):
+            _record_road_mesh_failure(processing_stats, polygon, split_depth, str(exc))
             logging.warning(
                 "Skipping invalid road polygon after %d subdivision levels: %s",
                 split_depth,
@@ -242,6 +244,7 @@ def _extrude_road_polygon(
 
         pieces = _bisect_polygon(polygon)
         if len(pieces) < 2:
+            _record_road_mesh_failure(processing_stats, polygon, split_depth, str(exc))
             logging.warning(
                 "Skipping invalid road polygon that could not be subdivided: %s",
                 exc,
@@ -256,9 +259,37 @@ def _extrude_road_polygon(
                     height_mm=height_mm,
                     z_offset=z_offset,
                     split_depth=split_depth + 1,
+                    processing_stats=processing_stats,
                 )
             )
         return meshes
+
+
+def _record_road_mesh_failure(stats, polygon, depth, reason):
+    if stats is None:
+        return
+    stats["failed_polygon_count"] = stats.get("failed_polygon_count", 0) + 1
+    stats["failed_area_mm2"] = stats.get("failed_area_mm2", 0.0) + polygon.area
+    failures = stats.setdefault("failed_polygons", [])
+    if len(failures) < 128:
+        failures.append({"area_mm2": polygon.area, "bounds_mm": list(polygon.bounds),
+                         "split_depth": depth, "reason": reason,
+                         "geometry": geom.mapping(polygon)})
+
+
+def _extrude_road_regions(regions, *, hierarchical, embed_depth_mm, z_offset, processing_stats=None):
+    meshes = []
+    for region, visible_height in regions:
+        # Mixed intersections retain polygons alongside zero-area contacts.
+        for polygon in _polygon_parts(region):
+            if not hierarchical or polygon.area > 1e-8:
+                meshes.extend(
+                    _extrude_road_polygon(
+                        polygon, height_mm=visible_height + embed_depth_mm, z_offset=z_offset,
+                        processing_stats=processing_stats,
+                    )
+                )
+    return meshes
 
 
 def download_and_build_roads(
@@ -289,6 +320,7 @@ def download_and_build_roads(
     local_road_region: geom.base.BaseGeometry | None = None,
     major_road_types: Iterable[str] = (),
     acquisition_stats: dict | None = None,
+    processing_stats: dict | None = None,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download OSM drivable roads within bbox (lat_min, lat_max, lon_min, lon_max), buffer them
     using widths from road_widths (mm). ``road_height_mm`` is the visible height above
@@ -301,12 +333,10 @@ def download_and_build_roads(
     raised_polys = []
     # If a local roads file is provided, use geopandas to load it instead of OSMnx
     LineString = None
-    MultiPolygon = None
-    Polygon = None
     if roads_file is not None:
         try:
             import geopandas as gpd
-            from shapely.geometry import LineString, MultiPolygon, Polygon
+            from shapely.geometry import LineString
 
             edges = gpd.read_file(roads_file)
             # Expect the GeoDataFrame to contain LineString geometries
@@ -316,7 +346,7 @@ def download_and_build_roads(
     else:
         try:
             import osmnx as ox
-            from shapely.geometry import LineString, MultiPolygon, Polygon
+            from shapely.geometry import LineString
         except Exception as exc:  # pragma: no cover - optional dependency
             logging.warning("OSMnx not available or failed to import: %s", exc)
             return None, None
@@ -474,17 +504,13 @@ def download_and_build_roads(
         regions = [(major, road_height_mm), (local, min(road_heights_mm.values()))]
     meshes = []
     try:
-        for region, visible_height in regions:
-            if isinstance(region, (MultiPolygon, Polygon)):
-                parts = [region] if isinstance(region, Polygon) else list(region.geoms)
-                for p in parts:
-                    if not p.is_empty and (not road_heights_mm or p.area > 1e-8):
-                        meshes.extend(
-                            _extrude_road_polygon(
-                                p, height_mm=visible_height + embed_depth_mm, z_offset=z_offset
-                            )
-                        )
+        meshes = _extrude_road_regions(
+            regions, hierarchical=bool(road_heights_mm),
+            embed_depth_mm=embed_depth_mm, z_offset=z_offset, processing_stats=processing_stats,
+        )
     except Exception as exc:  # pragma: no cover - mesh library issues
+        if processing_stats is not None:
+            processing_stats["processing_error"] = str(exc)
         logging.warning("Failed creating road meshes: %s", exc)
 
     # try to combine meshes if available
@@ -495,6 +521,8 @@ def download_and_build_roads(
 
             final_mesh = concatenate(meshes)
         except Exception:
+            if processing_stats is not None:
+                processing_stats["processing_error"] = "Road mesh concatenation failed"
             final_mesh = meshes[0]
         if smoothing_polys:
             final_mesh.metadata["terrain_smoothing_region"] = ops.unary_union(

@@ -50,7 +50,12 @@ def run(manifest_path):
             warnings=result.warnings,
             elapsed_seconds=time.perf_counter() - started,
         )
-    except Exception:
+    except Exception as error:
+        from ..build_identity import build_identity
+
         report["error"] = traceback.format_exc()
+        report["layer_states"] = getattr(error, "layer_states", {})
+        report["processing_statistics"] = getattr(error, "processing_stats", {})
+        report["build"] = build_identity()
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return 0 if report["passed"] else 1

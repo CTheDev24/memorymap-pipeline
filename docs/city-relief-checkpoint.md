@@ -1,5 +1,7 @@
 # City relief performance checkpoint — October 10, 2026
 
+**October 11 update:** the owner approved the run below. It completed but failed required Roads-layer acceptance. This is the historical pre-run checkpoint; use [the completed validation report](city-relief-full-validation.md) for current status. Another full run is not ready.
+
 **Recommendation: approve one controlled, freshly packaged full LA Balanced validation. Do not release or merge. No new full LA run has started.** Smaller frozen benchmarks demonstrate a meaningful improvement with identical representations, but full-frame runtime, memory, visual quality, and physical acceptance remain unverified.
 
 ## 1. Current implementation
@@ -30,11 +32,13 @@ Each case used the same captured pre-typification state before/after, three seri
 
 | Case | Scope | Reference median | Optimized median | Reduction | Peak working set, before → after |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Low-rise neighborhood | First 1,000 of 7,365 eligible seeds; 7,564 source footprints | 12.59 s | 6.94 s | 44.8% | 176.56 → 177.31 MB |
-| Downtown | Complete typification, including fallback; 980 eligible seeds | 17.55 s | 7.85 s | 55.3% | 136.27 → 135.88 MB |
-| Landmark area | Complete typification, including fallback; 1,126 eligible seeds | 17.06 s | 8.20 s | 51.9% | 141.97 → 140.17 MB |
+| Low-rise neighborhood | First 1,000 of 7,282 eligible seeds; 7,564 source footprints | 12.59 s | 6.94 s | 44.8% | 176.56 → 177.31 MB |
+| Downtown | Complete typification, including fallback; 970 eligible seeds | 17.55 s | 7.85 s | 55.3% | 136.27 → 135.88 MB |
+| Landmark area | Complete typification, including fallback; 1,106 eligible seeds | 17.06 s | 8.20 s | 51.9% | 141.97 → 140.17 MB |
 
 All output fingerprints match across reference/optimized repeats: footprint WKB, groups and membership, heights, omissions, and disposition/provenance decisions. The neighborhood checkpoint intentionally excludes later placement and connected fallback; it is not a complete neighborhood result. Peak working set includes checkpoint loading, copies, and profiling, and is not full-map generation memory.
+
+Candidate counts were corrected during packaged validation to exclude courtyard and non-Polygon sources, matching the actual eligibility predicate. The earlier counts described all isolated-below-target dispositions. Timings and output-equivalence results are unchanged.
 
 In the neighborhood profile, mask-query cumulative time fell from 9.27 to 3.68 seconds. Mask preparation rose from 0.12 to 0.40 seconds: smaller partitions exchange setup work for cheaper repeated overlays. Full-frame setup cost and memory need measurement.
 

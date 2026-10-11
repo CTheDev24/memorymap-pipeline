@@ -1,0 +1,90 @@
+{
+  "status": "failed_required_road_layer",
+  "accepted": false,
+  "release_accepted": false,
+  "physical_prints": "pending",
+  "candidate_sha256": "2dfc248cd60e6c229c456052936b4d42a73a3096999e875df0538941c75c4226",
+  "baseline_sha256": "d54d77f0dd623f9589e445db4fd7db10f8c22e683d0c729957597a61e2167557",
+  "candidate_executable_sha256": "8430cb8cc82ceb53a1ee5dda141c9e200746fb354538a8c81f69a53ad25895e9",
+  "wall_seconds": 9328.371105299999,
+  "peak_process_working_set_bytes": 7068565504,
+  "peak_measurement": "Maximum OS peak working set of executable parent or generation child; wall time includes one-file extraction",
+  "native_generation_seconds": 9295.30599849997,
+  "acquired_unique_elements": 421196,
+  "decoded_polygon_records": 421240,
+  "represented_polygon_records": 67790,
+  "output_building_forms": 11336,
+  "grouped_sources": 58684,
+  "neighborhood_masses": 2230,
+  "omitted_polygon_records": 353446,
+  "unresolved_records": 9034,
+  "centroid_grid_coverage": {
+    "cell_width_mm": 4.2,
+    "source_occupied_cells": 2580,
+    "represented_occupied_cells": 2084,
+    "fraction": 0.8077519379844961
+  },
+  "serialized_support_passed": true,
+  "tests": {
+    "passed": 497,
+    "seconds": 28.2
+  },
+  "required_layer_failures": {
+    "roads": "nonempty polygons skipped in GeometryCollection containers"
+  },
+  "stages_exceeding_twice_historical_baseline": [
+    "optimization",
+    "extrusion"
+  ],
+  "full_retry_ready": false,
+  "baseline_comparison": "Historical source-Python run; concurrency and preview timing scope differ. Not a controlled packaged benchmark.",
+  "roadfix_package": {
+    "executable_sha256": "8d6d381bf87911921914f320d3e7a67fea90c2cfedc910ca4ade04d8b577d782",
+    "bundled_modules_and_assets_match_tested_source": true,
+    "native_failure_proof": {
+      "expected_failure_verified": true,
+      "layer_states": {
+        "roads": "failed"
+      },
+      "acquisition": {
+        "state": "complete",
+        "source_count": 146546
+      },
+      "failed_fragments": 32,
+      "failed_area_mm2": 171.29413819761754,
+      "recorded_fragment_geometries": 32,
+      "wall_seconds": 309.7870335,
+      "peak_process_working_set_bytes": 1849184256,
+      "new_model_exists": false,
+      "new_audit_exists": false
+    },
+    "native_coupon_proof": {
+      "passed": false,
+      "area": "neighborhood",
+      "layer_states": {
+        "roads": "failed"
+      },
+      "failed_fragments": 1,
+      "failed_area_mm2": 1.1993190417921944,
+      "wall_seconds": 47.78611,
+      "peak_process_working_set_bytes": 228741120,
+      "new_model_exists": false
+    },
+    "native_offline_positive_proof": {
+      "passed": true,
+      "serialized_meshes_and_preview_verified": true,
+      "support_passed": true,
+      "source_buildings": 8,
+      "represented_buildings": 8,
+      "layer_states": {
+        "buildings": "complete",
+        "roads": "complete",
+        "route": "complete"
+      },
+      "wall_seconds": 45.8167008,
+      "peak_process_working_set_bytes": 205488128,
+      "scope": "synthetic offline fixture, not an LA coupon"
+    },
+    "qt_generation_webengine_smoke_passed": true
+  }
+}

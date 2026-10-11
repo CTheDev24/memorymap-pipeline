@@ -16,7 +16,7 @@
     {
       "area": "neighborhood",
       "source_count": 7564,
-      "eligible_count": 7365,
+      "eligible_count": 7282,
       "candidate_budget": 1000,
       "baseline_median_seconds": 12.585648100008257,
       "optimized_median_seconds": 6.942182300030254,
@@ -28,7 +28,7 @@
     {
       "area": "downtown",
       "source_count": 1887,
-      "eligible_count": 980,
+      "eligible_count": 970,
       "candidate_budget": 0,
       "baseline_median_seconds": 17.552559499978088,
       "optimized_median_seconds": 7.845320299966261,
@@ -40,7 +40,7 @@
     {
       "area": "landmark",
       "source_count": 2141,
-      "eligible_count": 1126,
+      "eligible_count": 1106,
       "candidate_budget": 0,
       "baseline_median_seconds": 17.062153000035323,
       "optimized_median_seconds": 8.199252799968235,
