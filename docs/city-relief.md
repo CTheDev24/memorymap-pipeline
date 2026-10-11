@@ -62,6 +62,8 @@ Do not merge or replace the installed application automatically. The original ex
 
 ## Reproduction tools
 
+The subsequent exact-road recovery and bounded neighborhood performance work is documented in [the recovery checkpoint](city-relief-exact-recovery.md). Preserve the earlier failed full candidate as diagnostic evidence; a roads-only proof does not establish completion of a new full building map.
+
 - `tools/run_la_city_relief.py`: full-frame frozen/native-cache generation and timing/memory capture.
 - `tools/freeze_la_neighborhoods.py`: freeze source geometry at the LA frame scale.
 - `tools/compare_la_city_relief.py`: Existing/Balanced/Dense coupon generation.

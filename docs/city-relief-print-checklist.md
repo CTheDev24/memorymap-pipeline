@@ -2,15 +2,15 @@
 
 Owner approval is required for physical acceptance. The existing sliced files use the validated Bambu A1 0.4 mm nozzle PLA Basic / 0.16 mm Quality profile, with 0.42 mm outer, 0.45 mm inner, and 0.50 mm first-layer line widths. Confirm the actual machine, filament, bed, and slicer settings before printing. Do not send jobs automatically.
 
-Local sliced files under `benchmarks/outputs/city-relief/slicer/`:
+Current reviewed slices are under `benchmarks/outputs/city-relief/supported-slicer/`. The older `slicer/` files remain historical evidence and should not be substituted for the refreshed neighborhood coupon.
 
-| Area | File | Previous slicer estimate |
+| Area | File | Current slicer estimate |
 | --- | --- | --- |
 | Downtown | `downtown-final-sliced.3mf` | 16.64 minutes; 1.84 g |
-| Neighborhood | `neighborhood-final-sliced.3mf` | 7.19 minutes; 1.50 g |
-| Landmark | `landmark-final-sliced.3mf` | 12.20 minutes; 1.79 g |
+| Neighborhood | `neighborhood-final-sliced.3mf` | 7.23 minutes; 1.50 g |
+| Landmark | `landmark-final-sliced.3mf` | 12.23 minutes; 1.79 g |
 
-These are the validated October 10 Balanced coupons, not newly approved physical samples. Above-base toolpath presence does not establish complete silhouettes, strength, or print reliability.
+These use the October 11 reviewed native package with exact road recovery. They are not approved physical samples. Sampled above-base toolpaths occur in 605/816 downtown forms, 114/227 neighborhood forms and 337/511 landmark forms. All 28 typified neighborhood masses and all four typified landmark masses receive sampled toolpaths; many unresolved forms remain unmatched. Presence does not establish complete silhouettes, strength, or print reliability, and an unmatched form is not proof of absence. Review the actual sliced paths and printed objects.
 
 Inspect at normal viewing distance, then under side lighting:
 

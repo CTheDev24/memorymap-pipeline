@@ -16,6 +16,10 @@ from memorymap_pipeline.roads import (
 )
 
 
+def _indexed_recovery_unavailable(*args):
+    raise ValueError("Indexed recovery unavailable in this legacy fallback test")
+
+
 def test_urban_road_style_matches_existing_geometry_defaults() -> None:
     style = resolve_road_style("urban")
 
@@ -344,6 +348,7 @@ def test_road_layer_keeps_valid_parts_when_one_polygon_extrusion_fails(
 
 
 def test_dense_road_polygon_is_simplified_before_spatial_subdivision(monkeypatch):
+    monkeypatch.setattr("memorymap_pipeline.roads._extrude_indexed_road_polygon", _indexed_recovery_unavailable)
     x = np.linspace(0.0, 100.0, 3_000)
     centerline = LineString(
         np.column_stack((x, 20.0 + 4.0 * np.sin(x) + 0.001 * np.sin(x * 50.0)))
@@ -440,6 +445,7 @@ def test_route_priority_removes_road_material_with_clearance(tmp_path) -> None:
 def test_large_connected_road_polygon_is_subdivided_after_extrusion_failure(
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr("memorymap_pipeline.roads._extrude_indexed_road_polygon", _indexed_recovery_unavailable)
     calls = []
     successful_areas = []
 

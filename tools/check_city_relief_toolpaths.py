@@ -3,18 +3,21 @@
 This is toolpath presence evidence, not a physical strength or gap acceptance test.
 """
 
+import argparse
 import json
 import re
 import zipfile
 from collections import Counter
 from pathlib import Path
 
+from gcode_centerlines import arc_midpoints
 from shapely.geometry import Point, shape
 from shapely.strtree import STRtree
 
-from gcode_centerlines import arc_midpoints
-
-root = Path("benchmarks/outputs/city-relief/slicer")
+parser = argparse.ArgumentParser()
+parser.add_argument("--root", type=Path, default=Path("benchmarks/outputs/city-relief/slicer"))
+args = parser.parse_args()
+root = args.root
 reports = []
 for area in ("downtown", "neighborhood", "landmark"):
     audit = json.loads((root / f"{area}-final-source.audit.json").read_text())

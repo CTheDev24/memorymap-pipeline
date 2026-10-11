@@ -109,8 +109,10 @@ class _SupportCache:
         return entry[1]
 
     def floating(self, active, component_lookup, face_components, **settings):
-        key = (tuple((layer, self.components[layer][0]) for layer in active),
-               tuple(sorted(settings.items())))
+        key = (
+            tuple((layer, self.components[layer][0]) for layer in active),
+            tuple(sorted(settings.items())),
+        )
         if key != self.floating_key:
             result = _floating_components(active, component_lookup, face_components, **settings)
             self.floating_key, self.floating_result = key, result
@@ -119,28 +121,21 @@ class _SupportCache:
 
 def _triangle_height(triangle: np.ndarray, x: float, y: float) -> float | None:
     first, second, third = triangle
-    denominator = (
-        (second[1] - third[1]) * (first[0] - third[0])
-        + (third[0] - second[0]) * (first[1] - third[1])
+    denominator = (second[1] - third[1]) * (first[0] - third[0]) + (third[0] - second[0]) * (
+        first[1] - third[1]
     )
     if abs(denominator) <= 1e-12:
         return None
     first_weight = (
-        (second[1] - third[1]) * (x - third[0])
-        + (third[0] - second[0]) * (y - third[1])
+        (second[1] - third[1]) * (x - third[0]) + (third[0] - second[0]) * (y - third[1])
     ) / denominator
     second_weight = (
-        (third[1] - first[1]) * (x - third[0])
-        + (first[0] - third[0]) * (y - third[1])
+        (third[1] - first[1]) * (x - third[0]) + (first[0] - third[0]) * (y - third[1])
     ) / denominator
     third_weight = 1.0 - first_weight - second_weight
     if min(first_weight, second_weight, third_weight) < -1e-7:
         return None
-    return float(
-        first_weight * first[2]
-        + second_weight * second[2]
-        + third_weight * third[2]
-    )
+    return float(first_weight * first[2] + second_weight * second[2] + third_weight * third[2])
 
 
 def _vertical_solid_contains(triangles: np.ndarray, x: float, y: float, z: float) -> bool:
@@ -159,6 +154,40 @@ def _vertical_solid_contains(triangles: np.ndarray, x: float, y: float, z: float
     return sum(sign for _height, sign in crossings) > 0
 
 
+def _certified_box_bounds(mesh: Trimesh) -> np.ndarray | None:
+    """Certify an actual closed rectangular solid, rather than its bounding box."""
+    if not mesh.is_watertight or not mesh.is_winding_consistent or mesh.volume <= 0:
+        return None
+    vertices = np.asarray(mesh.vertices)
+    if not np.isfinite(vertices).all():
+        return None
+    bounds = mesh.bounds
+    if np.any(bounds[1] <= bounds[0]) or len(np.unique(vertices, axis=0)) != 8:
+        return None
+    if not np.all((vertices == bounds[0]) | (vertices == bounds[1])):
+        return None
+    triangles = mesh.triangles
+    # Every face lies on a box boundary plane. This excludes diagonal cuts.
+    planar = np.all(triangles == bounds[0], axis=1) | np.all(triangles == bounds[1], axis=1)
+    if not np.all(np.any(planar, axis=1)):
+        return None
+    if not np.isclose(mesh.volume, np.prod(bounds[1] - bounds[0]), rtol=1e-12, atol=0):
+        return None
+    return bounds
+
+
+def _road_embedded_in_box(triangles: np.ndarray, bounds: np.ndarray) -> bool:
+    """Prove positive-area downward road surface lies strictly inside the base."""
+    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    bottom = triangles[normals[:, 2] < 0]
+    if not len(bottom):
+        return False
+    inside = np.all((bottom >= bounds[0]) & (bottom <= bounds[1]), axis=(1, 2))
+    below_top = np.all(bottom[:, :, 2] < bounds[1, 2], axis=1)
+    above_bottom = np.all(bottom[:, :, 2] > bounds[0, 2], axis=1)
+    return bool(np.any(inside & below_top & above_bottom))
+
+
 def _floating_components(
     active: Mapping[str, Trimesh],
     component_lookup: Mapping[tuple[str, int], _Component],
@@ -173,9 +202,7 @@ def _floating_components(
     surface_triangles: list[_SurfaceTriangle] = []
     for layer, mesh in active.items():
         triangles = mesh.triangles
-        normals = np.cross(
-            triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]
-        )
+        normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
         for face_index in np.flatnonzero(normals[:, 2] > 1e-9):
             triangle = triangles[face_index]
             polygon = Polygon(triangle[:, :2])
@@ -193,19 +220,26 @@ def _floating_components(
         }
 
     tree = STRtree(surface_polygons)
-    geometry_indices = {
-        id(geometry): index for index, geometry in enumerate(surface_polygons)
-    }
+    geometry_indices = {id(geometry): index for index, geometry in enumerate(surface_polygons)}
     support_graph: dict[tuple[str, int], set[tuple[str, int]]] = defaultdict(set)
+    base = active.get("base")
+    box_bounds = _certified_box_bounds(base) if base is not None else None
+    base_keys = [key for key in component_lookup if key[0] == "base"]
 
     for key, component in component_lookup.items():
         if component.layer == "base":
             continue
         mesh = active[component.layer]
         triangles = mesh.triangles[component.face_indices]
-        normals = np.cross(
-            triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]
-        )
+        if (
+            component.layer == "roads"
+            and box_bounds is not None
+            and len(base_keys) == 1
+            and _road_embedded_in_box(triangles, box_bounds)
+        ):
+            support_graph[key].add(base_keys[0])
+            continue
+        normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
         bottom = triangles[normals[:, 2] < -1e-9]
         if not len(bottom):
             bottom = triangles
@@ -289,8 +323,7 @@ def remove_small_floating_components(
     face_components: dict[str, np.ndarray] = {}
     for name, mesh in active.items():
         components, face_component = (
-            _mesh_components(name, mesh) if _cache is None
-            else _cache.mesh_components(name, mesh)
+            _mesh_components(name, mesh) if _cache is None else _cache.mesh_components(name, mesh)
         )
         face_components[name] = face_component
         component_lookup.update((component.key, component) for component in components)
@@ -304,9 +337,7 @@ def remove_small_floating_components(
         maximum_samples_per_component=maximum_samples_per_component,
     ).get(layer, [])
     removable = [
-        component
-        for component in floating
-        if len(component.face_indices) <= maximum_faces
+        component for component in floating if len(component.face_indices) <= maximum_faces
     ]
     if not removable:
         return target, 0
@@ -389,8 +420,7 @@ def audit_printability(
                 )
             )
         components, face_component = (
-            _mesh_components(layer, mesh) if _cache is None
-            else _cache.mesh_components(layer, mesh)
+            _mesh_components(layer, mesh) if _cache is None else _cache.mesh_components(layer, mesh)
         )
         face_components[layer] = face_component
         component_lookup.update((component.key, component) for component in components)
@@ -416,9 +446,7 @@ def audit_printability(
         )
         for mesh in active.values()
     ):
-        issues.append(
-            PrintabilityIssue("missing_support", "base", "base has no upward surface")
-        )
+        issues.append(PrintabilityIssue("missing_support", "base", "base has no upward surface"))
         return PrintabilityReport(tuple(issues))
     for layer, components in floating_by_layer.items():
         largest = max(len(component.face_indices) for component in components)

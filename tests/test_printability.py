@@ -48,6 +48,30 @@ def test_floating_feature_is_rejected() -> None:
     assert any(issue.code == "floating_components" for issue in report.issues)
 
 
+def test_tiny_road_embedded_in_certified_base_is_supported():
+    base = build_base_plate(40, 30, 1.6)
+    road = _solid((0.00001, 0.00001, 0.5), (20, 15, 0.05))
+    assert audit_printability({"base": base, "roads": road}).printable
+
+
+def test_tiny_floating_road_is_rejected():
+    base = build_base_plate(40, 30, 1.6)
+    road = _solid((0.00001, 0.00001, 0.5), (20, 15, 1.05))
+    assert not audit_printability({"base": base, "roads": road}).printable
+
+
+def test_tiny_surface_contact_does_not_use_embedding_proof():
+    base = build_base_plate(40, 30, 1.6)
+    road = _solid((0.00001, 0.00001, 0.5), (20, 15, 0.25))
+    assert not audit_printability({"base": base, "roads": road}).printable
+
+
+def test_base_bounds_do_not_prove_support_over_open_space():
+    base = concatenate((_solid((10, 30, 1.6), (5, 15, -0.8)), _solid((10, 30, 1.6), (35, 15, -0.8))))
+    road = _solid((0.00001, 0.00001, 0.5), (20, 15, 0.05))
+    assert not audit_printability({"base": base, "roads": road}).printable
+
+
 def test_roof_can_reach_base_through_supported_body() -> None:
     base = build_base_plate(40.0, 30.0, 1.6)
     body = _solid((8.0, 8.0, 2.2), (20.0, 15.0, 0.9))

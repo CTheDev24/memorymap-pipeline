@@ -183,7 +183,7 @@ def _bisect_polygon(polygon: geom.Polygon) -> list[geom.Polygon]:
         pieces = _polygon_parts(ops.split(polygon, cutter))
     except Exception:
         return []
-    return [piece for piece in pieces if piece.area >= _ROAD_EXTRUSION_MIN_AREA_MM2]
+    return [piece for piece in pieces if piece.area > 0]
 
 
 def _extrude_road_polygon(
@@ -193,6 +193,7 @@ def _extrude_road_polygon(
     z_offset: float,
     split_depth: int = 0,
     processing_stats: dict | None = None,
+    exact_recovery: bool = False,
 ) -> list[object]:
     """Extrude a road polygon, subdividing only when triangulation is invalid.
 
@@ -203,19 +204,24 @@ def _extrude_road_polygon(
     watertight solids that slicers can combine as one road object.
     """
     try:
-        return [
-            route_mesh_from_polygon(
-                polygon,
-                height_mm=height_mm,
-                z_offset=z_offset,
-            )
-        ]
+        mesh = route_mesh_from_polygon(polygon, height_mm=height_mm, z_offset=z_offset)
+        if exact_recovery and abs(mesh.volume - polygon.area * height_mm) > max(1e-10, polygon.area * height_mm * 1e-9):
+            raise ValueError("Road extrusion changed footprint volume")
+        return [mesh]
     except Exception as exc:
-        simplified = polygon.simplify(
-            _ROAD_EXTRUSION_SIMPLIFY_MM,
-            preserve_topology=True,
+        try:
+            # Normal extrusion welds nearby vertices. Exact thin Boolean
+            # fragments need shared indices without coordinate welding.
+            mesh = _extrude_indexed_road_polygon(polygon, height_mm, z_offset)
+            if processing_stats is not None:
+                processing_stats["indexed_recovery_count"] = processing_stats.get("indexed_recovery_count", 0) + 1
+            return [mesh]
+        except Exception:
+            pass
+        simplified = polygon if exact_recovery else polygon.simplify(
+            _ROAD_EXTRUSION_SIMPLIFY_MM, preserve_topology=True,
         )
-        if (
+        if not exact_recovery and (
             not simplified.is_empty
             and isinstance(simplified, geom.Polygon)
             and len(simplified.exterior.coords) < len(polygon.exterior.coords)
@@ -260,9 +266,52 @@ def _extrude_road_polygon(
                     z_offset=z_offset,
                     split_depth=split_depth + 1,
                     processing_stats=processing_stats,
+                    exact_recovery=exact_recovery,
                 )
             )
         return meshes
+
+
+def _extrude_indexed_road_polygon(polygon, height_mm, z_offset):
+    """Recover failed road extrusion without welding or changing its footprint."""
+    from trimesh import Trimesh
+    from trimesh.creation import triangulate_polygon
+    from trimesh.geometry import faces_to_edges
+    from trimesh.grouping import group_rows
+
+    if not polygon.is_valid or height_mm <= 0:
+        raise ValueError("Indexed road recovery requires a valid polygon and positive height")
+    vertices, caps = triangulate_polygon(polygon)
+    first = vertices[caps[:, 1]] - vertices[caps[:, 0]]
+    second = vertices[caps[:, 2]] - vertices[caps[:, 0]]
+    cross = first[:, 0] * second[:, 1] - first[:, 1] * second[:, 0]
+    tolerance = max(1e-12, polygon.area * 1e-10)
+    if abs(np.abs(cross).sum() * 0.5 - polygon.area) > tolerance:
+        raise ValueError("Indexed road cap triangulation overlaps or loses footprint area")
+    caps = caps[cross != 0].copy()
+    caps[cross[cross != 0] < 0] = caps[cross[cross != 0] < 0, ::-1]
+    if not len(caps):
+        raise ValueError("Indexed road recovery produced no cap faces")
+    # Validate actual cap coverage, including holes and concavities. Matching
+    # area or volume alone does not establish footprint equality.
+    projected = ops.unary_union([geom.Polygon(vertices[face]) for face in caps])
+    if projected.symmetric_difference(polygon).area > tolerance:
+        raise ValueError("Indexed road recovery changed the projected footprint")
+    edges = faces_to_edges(caps)
+    boundary = edges[group_rows(np.sort(edges, axis=1), require_count=1)]
+    count = len(vertices)
+    lower = np.column_stack((vertices, np.full(count, z_offset)))
+    upper = np.column_stack((vertices, np.full(count, z_offset + height_mm)))
+    start, end = boundary.T
+    walls = np.vstack((np.column_stack((start, end, end + count)),
+                       np.column_stack((start, end + count, start + count))))
+    mesh = Trimesh(vertices=np.vstack((lower, upper)),
+                   faces=np.vstack((caps[:, ::-1], caps + count, walls)), process=False)
+    mesh.remove_unreferenced_vertices()
+    if (not mesh.is_watertight or not mesh.is_winding_consistent
+        or not np.isfinite(mesh.vertices).all() or mesh.volume <= 0):
+        raise ValueError("Indexed road recovery failed mesh validation")
+    return mesh
 
 
 def _record_road_mesh_failure(stats, polygon, depth, reason):
@@ -278,6 +327,9 @@ def _record_road_mesh_failure(stats, polygon, depth, reason):
 
 
 def _extrude_road_regions(regions, *, hierarchical, embed_depth_mm, z_offset, processing_stats=None):
+    if processing_stats is not None:
+        processing_stats["recovery_algorithm"] = "indexed-road-v1"
+        processing_stats["exact_recovery"] = bool(hierarchical)
     meshes = []
     for region, visible_height in regions:
         # Mixed intersections retain polygons alongside zero-area contacts.
@@ -287,6 +339,7 @@ def _extrude_road_regions(regions, *, hierarchical, embed_depth_mm, z_offset, pr
                     _extrude_road_polygon(
                         polygon, height_mm=visible_height + embed_depth_mm, z_offset=z_offset,
                         processing_stats=processing_stats,
+                        exact_recovery=hierarchical,
                     )
                 )
     return meshes

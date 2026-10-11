@@ -8,6 +8,7 @@ import marshal
 import sys
 from pathlib import Path
 from types import CodeType
+
 from PyInstaller.archive.readers import CArchiveReader
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -41,6 +42,7 @@ for name in [
     "generation",
     "roads",
     "mesh",
+    "printability",
     "config",
     "desktop.__init__",
     "desktop.project",

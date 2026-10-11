@@ -2,6 +2,8 @@
 
 **Completed, but not accepted.** The approved full LA run produced buildings and a matching 3MF/audit, but silently omitted the requested Roads layer. The candidate is diagnostic evidence, not a print-ready deliverable. No merge, release, installed executable replacement, or physical print has been performed.
 
+This report preserves the original full candidate and the `521c6e7` checkpoint. The subsequent exact-road recovery, controlled performance benchmarks and separate packaged road/coupon proofs are in [the recovery checkpoint](city-relief-exact-recovery.md). Those bounded checks do not replace a completed full building retry.
+
 ## Results
 
 | Measurement | Result |

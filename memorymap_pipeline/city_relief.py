@@ -3,6 +3,7 @@
 Source classifications are never inferred from neighborhood appearance.
 """
 
+from collections import OrderedDict
 from dataclasses import replace
 
 import numpy as np
@@ -107,6 +108,8 @@ def typify_neighborhoods(
     from .building_grouping import FootprintGroup
     from .spatial_area import AreaMask
 
+    envelopes = _OccupiedEnvelopeCache()
+
     sources = [
         e[0].intersection(allowed).difference(route)
         if route is not None
@@ -203,7 +206,7 @@ def typify_neighborhoods(
                 x0, y0, x1, y1 = occupied.bounds
                 if max(x1 - x0, y1 - y0) > context.group_span_mm:
                     continue
-                if not occupied.buffer(width * 0.75).covers(candidate):
+                if not envelopes.covers(occupied, candidate, width * 0.75):
                     continue
                 members = tuple(sorted(touched))
                 if len(members) > 1:
@@ -283,9 +286,9 @@ def typify_neighborhoods(
                 continue
             occupied = unary_union([sources[i] for i in members])
             x0, y0, x1, y1 = occupied.bounds
-            if max(x1 - x0, y1 - y0) > context.group_span_mm or not occupied.buffer(
-                context.robust_width_mm * 0.75
-            ).covers(candidate):
+            if max(x1 - x0, y1 - y0) > context.group_span_mm or not envelopes.covers(
+                occupied, candidate, context.robust_width_mm * 0.75
+            ):
                 continue
             result.groups = [g for g in result.groups if g.members != old_members]
             result.groups.append(FootprintGroup(members, candidate))
@@ -305,6 +308,35 @@ def typify_neighborhoods(
             accepted_tree = STRtree(accepted)
             break
     return result
+
+
+class _OccupiedEnvelopeCache:
+    """Bounded per-run reuse of identical complex occupied buffers."""
+
+    def __init__(self, max_bytes=8 * 1024 * 1024):
+        self.max_bytes = max_bytes
+        self.bytes = 0
+        self.entries = OrderedDict()
+
+    def covers(self, occupied, candidate, radius):
+        if occupied.geom_type != "MultiPolygon" or len(occupied.geoms) < 8:
+            return occupied.buffer(radius).covers(candidate)
+        key = (occupied.wkb, radius)
+        if key in self.entries:
+            buffered, weight = self.entries[key]
+            self.entries.move_to_end(key)
+            return buffered.covers(candidate)
+        buffered = occupied.buffer(radius)
+        weight = len(key[0]) + len(buffered.wkb)
+        if weight <= self.max_bytes:
+            while self.entries and (
+                self.bytes + weight > self.max_bytes or len(self.entries) >= 128
+            ):
+                _, (_, removed) = self.entries.popitem(last=False)
+                self.bytes -= removed
+            self.entries[key] = (buffered, weight)
+            self.bytes += weight
+        return buffered.covers(candidate)
 
 
 def rescue_groups(result, elements, heights, context, allowed, barriers, route, minimum_width):

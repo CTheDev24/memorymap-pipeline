@@ -42,6 +42,7 @@ def test_failed_road_fragment_is_recorded_without_losing_its_geometry(monkeypatc
         raise ValueError("test triangulation failure")
 
     monkeypatch.setattr(roads, "route_mesh_from_polygon", fail)
+    monkeypatch.setattr(roads, "_extrude_indexed_road_polygon", fail)
     polygon = box(0, 0, 0.1, 0.05)
     stats = {}
     assert not _extrude_road_regions(
@@ -112,3 +113,38 @@ def test_nonempty_road_meshing_failure_preserves_previous_result(tmp_path, monke
     assert caught.value.layer_states == {"roads": "failed"}
     assert output.read_bytes() == b"previous successful model"
     assert audit.read_text() == "previous successful audit"
+
+
+@pytest.mark.parametrize("index", [0, 1, 2])
+def test_recorded_la_fragments_keep_exact_footprints(index):
+    import json
+
+    import numpy as np
+    from shapely.geometry import Polygon, shape
+    from shapely.ops import unary_union
+
+    from memorymap_pipeline.roads import _extrude_road_polygon
+
+    rows = json.loads((Path(__file__).parent / "fixtures/city_road_fragments.json").read_text())
+    polygon = shape(rows[index]["geometry"])
+    stats = {}
+    meshes = _extrude_road_polygon(polygon, height_mm=0.8, z_offset=1.4, processing_stats=stats)
+    assert not stats.get("failed_polygon_count")
+    assert stats["indexed_recovery_count"] == 1
+    assert len(meshes) == 1
+    mesh = meshes[0]
+    assert mesh.is_watertight and mesh.is_winding_consistent
+    assert mesh.volume == pytest.approx(polygon.area * 0.8, abs=1e-10)
+    triangles = mesh.triangles
+    top = triangles[np.all(triangles[:, :, 2] == 2.2, axis=1)]
+    projected = unary_union([Polygon(triangle[:, :2]) for triangle in top])
+    assert projected.symmetric_difference(polygon).area < max(1e-12, polygon.area * 1e-10)
+
+
+def test_bisection_keeps_positive_area_fragments_below_legacy_size_floor():
+    from memorymap_pipeline.roads import _bisect_polygon
+
+    polygon = box(0, 0, 0.15, 0.1)
+    parts = _bisect_polygon(polygon)
+    assert len(parts) == 2
+    assert sum(part.area for part in parts) == pytest.approx(polygon.area)
