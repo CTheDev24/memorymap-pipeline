@@ -139,6 +139,7 @@ class GenerationRequest:
     open_space_polygons: list[Any] | None = None
     # Internal analysis may inspect meshes before the normal audited export.
     export_model: bool = True
+    map_style: str | None = None
 
 
 @dataclass
@@ -389,6 +390,9 @@ def generate_memory_map(
     request: GenerationRequest,
     progress_callback: ProgressCallback | None = None,
 ) -> GenerationResult:
+    from .map_styles import resolve_request
+
+    request = resolve_request(request)
     def progress(value: int, message: str) -> None:
         if progress_callback is None:
             return
@@ -1460,6 +1464,7 @@ def generate_memory_map(
         # Reusing an output filename must never leave an older model's audit.
         output_path.with_suffix(".audit.json").unlink(missing_ok=True)
     stats = {
+        "map_style": request.map_style,
         "route_points": len(request.route.points),
         "style_profile": style_profile,
         "route_height_mm": route_height_mm,

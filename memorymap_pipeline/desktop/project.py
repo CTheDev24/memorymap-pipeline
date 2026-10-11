@@ -68,9 +68,17 @@ class DesktopProject:
     ground_cover_sensitivity: str = "balanced"
     color_preset: str | None = None
     layer_colors: dict[str, str] = field(default_factory=dict)
-    version: int = field(default=4, init=False)
+    map_style: str | None = None
+    style_settings: dict[str, Any] = field(default_factory=dict)
+    road_class_widths_mm: dict[str, float] = field(default_factory=dict)
+    version: int = field(default=5, init=False)
 
     def __post_init__(self) -> None:
+        from ..map_styles import MAP_STYLES, class_widths
+
+        if self.map_style is not None and self.map_style not in MAP_STYLES:
+            raise ValueError(f"Unsupported Map Style: {self.map_style}")
+        class_widths(self.road_class_widths_mm)
         import math
         from ..city_relief import validate
 
@@ -112,6 +120,9 @@ class DesktopProject:
     def to_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,
+            "map_style": self.map_style,
+            "style_settings": self.style_settings,
+            "road_class_widths_mm": self.road_class_widths_mm,
             "gpx_path": self.gpx_path,
             "frame": asdict(self.frame),
             "flat_border_enabled": self.flat_border_enabled,
@@ -163,7 +174,7 @@ class DesktopProject:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "DesktopProject":
         version = value.get("version")
-        if version not in {1, 2, 3, 4}:
+        if version not in {1, 2, 3, 4, 5}:
             raise ValueError("Unsupported desktop project version")
         try:
             layers = value.get("layers", {})
@@ -172,6 +183,9 @@ class DesktopProject:
             terrain = value.get("terrain", {})
             heights = value.get("building_heights", {}) if version >= 3 else {}
             return cls(
+                map_style=value.get("map_style") if version >= 5 else None,
+                style_settings=dict(value.get("style_settings", {})) if version >= 5 else {},
+                road_class_widths_mm=dict(value.get("road_class_widths_mm", {})) if version >= 5 else {},
                 frame=MapFrame(**value["frame"]),
                 building_appearance_mode=value.get("appearance", {}).get("mode", "existing")
                 if version >= 4
