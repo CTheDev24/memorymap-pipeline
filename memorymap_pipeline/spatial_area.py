@@ -14,8 +14,9 @@ class AreaMask:
     at artificial tile boundaries change the caller's clearance decision.
     """
 
-    def __init__(self, geometry, *, maximum_coordinates=2048):
+    def __init__(self, geometry, *, maximum_coordinates=2048, short_circuit=False):
         self.geometry = geometry
+        self.short_circuit = short_circuit
         self.prepared = prep(geometry)
         self.reference_areas = {}
         pieces = []
@@ -44,7 +45,16 @@ class AreaMask:
         indices = self.tree.query(polygon, predicate="intersects")
         if not len(indices):
             return 0.0 > threshold
-        area = sum(polygon.intersection(self.pieces[int(i)]).area for i in indices)
+        area = 0.0
+        margin = max(1e-9, abs(threshold) * 1e-6)
+        for i in indices:
+            area += polygon.intersection(self.pieces[int(i)]).area
+            # Disjoint partition interiors contribute nonnegative area. Once
+            # safely above the original decision's numerical fallback band,
+            # further overlays cannot change rejection. Default callers retain
+            # the original summation behavior.
+            if self.short_circuit and area > threshold + margin:
+                return True
         if abs(area - threshold) <= max(1e-9, abs(threshold) * 1e-6):
             key = polygon.wkb
             if key not in self.reference_areas:

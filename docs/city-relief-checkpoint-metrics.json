@@ -1,0 +1,202 @@
+{
+  "status": "bounded_benchmarks_passed_full_run_not_started",
+  "reference_commit": "1aac55f",
+  "reference_scope": "City module at reference commit; default AreaMask behavior preserved",
+  "build": {
+    "release": "city-relief-v1",
+    "source_sha256": "6c664faaedacb2b4d4e9bbc8540f41aa5735f0e7de1824373a506e339f5ce35a",
+    "packaged": false
+  },
+  "environment": {
+    "python": "3.12.14",
+    "shapely": "2.1.2",
+    "numpy": "2.5.3"
+  },
+  "cases": [
+    {
+      "area": "neighborhood",
+      "source_count": 7564,
+      "eligible_count": 7365,
+      "candidate_budget": 1000,
+      "baseline_median_seconds": 12.585648100008257,
+      "optimized_median_seconds": 6.942182300030254,
+      "reduction_percent": 44.84048620407797,
+      "output_identical": true,
+      "baseline_peak_bytes": 176562176,
+      "optimized_peak_bytes": 177307648
+    },
+    {
+      "area": "downtown",
+      "source_count": 1887,
+      "eligible_count": 980,
+      "candidate_budget": 0,
+      "baseline_median_seconds": 17.552559499978088,
+      "optimized_median_seconds": 7.845320299966261,
+      "reduction_percent": 55.30383873658964,
+      "output_identical": true,
+      "baseline_peak_bytes": 136265728,
+      "optimized_peak_bytes": 135880704
+    },
+    {
+      "area": "landmark",
+      "source_count": 2141,
+      "eligible_count": 1126,
+      "candidate_budget": 0,
+      "baseline_median_seconds": 17.062153000035323,
+      "optimized_median_seconds": 8.199252799968235,
+      "reduction_percent": 51.94479383726509,
+      "output_identical": true,
+      "baseline_peak_bytes": 141967360,
+      "optimized_peak_bytes": 140165120
+    }
+  ],
+  "raw_runs": [
+    {
+      "area": "neighborhood",
+      "label": "baseline",
+      "seconds": [
+        12.585648100008257,
+        12.6220350000076,
+        12.521625000052154
+      ],
+      "output_sha256": [
+        "7887ab7cfe04cd6f6dc97dd4d7331e0bd832ac5c00d7833b3fcbade964b0ea88",
+        "7887ab7cfe04cd6f6dc97dd4d7331e0bd832ac5c00d7833b3fcbade964b0ea88",
+        "7887ab7cfe04cd6f6dc97dd4d7331e0bd832ac5c00d7833b3fcbade964b0ea88"
+      ],
+      "reference_commit": "1aac55f",
+      "candidate_budget": 1000,
+      "checkpoint_sha256": "7561ab88ff325c03117924b63d75ce8f6a1ea20811e03a7e90ca25d9a782309f",
+      "peak_working_set_bytes": 176562176,
+      "measurement": "Process OS peak includes checkpoint loading, replay and separately profiled replay; timings exclude deepcopy and profiling."
+    },
+    {
+      "area": "neighborhood",
+      "label": "optimized",
+      "seconds": [
+        7.06094600004144,
+        6.76339000009466,
+        6.942182300030254
+      ],
+      "output_sha256": [
+        "7887ab7cfe04cd6f6dc97dd4d7331e0bd832ac5c00d7833b3fcbade964b0ea88",
+        "7887ab7cfe04cd6f6dc97dd4d7331e0bd832ac5c00d7833b3fcbade964b0ea88",
+        "7887ab7cfe04cd6f6dc97dd4d7331e0bd832ac5c00d7833b3fcbade964b0ea88"
+      ],
+      "reference_commit": null,
+      "candidate_budget": 1000,
+      "checkpoint_sha256": "7561ab88ff325c03117924b63d75ce8f6a1ea20811e03a7e90ca25d9a782309f",
+      "peak_working_set_bytes": 177307648,
+      "measurement": "Process OS peak includes checkpoint loading, replay and separately profiled replay; timings exclude deepcopy and profiling."
+    },
+    {
+      "area": "downtown",
+      "label": "baseline",
+      "seconds": [
+        17.878744999994524,
+        17.403401999967173,
+        17.552559499978088
+      ],
+      "output_sha256": [
+        "4524161e52971bfefecbe1fa4bf82489ceaf2036ae44656d1f79575f29f03b0d",
+        "4524161e52971bfefecbe1fa4bf82489ceaf2036ae44656d1f79575f29f03b0d",
+        "4524161e52971bfefecbe1fa4bf82489ceaf2036ae44656d1f79575f29f03b0d"
+      ],
+      "reference_commit": "1aac55f",
+      "candidate_budget": 0,
+      "checkpoint_sha256": "d965085d0a7fb99fc82ad7947d2ddbfc425ad79f3a101ab9fa0eeb3b0622bb2a",
+      "peak_working_set_bytes": 136265728,
+      "measurement": "Process OS peak includes checkpoint loading, replay and separately profiled replay; timings exclude deepcopy and profiling."
+    },
+    {
+      "area": "downtown",
+      "label": "optimized",
+      "seconds": [
+        7.845320299966261,
+        8.079160300083458,
+        7.560032100067474
+      ],
+      "output_sha256": [
+        "4524161e52971bfefecbe1fa4bf82489ceaf2036ae44656d1f79575f29f03b0d",
+        "4524161e52971bfefecbe1fa4bf82489ceaf2036ae44656d1f79575f29f03b0d",
+        "4524161e52971bfefecbe1fa4bf82489ceaf2036ae44656d1f79575f29f03b0d"
+      ],
+      "reference_commit": null,
+      "candidate_budget": 0,
+      "checkpoint_sha256": "d965085d0a7fb99fc82ad7947d2ddbfc425ad79f3a101ab9fa0eeb3b0622bb2a",
+      "peak_working_set_bytes": 135880704,
+      "measurement": "Process OS peak includes checkpoint loading, replay and separately profiled replay; timings exclude deepcopy and profiling."
+    },
+    {
+      "area": "landmark",
+      "label": "baseline",
+      "seconds": [
+        17.792322400026023,
+        16.900705100037158,
+        17.062153000035323
+      ],
+      "output_sha256": [
+        "39a1ac6f7edb5d947afdbaa25420e3ff2e7eeef299ea8307773b074804b2b724",
+        "39a1ac6f7edb5d947afdbaa25420e3ff2e7eeef299ea8307773b074804b2b724",
+        "39a1ac6f7edb5d947afdbaa25420e3ff2e7eeef299ea8307773b074804b2b724"
+      ],
+      "reference_commit": "1aac55f",
+      "candidate_budget": 0,
+      "checkpoint_sha256": "99057f3d92b4c5dbc82c8a5a543b57c04ec6ab3966d172e3c8ff1ff5abb5d3d1",
+      "peak_working_set_bytes": 141967360,
+      "measurement": "Process OS peak includes checkpoint loading, replay and separately profiled replay; timings exclude deepcopy and profiling."
+    },
+    {
+      "area": "landmark",
+      "label": "optimized",
+      "seconds": [
+        8.199252799968235,
+        8.029260799987242,
+        8.24391909991391
+      ],
+      "output_sha256": [
+        "39a1ac6f7edb5d947afdbaa25420e3ff2e7eeef299ea8307773b074804b2b724",
+        "39a1ac6f7edb5d947afdbaa25420e3ff2e7eeef299ea8307773b074804b2b724",
+        "39a1ac6f7edb5d947afdbaa25420e3ff2e7eeef299ea8307773b074804b2b724"
+      ],
+      "reference_commit": null,
+      "candidate_budget": 0,
+      "checkpoint_sha256": "99057f3d92b4c5dbc82c8a5a543b57c04ec6ab3966d172e3c8ff1ff5abb5d3d1",
+      "peak_working_set_bytes": 140165120,
+      "measurement": "Process OS peak includes checkpoint loading, replay and separately profiled replay; timings exclude deepcopy and profiling."
+    }
+  ],
+  "profile_cumulative_seconds": {
+    "neighborhood-baseline": {
+      "exceeds": 9.2681249,
+      "__init__": 0.1194974
+    },
+    "neighborhood-optimized": {
+      "exceeds": 3.6797268,
+      "__init__": 0.39498950000000005
+    },
+    "downtown-baseline": {
+      "exceeds": 15.4727279,
+      "__init__": 0.1830155
+    },
+    "downtown-optimized": {
+      "exceeds": 4.5360705,
+      "__init__": 0.5517842000000001
+    },
+    "landmark-baseline": {
+      "exceeds": 14.4650058,
+      "__init__": 0.1419803
+    },
+    "landmark-optimized": {
+      "exceeds": 4.386715000000001,
+      "__init__": 0.43676790000000004
+    }
+  },
+  "notes": [
+    "Three serial unprofiled repeats per case; an additional profiled replay per case.",
+    "Neighborhood stops before candidate 1000 and does not include the connected fallback; other areas run complete typification including fallback.",
+    "Peak working set includes input loading, deepcopy and profiled replay; not a full generation memory measurement.",
+    "Early exploratory overlapping and uncapped attempts were stopped and excluded.",
+    "Cumulative profiler costs overlap and must not be summed as independent stages."
+  ]
+}

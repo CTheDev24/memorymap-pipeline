@@ -103,6 +103,7 @@ def typify_neighborhoods(
     """Place bounded, source-oriented representatives without an unbounded merge search."""
     from shapely.geometry import Polygon
     from shapely.prepared import prep
+
     from .building_grouping import FootprintGroup
     from .spatial_area import AreaMask
 
@@ -125,7 +126,7 @@ def typify_neighborhoods(
         + [p for i, p in enumerate(result.footprints) if i not in result.omitted]
     )
     prepared = prep(fixed)
-    mask = AreaMask(fixed)
+    mask = AreaMask(fixed, maximum_coordinates=128, short_circuit=True)
     accepted = []
     accepted_members = []
     accepted_tree = STRtree(accepted)
@@ -165,7 +166,7 @@ def typify_neighborhoods(
                     ]
                 )
                 if not allowed.covers(candidate) or (
-                    mask.exceeds(candidate, 1e-8) and prepared.intersects(candidate)
+                    prepared.intersects(candidate) and mask.exceeds(candidate, 1e-8)
                 ):
                     continue
                 if any(
@@ -242,7 +243,7 @@ def typify_neighborhoods(
             old_members = accepted_members[neighbor]
             candidate = accepted[neighbor].union(source).convex_hull.minimum_rotated_rectangle
             if not allowed.covers(candidate) or (
-                mask.exceeds(candidate, 1e-8) and prepared.intersects(candidate)
+                prepared.intersects(candidate) and mask.exceeds(candidate, 1e-8)
             ):
                 continue
             if any(
