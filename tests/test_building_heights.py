@@ -105,6 +105,7 @@ def test_project_height_roundtrip_and_legacy_defaults():
 
 
 def test_stale_generation_is_not_presented_or_saved(tmp_path):
+    pytest.importorskip("PySide6")
     from memorymap_pipeline.desktop.window import MemoryMapWindow
     warnings, enabled = [], []
     window = SimpleNamespace(
@@ -226,6 +227,78 @@ def test_desktop_road_width_change_rejects_inflight_result(desktop_window, tmp_p
     assert not window.save.isEnabled()
     assert window.result_path is None
     assert "Geometry settings changed" in window.warnings.toPlainText()
+
+
+def test_terrain_road_context_survives_switch_and_project_roundtrip(desktop_window, tmp_path):
+    from pathlib import Path
+
+    from memorymap_pipeline.gpx_loader import load_route_from_gpx
+
+    window = desktop_window
+    route_path = Path("tests/fixtures/frame_route.gpx").resolve()
+    route = load_route_from_gpx(route_path)
+    window._apply_project(DesktopProject(
+        MapFrame(29.76, -95.37, 1000, 1400, 240, 190),
+        gpx_path=str(route_path), map_style="cityscape",
+    ), route_path, route)
+    window.map_style.setCurrentIndex(window.map_style.findData("terrain"))
+    assert window.roads_layer.isChecked()  # First-visit default.
+    window.roads_layer.setChecked(False)
+    window.map_style.setCurrentIndex(window.map_style.findData("cityscape"))
+    project = window._project_state()
+    project.save(tmp_path / "styles.json")
+    window._apply_project(DesktopProject.load(tmp_path / "styles.json"), route_path, route)
+    window.map_style.setCurrentIndex(window.map_style.findData("terrain"))
+    assert not window.roads_layer.isChecked()
+    window.map_style.setCurrentIndex(window.map_style.findData("street_grid"))
+    assert window.roads_layer.isChecked()
+    window.map_style.setCurrentIndex(window.map_style.findData("terrain"))
+    assert not window.roads_layer.isChecked()
+
+
+def test_water_controls_follow_fresh_restored_and_loaded_styles(desktop_window):
+    from pathlib import Path
+
+    from memorymap_pipeline.gpx_loader import load_route_from_gpx
+
+    window = desktop_window
+    assert window.water_layer.isEnabled()
+    assert not window.water_recess.isEnabled()
+    window.map_style.setCurrentIndex(window.map_style.findData("terrain"))
+    assert window.water_layer.isChecked() and window.water_recess.isEnabled()
+    window.map_style.setCurrentIndex(window.map_style.findData("cityscape"))
+    window.map_style.setCurrentIndex(window.map_style.findData("terrain"))
+    assert window.water_layer.isChecked() and window.water_recess.isEnabled()
+    window.water_layer.setChecked(False)
+    window.map_style.setCurrentIndex(window.map_style.findData("cityscape"))
+    window.map_style.setCurrentIndex(window.map_style.findData("terrain"))
+    assert not window.water_recess.isEnabled()
+    route_path = Path("tests/fixtures/frame_route.gpx").resolve()
+    route = load_route_from_gpx(route_path)
+    project = DesktopProject(MapFrame(29.76, -95.37, 1000, 1400, 240, 190),
+                             map_style="terrain", include_terrain=True, include_water=True,
+                             flat_border_enabled=True, route_layer_height_mm=.12)
+    window._apply_project(project, route_path, route)
+    assert window.water_layer.isEnabled() and window.water_recess.isEnabled()
+    restored = window._project_state()
+    assert restored.flat_border_enabled and restored.route_layer_height_mm == .12
+
+
+@pytest.mark.parametrize("category", ["Cycleways", "Footpaths / tracks"])
+def test_local_width_enabled_for_any_member_type(desktop_window, category):
+    window = desktop_window
+    for name in ("Residential / local streets", "Cycleways", "Footpaths / tracks"):
+        window.road_categories[name].setChecked(False)
+    width = window.road_width_controls["local"]
+    assert not width.isEnabled()
+    window.road_categories[category].setChecked(True)
+    assert width.isEnabled()
+    window.road_categories["Residential / local streets"].setChecked(True)
+    window.road_categories["Residential / local streets"].setChecked(False)
+    assert width.isEnabled()
+    window.road_categories[category].setChecked(False)
+    assert not width.isEnabled()
+    assert "cycleways" in width.toolTip()
 
 
 def test_shared_terrain_datum_keeps_stacked_parts_connected(tmp_path):

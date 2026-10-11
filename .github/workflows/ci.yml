@@ -7,7 +7,7 @@ on:
     branches: ["**"]
 
 jobs:
-  test:
+  core:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,6 +24,7 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
+          pip install pytest
 
       - name: Run unit tests
         run: PYTHONPATH=. pytest tests/ -v
@@ -31,3 +32,39 @@ jobs:
       - name: Run pipeline with Evening_run.gpx
         run: |
           PYTHONPATH=. python main.py Evening_run.gpx /tmp/output_evening.3mf --no-roads --no-buildings
+
+  desktop:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QTWEBENGINE_DISABLE_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Qt runtime and desktop test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libopengl0 libxkbcommon0 libnss3 libasound2t64
+          pip install -e '.[dev,desktop]'
+      - name: Require real desktop imports
+        run: python -c "from PySide6.QtWidgets import QApplication; from memorymap_pipeline.desktop.window import MemoryMapWindow"
+      - name: Run full suite with desktop coverage
+        run: pytest tests/ -v --junitxml=desktop-tests.xml
+      - name: Require desktop regression execution
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('desktop-tests.xml').getroot()
+          names = {'test_stale_generation_is_not_presented_or_saved',
+                   'test_terrain_road_context_survives_switch_and_project_roundtrip',
+                   'test_water_controls_follow_fresh_restored_and_loaded_styles'}
+          cases = {case.attrib['name']: case for case in root.iter('testcase')}
+          for name in names:
+              assert name in cases and cases[name].find('skipped') is None, name
+          local = [case for name, case in cases.items() if name.startswith('test_local_width_enabled_for_any_member_type')]
+          assert len(local) == 2 and all(case.find('skipped') is None for case in local)
+          PY

@@ -40,6 +40,8 @@ for name in [
     "building_heights",
     "city_relief",
     "generation",
+    "map_styles",
+    "street_selection",
     "roads",
     "mesh",
     "printability",

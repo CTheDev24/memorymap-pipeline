@@ -16,7 +16,7 @@ from ..building_heights import BuildingHeightPolicy
 from ..config import ROUTE_LAYER_HEIGHT_SLOPES, route_slope_for_layer_height
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
-from ..map_styles import EXPERIMENTAL_WIDTHS, MAP_STYLES, ROAD_CLASS_NAMES
+from ..map_styles import EXPERIMENTAL_WIDTHS, MAP_STYLES, ROAD_CLASSES, ROAD_CLASS_NAMES
 from ..palettes import default_preset, resolve_palette
 from .print_settings import ACCENTS, ROAD_CATEGORIES, finish_colors
 from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN, DesktopProject
@@ -387,13 +387,14 @@ class MemoryMapWindow(QMainWindow):
             enabled = self.road_categories[category]
             enabled.setText(ROAD_CLASS_NAMES[cls])
             widths_form.addRow(enabled, control)
-            enabled.toggled.connect(control.setEnabled)
+        for selected in self.road_categories.values():
+            selected.toggled.connect(self._sync_style_visibility)
         self.street_detail = QComboBox()
         for label, spacing in (("Sparse", 1.0), ("Balanced", .7), ("Dense", .4)):
             self.street_detail.addItem(label, spacing)
         self.street_detail.setCurrentIndex(1)
         widths_form.addRow("Street Grid detail", self.street_detail)
-        note = QLabel("Experimental widths. All road classes share one relief height. Assign filaments to the named parts in your slicer; classes may share a filament.")
+        note = QLabel("Experimental widths. Local roads, cycleways and footpaths share the Local width and mesh. All road classes share one relief height. Assign filaments to the named parts in your slicer; classes may share a filament.")
         self.road_width_note = note
         note.setWordWrap(True)
         widths_form.addRow(note)
@@ -760,6 +761,14 @@ class MemoryMapWindow(QMainWindow):
     def _water_toggled(self, enabled: bool) -> None:
         self.water_recess.setEnabled(enabled and self.terrain_layer.isChecked())
 
+    def _sync_water_controls(self) -> None:
+        # Restoration blocks signals; derive UI state without changing saved values.
+        terrain = self.terrain_layer.isChecked()
+        urban = self._explicit_map_style in {"cityscape", "street_grid"}
+        self.terrain_relief.setEnabled(terrain)
+        self.water_layer.setEnabled(terrain or urban)
+        self.water_recess.setEnabled(terrain and self.water_layer.isChecked())
+
     @Slot(int)
     def _style_changed(self, _index: int = -1) -> None:
         landscape = self.style_profile.currentData() == STYLE_PROFILE_LANDSCAPE
@@ -782,7 +791,7 @@ class MemoryMapWindow(QMainWindow):
             "city_landmarks", "building_height_mode", "building_height_multiplier",
             "building_height_min_enabled", "building_height_min", "building_height_max_enabled",
             "building_height_max", "building_max_height", "terrain_relief", "water_recess",
-            "water_layer", "surface_skin_thickness", "minimum_waterway_width",
+            "water_layer", "roads_layer", "surface_skin_thickness", "minimum_waterway_width",
             "ground_cover_mode", "ground_cover_sensitivity", "street_detail",
         )
         settings = {}
@@ -817,6 +826,7 @@ class MemoryMapWindow(QMainWindow):
         for cls, width in settings.get("widths", {}).items():
             if cls in self.road_width_controls:
                 self.road_width_controls[cls].setValue(width)
+        self._sync_water_controls()
 
     def _activate_map_style(self, *_args) -> None:
         if self._explicit_map_style is None:
@@ -834,10 +844,10 @@ class MemoryMapWindow(QMainWindow):
         self.style_profile.setCurrentIndex(self.style_profile.findData("landscape" if terrain else "urban"))
         self.buildings_layer.setChecked(style == "cityscape")
         self.terrain_layer.setChecked(terrain)
-        self.roads_layer.setChecked(True)
         if style in self._style_settings:
             self._restore_style_settings(self._style_settings[style])
         else:
+            self.roads_layer.setChecked(True)
             self.water_layer.setChecked(terrain)
             for label, control in self.road_categories.items():
                 types = ROAD_CATEGORIES[label]
@@ -849,6 +859,7 @@ class MemoryMapWindow(QMainWindow):
         self._geometry_changed()
 
     def _sync_style_visibility(self) -> None:
+        self._sync_water_controls()
         style = self.map_style.currentData()
         terrain = style == "terrain"
         city = style == "cityscape"
@@ -875,10 +886,14 @@ class MemoryMapWindow(QMainWindow):
         self.building_form.setRowVisible(self.city_landmarks, relief)
         self.water_layer.setText("Water context")
         for cls, control in self.road_width_controls.items():
-            label = next(label for label, kinds in ROAD_CATEGORIES.items()
-                         if kinds[0] == {"motorways": "motorway", "main": "primary",
-                                         "local": "residential", "service": "service"}[cls])
-            control.setEnabled(self.road_categories[label].isChecked())
+            control.setEnabled(any(
+                selected.isChecked() and set(ROAD_CATEGORIES[label]).intersection(ROAD_CLASSES[cls])
+                for label, selected in self.road_categories.items()
+            ))
+        self.road_width_controls["local"].setToolTip(
+            "Shared width for residential/local streets, cycleways and footpaths/tracks. "
+            "Selected types export together as Residential / Local Roads."
+        )
 
     @Slot(int)
     def _finish_changed(self, _index: int = -1) -> None:
@@ -1203,7 +1218,7 @@ class MemoryMapWindow(QMainWindow):
         self.city_detail.setEnabled(city)
         self.city_landmarks.setEnabled(city)
         self._height_settings_changed()
-        self._terrain_toggled(project.include_terrain)
+        self._sync_water_controls()
         self._building_optimization_changed()
         self.building_processing.setCurrentIndex(int(self.print_optimized.isChecked()))
         self._style_changed()
