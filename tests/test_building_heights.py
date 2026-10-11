@@ -193,6 +193,41 @@ def test_desktop_restores_height_settings_and_invalidates_old_result(desktop_win
     assert not window.save.isEnabled()
 
 
+def test_desktop_map_styles_restore_per_style_settings_and_hide_unrelated_controls(desktop_window):
+    window = desktop_window
+    assert window.map_style.currentData() == "cityscape"
+    assert window.flat_border.isHidden() and window.route_layer_height.isHidden()
+    window.building_height_multiplier.setValue(2.35)
+    window.road_width_controls["local"].setValue(.9)
+    window.map_style.setCurrentIndex(window.map_style.findData("street_grid"))
+    assert not window.buildings_layer.isChecked()
+    assert window.building_box.isHidden() and window.height_box.isHidden()
+    assert window._generation_config_payload()["adaptive_streets"]
+    window.road_width_controls["local"].setValue(.65)
+    window.map_style.setCurrentIndex(window.map_style.findData("terrain"))
+    assert window.terrain_layer.isChecked()
+    assert window.style_profile.currentData() == "landscape"
+    assert window.road_width_box.isHidden() and not window.terrain_box.isHidden()
+    window.map_style.setCurrentIndex(window.map_style.findData("cityscape"))
+    assert window.buildings_layer.isChecked() and not window.terrain_layer.isChecked()
+    assert window.building_height_multiplier.value() == 2.35
+    assert window.road_width_controls["local"].value() == .9
+    window.map_style.setCurrentIndex(window.map_style.findData("street_grid"))
+    assert window.road_width_controls["local"].value() == .65
+
+
+def test_desktop_road_width_change_rejects_inflight_result(desktop_window, tmp_path):
+    window = desktop_window
+    output = tmp_path / "previous.3mf"
+    output.write_bytes(b"previous model")
+    window._generation_height_revision = window._height_revision
+    window.road_width_controls["local"].setValue(.7)
+    window.set_result(str(output))
+    assert not window.save.isEnabled()
+    assert window.result_path is None
+    assert "Geometry settings changed" in window.warnings.toPlainText()
+
+
 def test_shared_terrain_datum_keeps_stacked_parts_connected(tmp_path):
     tags = [{"building:part": "yes", "height": 12},
             {"building:part": "yes", "height": 24, "min_height": 12}]

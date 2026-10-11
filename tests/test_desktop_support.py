@@ -198,8 +198,11 @@ def test_frame_zoom_preserves_center_and_scales_coverage():
         "coverage_height_m": 800.0,
     }
     window.map_view = type("View", (), {"page": lambda self: Page()})()
+    revisions = []
+    window._geometry_changed = lambda: revisions.append(True)
 
     MemoryMapWindow._zoom_frame(window, 1.1)
+    assert revisions == [True]
 
     assert window.current_frame["center_lat"] == pytest.approx(29.76)
     assert window.current_frame["center_lon"] == pytest.approx(-95.37)

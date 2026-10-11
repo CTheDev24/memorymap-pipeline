@@ -80,6 +80,7 @@ class DesktopProject:
             raise ValueError(f"Unsupported Map Style: {self.map_style}")
         class_widths(self.road_class_widths_mm)
         import math
+
         from ..city_relief import validate
 
         validate(asdict(self))

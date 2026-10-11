@@ -127,6 +127,10 @@
     function classify(name) {
       const value = (name || "").toLowerCase();
       if (value.includes("route") || value.includes("marker")) return "Route";
+      if (value.includes("roads_motorways")) return "Motorways / Trunks";
+      if (value.includes("roads_main")) return "Main Roads";
+      if (value.includes("roads_local")) return "Residential / Local Roads";
+      if (value.includes("roads_service")) return "Service Roads";
       if (value.includes("road")) return "Roads";
       if (value.includes("building")) return "Buildings";
       if (value.includes("water")) return "Water";
@@ -138,7 +142,7 @@
 
     function buildLayerControls() {
       layerList.replaceChildren();
-      const order = ["Route", "Roads", "Buildings", "Water", "Landscape", "Terrain", "Base", "Other"];
+      const order = ["Route", "Motorways / Trunks", "Main Roads", "Residential / Local Roads", "Service Roads", "Roads", "Buildings", "Water", "Landscape", "Terrain", "Base", "Other"];
       order.filter(name => layerObjects.has(name)).forEach(name => {
         const label = document.createElement("label");
         const input = document.createElement("input");
@@ -153,6 +157,7 @@
     }
 
     function paletteKey(layer) {
+      if (["Motorways / Trunks", "Main Roads", "Residential / Local Roads", "Service Roads"].includes(layer)) return "roads";
       if (layer === "Landscape" || layer === "Terrain") return "landscape";
       return layer.toLowerCase();
     }

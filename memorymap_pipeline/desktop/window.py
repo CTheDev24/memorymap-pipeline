@@ -16,6 +16,7 @@ from ..building_heights import BuildingHeightPolicy
 from ..config import ROUTE_LAYER_HEIGHT_SLOPES, route_slope_for_layer_height
 from ..gpx_loader import Route, load_route_from_gpx
 from ..map_frame import MapFrame
+from ..map_styles import EXPERIMENTAL_WIDTHS, MAP_STYLES, ROAD_CLASS_NAMES
 from ..palettes import default_preset, resolve_palette
 from .print_settings import ACCENTS, ROAD_CATEGORIES, finish_colors
 from .project import STYLE_PROFILE_LANDSCAPE, STYLE_PROFILE_URBAN, DesktopProject
@@ -102,6 +103,8 @@ class MemoryMapWindow(QMainWindow):
         self.color_buttons: dict[str, QPushButton] = {}
         self._height_revision = 0
         self._existing_appearance_settings = {}
+        self._explicit_map_style = "cityscape"
+        self._style_settings = {}
         self.bridge = MapBridge(self)
         self.bridge.frame_changed.connect(self._remember_frame)
         self._build_ui()
@@ -164,6 +167,18 @@ class MemoryMapWindow(QMainWindow):
     def _controls(self) -> QWidget:
         panel = QWidget()
         outer = QVBoxLayout(panel)
+        style_selector = QGroupBox("Map Style")
+        selector_form = QFormLayout(style_selector)
+        self.map_style = QComboBox()
+        for key, label in MAP_STYLES.items():
+            self.map_style.addItem(label, key)
+        self.map_style.currentIndexChanged.connect(self._map_style_changed)
+        self.map_style.activated.connect(self._activate_map_style)
+        selector_form.addRow(self.map_style)
+        self.legacy_style_hint = QLabel("Legacy project settings are preserved until a Map Style is selected.")
+        self.legacy_style_hint.setWordWrap(True)
+        selector_form.addRow(self.legacy_style_hint)
+        outer.addWidget(style_selector)
         print_box = QGroupBox("Print frame")
         form = QFormLayout(print_box)
         orientation_row = QWidget()
@@ -191,7 +206,7 @@ class MemoryMapWindow(QMainWindow):
         )
         self.flat_border.toggled.connect(self._border_toggled)
         self.margin.setEnabled(False)
-        self.route_width = self._spin(1.2, 0.1, 20)
+        self.route_width = self._spin(1.6, 0.1, 20)
         self.route_height = QComboBox()
         self.route_height.addItem("Auto (profile default)", None)
         for height in (1.0, 1.2, 1.5, 2.0, 2.5, 3.0):
@@ -212,18 +227,16 @@ class MemoryMapWindow(QMainWindow):
         )
         form.addRow("Width (mm)", self.print_width)
         form.addRow("Height (mm)", self.print_height)
-        form.addRow("Border", self.flat_border)
+        self.flat_border.hide()
         form.addRow("Route clearance (mm)", self.route_clearance)
-        form.addRow("Trim width (mm)", self.margin)
+        self.margin.hide()
         self.route_clearance.valueChanged.connect(
             lambda _value: self._border_toggled(self.flat_border.isChecked())
         )
         self.route_width.valueChanged.connect(
             lambda _value: self._border_toggled(self.flat_border.isChecked())
         )
-        form.addRow("Route width (mm)", self.route_width)
-        form.addRow("Route height", self.route_height)
-        form.addRow("Route layer height", self.route_layer_height)
+        self.route_layer_height.hide()
         marker_row = QWidget()
         marker_layout = QHBoxLayout(marker_row)
         marker_layout.setContentsMargins(0, 0, 0, 0)
@@ -231,7 +244,6 @@ class MemoryMapWindow(QMainWindow):
         self.finish_marker = QCheckBox("Finish")
         marker_layout.addWidget(self.start_marker)
         marker_layout.addWidget(self.finish_marker)
-        form.addRow("Route markers", marker_row)
         reset = QPushButton("Reset frame to route")
         reset.clicked.connect(self.reset_frame)
         form.addRow(reset)
@@ -248,6 +260,8 @@ class MemoryMapWindow(QMainWindow):
         outer.addWidget(print_box)
 
         style_box = QGroupBox("Map style")
+        self.surface_box = style_box
+        style_box.setTitle("Terrain surfaces")
         style_form = QFormLayout(style_box)
         self.style_profile = QComboBox()
         self.style_profile.addItem("Urban", STYLE_PROFILE_URBAN)
@@ -277,15 +291,18 @@ class MemoryMapWindow(QMainWindow):
             "Controls print-scale cleanup of exposed ground. Broad retains more "
             "small coastal patches; Conservative removes more marginal detail."
         )
-        style_form.addRow("Profile", self.style_profile)
+        self.style_profile.hide()
         style_form.addRow("Surface skin", self.surface_skin_thickness)
         style_form.addRow("Minimum waterway width", self.minimum_waterway_width)
         style_form.addRow("Ground cover", self.ground_cover_mode)
         style_form.addRow("Exposed-ground detail", self.ground_cover_sensitivity)
         outer.addWidget(style_box)
 
-        palette_box = QGroupBox("Layer colors")
+        palette_box = QGroupBox("Route & Appearance")
         palette_form = QFormLayout(palette_box)
+        palette_form.addRow("Route width (mm)", self.route_width)
+        palette_form.addRow("Route height", self.route_height)
+        palette_form.addRow("Route markers", marker_row)
         self.finish = QComboBox()
         for label in ("Gallery", "Nocturne"):
             self.finish.addItem(label, label)
@@ -340,8 +357,11 @@ class MemoryMapWindow(QMainWindow):
         ):
             layer_layout.addWidget(control)
         outer.addWidget(layers)
+        layers.hide()
 
         road_box = QGroupBox("Road types")
+        self.road_box = road_box
+        road_box.setTitle("Street geometry")
         road_layout = QVBoxLayout(road_box)
         self.road_categories = {}
         for label in ROAD_CATEGORIES:
@@ -354,8 +374,35 @@ class MemoryMapWindow(QMainWindow):
         )
         self.roads_layer.toggled.connect(road_box.setEnabled)
         outer.addWidget(road_box)
+        self.road_width_box = QGroupBox("Road widths")
+        widths_form = QFormLayout(self.road_width_box)
+        self.widths_form = widths_form
+        self.road_width_controls = {}
+        for cls, width in EXPERIMENTAL_WIDTHS.items():
+            control = self._spin(width, .1, 10, decimals=2)
+            self.road_width_controls[cls] = control
+            category = next(label for label, kinds in ROAD_CATEGORIES.items()
+                            if kinds[0] == {"motorways": "motorway", "main": "primary",
+                                            "local": "residential", "service": "service"}[cls])
+            enabled = self.road_categories[category]
+            enabled.setText(ROAD_CLASS_NAMES[cls])
+            widths_form.addRow(enabled, control)
+            enabled.toggled.connect(control.setEnabled)
+        self.street_detail = QComboBox()
+        for label, spacing in (("Sparse", 1.0), ("Balanced", .7), ("Dense", .4)):
+            self.street_detail.addItem(label, spacing)
+        self.street_detail.setCurrentIndex(1)
+        widths_form.addRow("Street Grid detail", self.street_detail)
+        note = QLabel("Experimental widths. All road classes share one relief height. Assign filaments to the named parts in your slicer; classes may share a filament.")
+        self.road_width_note = note
+        note.setWordWrap(True)
+        widths_form.addRow(note)
+        outer.addWidget(self.road_width_box)
         building_box = QGroupBox("Building filter")
+        self.building_box = building_box
+        building_box.setTitle("Cityscape geometry")
         building_form = QFormLayout(building_box)
+        self.building_form = building_form
         self.print_optimized = QCheckBox("Print-optimized buildings")
         self.print_optimized.setToolTip(
             "Simplify and group small buildings, omit isolated tiny features, and protect the route. "
@@ -363,7 +410,15 @@ class MemoryMapWindow(QMainWindow):
         )
         self.building_line_width = self._spin(0.42, 0.2, 1.2)
         self.building_line_width.setEnabled(False)
-        building_form.addRow(self.print_optimized)
+        self.print_optimized.hide()
+        self.building_processing = QComboBox()
+        self.building_processing.addItem("Established", "manual")
+        self.building_processing.addItem("Print optimized", "print_optimized")
+        self.building_processing.currentIndexChanged.connect(
+            lambda: self.print_optimized.setChecked(self.building_processing.currentData() == "print_optimized")
+        )
+        self.print_optimized.toggled.connect(lambda enabled: self.building_processing.setCurrentIndex(int(enabled)))
+        building_form.addRow("Building processing", self.building_processing)
         building_form.addRow("Printer line width (mm)", self.building_line_width)
         self.filter_residential = QCheckBox("Omit narrow residential buildings")
         self.residential_width = self._spin(0.8, 0.1, 5.0)
@@ -372,8 +427,8 @@ class MemoryMapWindow(QMainWindow):
         building_box.setToolTip(
             "Applied after grouping at the final map scale. Removes identified residential footprints with no core this wide. Unclassified buildings, landmarks, parts and courtyards are retained. This is geometric screening, not slicer certification."
         )
-        building_form.addRow(self.filter_residential)
-        building_form.addRow("Minimum footprint width", self.residential_width)
+        self.filter_residential.hide()
+        self.residential_width.hide()
         self.buildings_layer.toggled.connect(building_box.setEnabled)
         self.print_optimized.toggled.connect(self._building_optimization_changed)
         self.buildings_layer.toggled.connect(self._building_optimization_changed)
@@ -403,6 +458,7 @@ class MemoryMapWindow(QMainWindow):
         outer.addWidget(building_box)
 
         terrain_box = QGroupBox("Terrain settings")
+        self.terrain_box = terrain_box
         terrain_form = QFormLayout(terrain_box)
         self.terrain_relief = self._spin(3.0, 0.5, 12.0)
         self.water_recess = self._spin(0.4, 0.1, 3.0)
@@ -410,6 +466,8 @@ class MemoryMapWindow(QMainWindow):
         self.water_recess.setEnabled(False)
         terrain_form.addRow("Maximum relief", self.terrain_relief)
         terrain_form.addRow("Water recess", self.water_recess)
+        terrain_form.addRow("Road context", self.roads_layer)
+        palette_form.addRow(self.water_layer)
         outer.addWidget(terrain_box)
         self.height_box = QGroupBox("Building heights")
         heights = QFormLayout(self.height_box)
@@ -437,7 +495,7 @@ class MemoryMapWindow(QMainWindow):
         heights.addRow("Height multiplier", self.building_height_multiplier)
         heights.addRow(self.building_height_min_enabled, self.building_height_min)
         heights.addRow(self.building_height_max_enabled, self.building_height_max)
-        heights.addRow("Relief ceiling (legacy)", self.building_max_height)
+        self.building_max_height.hide()
         note = QLabel(
             "Proportional 1× uses source heights at map scale. Missing heights use estimates. Limits include roofs and apply to whole building assemblies. Regenerate after edits."
         )
@@ -457,15 +515,23 @@ class MemoryMapWindow(QMainWindow):
         for control in (self.building_height_min_enabled, self.building_height_max_enabled):
             control.toggled.connect(self._height_settings_changed)
         self.buildings_layer.toggled.connect(self.height_box.setEnabled)
+        self.advanced_heights = QPushButton("Advanced building heights")
+        self.advanced_heights.setCheckable(True)
+        self.advanced_heights.toggled.connect(self.height_box.setVisible)
+        outer.addWidget(self.advanced_heights)
         outer.addWidget(self.height_box)
+        self.height_box.hide()
         self.generate = QPushButton("Generate 3MF")
         self.generate.setEnabled(False)
         self.generate.clicked.connect(self.request_generation)
         self.save = QPushButton("Save result as…")
         self.save.setEnabled(False)
         self.save.clicked.connect(self.save_result)
-        outer.addWidget(self.generate)
-        outer.addWidget(self.save)
+        export_box = QGroupBox("Export")
+        export_layout = QVBoxLayout(export_box)
+        export_layout.addWidget(self.generate)
+        export_layout.addWidget(self.save)
+        outer.addWidget(export_box)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.warnings = QTextEdit()
@@ -475,6 +541,14 @@ class MemoryMapWindow(QMainWindow):
         outer.addWidget(self.progress)
         outer.addWidget(self.warnings, 1)
         self._style_changed()
+        self._sync_style_visibility()
+        # One revision protects every geometry setting, including changes during generation.
+        for control in panel.findChildren(QDoubleSpinBox):
+            control.valueChanged.connect(self._geometry_changed)
+        for control in panel.findChildren(QComboBox):
+            control.currentIndexChanged.connect(self._geometry_changed)
+        for control in panel.findChildren(QCheckBox):
+            control.toggled.connect(self._geometry_changed)
         return panel
 
     @staticmethod
@@ -597,6 +671,8 @@ class MemoryMapWindow(QMainWindow):
 
     @Slot(dict)
     def _remember_frame(self, frame: dict) -> None:
+        if frame != self.current_frame:
+            self._geometry_changed()
         if hasattr(self, "city_guidance"):
             meters_per_mm = float(frame["coverage_width_m"]) / float(frame["print_width_mm"])
             line = self.building_line_width.value() if hasattr(self, "building_line_width") else 0.4
@@ -608,12 +684,14 @@ class MemoryMapWindow(QMainWindow):
     @Slot()
     def reset_frame(self) -> None:
         if self.default_frame:
+            self._geometry_changed()
             self.current_frame = self.default_frame.copy()
             self.map_view.page().runJavaScript("resetFrame()")
 
     def _zoom_frame(self, factor: float) -> None:
         if self.current_frame is None:
             return
+        self._geometry_changed()
         self.current_frame = self.current_frame.copy()
         self.current_frame["coverage_width_m"] *= factor
         self.current_frame["coverage_height_m"] *= factor
@@ -672,8 +750,9 @@ class MemoryMapWindow(QMainWindow):
     @Slot(bool)
     def _terrain_toggled(self, enabled: bool) -> None:
         self.terrain_relief.setEnabled(enabled)
-        self.water_layer.setEnabled(enabled)
-        if not enabled:
+        urban_style = getattr(self, "_explicit_map_style", None) in {"cityscape", "street_grid"}
+        self.water_layer.setEnabled(enabled or urban_style)
+        if not enabled and not urban_style:
             self.water_layer.setChecked(False)
         self.water_recess.setEnabled(enabled and self.water_layer.isChecked())
 
@@ -688,6 +767,118 @@ class MemoryMapWindow(QMainWindow):
         self.minimum_waterway_width.setEnabled(landscape)
         self.ground_cover_mode.setEnabled(landscape)
         self.ground_cover_sensitivity.setEnabled(landscape)
+
+    def _geometry_changed(self, *_args) -> None:
+        self._height_revision += 1
+        if hasattr(self, "save"):
+            self.save.setEnabled(False)
+        if self.result_path is not None:
+            self.preview_view.setHtml(placeholder_html("Geometry changed. Regenerate before saving."))
+
+    def _capture_style_settings(self) -> dict:
+        names = (
+            "print_optimized", "building_processing", "building_grouping", "filter_residential",
+            "residential_width", "building_line_width", "building_appearance", "city_detail",
+            "city_landmarks", "building_height_mode", "building_height_multiplier",
+            "building_height_min_enabled", "building_height_min", "building_height_max_enabled",
+            "building_height_max", "building_max_height", "terrain_relief", "water_recess",
+            "water_layer", "surface_skin_thickness", "minimum_waterway_width",
+            "ground_cover_mode", "ground_cover_sensitivity", "street_detail",
+        )
+        settings = {}
+        for name in names:
+            control = getattr(self, name)
+            if isinstance(control, QCheckBox):
+                settings[name] = {"checked": control.isChecked()}
+            elif isinstance(control, QComboBox):
+                settings[name] = {"data": control.currentData()}
+            else:
+                settings[name] = {"value": control.value()}
+        settings["roads"] = {label: control.isChecked() for label, control in self.road_categories.items()}
+        settings["widths"] = {cls: control.value() for cls, control in self.road_width_controls.items()}
+        return settings
+
+    def _restore_style_settings(self, settings) -> None:
+        for name, value in settings.items():
+            if name in {"roads", "widths"} or not hasattr(self, name):
+                continue
+            control = getattr(self, name)
+            control.blockSignals(True)
+            if "checked" in value:
+                control.setChecked(value["checked"])
+            elif "data" in value:
+                control.setCurrentIndex(control.findData(value["data"]))
+            elif "value" in value:
+                control.setValue(value["value"])
+            control.blockSignals(False)
+        for label, enabled in settings.get("roads", {}).items():
+            if label in self.road_categories:
+                self.road_categories[label].setChecked(enabled)
+        for cls, width in settings.get("widths", {}).items():
+            if cls in self.road_width_controls:
+                self.road_width_controls[cls].setValue(width)
+
+    def _activate_map_style(self, *_args) -> None:
+        if self._explicit_map_style is None:
+            self._map_style_changed()
+
+    def _map_style_changed(self, *_args) -> None:
+        if not hasattr(self, "road_width_controls"):
+            return
+        previous = self._explicit_map_style
+        if previous is not None:
+            self._style_settings[previous] = self._capture_style_settings()
+        style = self.map_style.currentData()
+        self._explicit_map_style = style
+        terrain = style == "terrain"
+        self.style_profile.setCurrentIndex(self.style_profile.findData("landscape" if terrain else "urban"))
+        self.buildings_layer.setChecked(style == "cityscape")
+        self.terrain_layer.setChecked(terrain)
+        self.roads_layer.setChecked(True)
+        if style in self._style_settings:
+            self._restore_style_settings(self._style_settings[style])
+        else:
+            self.water_layer.setChecked(terrain)
+            for label, control in self.road_categories.items():
+                types = ROAD_CATEGORIES[label]
+                major = any(kind in {"motorway", "trunk", "primary"} for kind in types)
+                control.setChecked(major if terrain else label not in {"Service roads", "Cycleways", "Footpaths / tracks"})
+        self._building_optimization_changed()
+        self._height_settings_changed()
+        self._sync_style_visibility()
+        self._geometry_changed()
+
+    def _sync_style_visibility(self) -> None:
+        style = self.map_style.currentData()
+        terrain = style == "terrain"
+        city = style == "cityscape"
+        self.legacy_style_hint.setVisible(self._explicit_map_style is None)
+        self.building_box.setVisible(city)
+        self.advanced_heights.setVisible(city)
+        self.height_box.setVisible(city and self.advanced_heights.isChecked())
+        self.surface_box.setVisible(terrain)
+        self.terrain_box.setVisible(terrain)
+        self.road_width_box.setVisible(not terrain)
+        legacy = self._explicit_map_style is None
+        self.road_width_box.setTitle("Road classes" if legacy else "Road widths")
+        self.road_width_note.setVisible(not legacy)
+        for control in self.road_width_controls.values():
+            control.setVisible(not legacy)
+        self.road_box.setTitle("Additional road types")
+        self.road_box.setVisible(not terrain)
+        self.street_detail.setVisible(style == "street_grid")
+        self.widths_form.setRowVisible(self.street_detail, style == "street_grid")
+        relief = self.building_appearance.currentData() == "city_relief"
+        self.building_processing.setEnabled(not relief)
+        self.building_height_mode.setEnabled(not relief)
+        self.building_form.setRowVisible(self.city_detail, relief)
+        self.building_form.setRowVisible(self.city_landmarks, relief)
+        self.water_layer.setText("Water context")
+        for cls, control in self.road_width_controls.items():
+            label = next(label for label, kinds in ROAD_CATEGORIES.items()
+                         if kinds[0] == {"motorways": "motorway", "main": "primary",
+                                         "local": "residential", "service": "service"}[cls])
+            control.setEnabled(self.road_categories[label].isChecked())
 
     @Slot(int)
     def _finish_changed(self, _index: int = -1) -> None:
@@ -775,6 +966,7 @@ class MemoryMapWindow(QMainWindow):
         self.city_detail.setEnabled(city)
         self.city_landmarks.setEnabled(city)
         self._appearance_settings_changed()
+        self._sync_style_visibility()
 
     def _height_config(self) -> dict:
         if not hasattr(self, "building_height_mode"):
@@ -816,6 +1008,8 @@ class MemoryMapWindow(QMainWindow):
         if self.current_frame is None or self.gpx_path is None:
             raise ValueError("Open a GPX before saving a project")
         config = self._generation_config_payload()
+        if getattr(self, "_explicit_map_style", None) is not None:
+            self._style_settings[self._explicit_map_style] = self._capture_style_settings()
         frame = dict(self.current_frame)
         frame.update(
             print_width_mm=self.print_width.value(),
@@ -823,6 +1017,9 @@ class MemoryMapWindow(QMainWindow):
             margin_mm=MemoryMapWindow._effective_margin(self),
         )
         return DesktopProject(
+            map_style=getattr(self, "_explicit_map_style", None),
+            style_settings=dict(getattr(self, "_style_settings", {})),
+            road_class_widths_mm={cls: control.value() for cls, control in getattr(self, "road_width_controls", {}).items()},
             frame=MapFrame(**frame),
             gpx_path=str(self.gpx_path.resolve()),
             include_roads=self.roads_layer.isChecked(),
@@ -853,6 +1050,8 @@ class MemoryMapWindow(QMainWindow):
             color_preset=self.color_preset_name,
             layer_colors=dict(self.layer_colors),
             extra_generation_settings={
+                **getattr(self, "_extra_generation_settings", {}),
+                "street_spacing_mm": self.street_detail.currentData(),
                 "road_types": config.get("road_types", []),
                 "residential_min_width_mm": self.residential_width.value()
                 if self.filter_residential.isChecked()
@@ -901,6 +1100,19 @@ class MemoryMapWindow(QMainWindow):
         self.gpx_path, self.route = route_path, route
         self.file_label.setText(route_path.name)
         extra = project.extra_generation_settings
+        self._extra_generation_settings = dict(extra)
+        self._explicit_map_style = project.map_style
+        self._style_settings = dict(project.style_settings)
+        inferred = project.map_style or ("terrain" if project.style_profile == "landscape" else
+                                         "cityscape" if project.include_buildings else "street_grid")
+        self.map_style.blockSignals(True)
+        self.map_style.setCurrentIndex(self.map_style.findData(inferred))
+        self.map_style.blockSignals(False)
+        for cls, control in self.road_width_controls.items():
+            control.blockSignals(True)
+            control.setValue(project.road_class_widths_mm.get(cls, EXPERIMENTAL_WIDTHS[cls]))
+            control.blockSignals(False)
+        self.street_detail.setCurrentIndex(self.street_detail.findData(extra.get("street_spacing_mm", .7)))
         checks = {
             "city_landmarks": project.city_relief_landmark_emphasis,
             "roads_layer": project.include_roads,
@@ -993,7 +1205,9 @@ class MemoryMapWindow(QMainWindow):
         self._height_settings_changed()
         self._terrain_toggled(project.include_terrain)
         self._building_optimization_changed()
+        self.building_processing.setCurrentIndex(int(self.print_optimized.isChecked()))
         self._style_changed()
+        self._sync_style_visibility()
         self.margin.setEnabled(project.flat_border_enabled)
         self.height_box.setEnabled(project.include_buildings)
         self.generate.setEnabled(True)
@@ -1039,6 +1253,11 @@ class MemoryMapWindow(QMainWindow):
             getattr(self, "print_optimized", None) and self.print_optimized.isChecked()
         )
         return {
+            **getattr(self, "_extra_generation_settings", {}),
+            **({"road_class_widths_mm": {cls: control.value() for cls, control in self.road_width_controls.items()},
+                "adaptive_streets": self._explicit_map_style == "street_grid",
+                "street_spacing_mm": self.street_detail.currentData()}
+               if getattr(self, "_explicit_map_style", None) is not None else {}),
             "building_appearance_mode": self.building_appearance.currentData()
             if hasattr(self, "building_appearance")
             else "existing",
@@ -1116,6 +1335,7 @@ class MemoryMapWindow(QMainWindow):
             )
             directory = Path(tempfile.mkdtemp(prefix="memorymap-desktop-"))
             payload = {
+                "map_style": getattr(self, "_explicit_map_style", None),
                 "route": self.route,
                 "frame": MapFrame(**frame_data),
                 "output_path": directory / "memorymap.3mf",
@@ -1179,7 +1399,7 @@ class MemoryMapWindow(QMainWindow):
     def set_result(self, path: str, preview_path: str = "") -> None:
         if getattr(self, "_generation_height_revision", 0) != getattr(self, "_height_revision", 0):
             self.save.setEnabled(False)
-            self.add_warning("Height settings changed during generation. Regenerate before saving.")
+            self.add_warning("Geometry settings changed during generation. Regenerate before saving.")
             return
         self._result_height_revision = getattr(self, "_height_revision", 0)
         self.generate.setText("Regenerate map")
@@ -1213,7 +1433,7 @@ class MemoryMapWindow(QMainWindow):
     @Slot()
     def save_result(self) -> None:
         if getattr(self, "_result_height_revision", -1) != getattr(self, "_height_revision", 0):
-            self.add_warning("Regenerate with the current height settings before saving.")
+            self.add_warning("Regenerate with the current geometry settings before saving.")
             return
         if not self.result_path or not self.result_path.is_file():
             return
