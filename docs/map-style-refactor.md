@@ -1,5 +1,8 @@
 # Trace Studio Map Style refactor — review checkpoint
 
+Latest follow-up: [review fixes and acceptance evidence](map-style-review-fixes.md).
+This original checkpoint records the implementation at reviewed head `5290b7d`.
+
 Date: 2026-10-11. Branch: `codex/map-style-audit` (a descendant of `dev`).
 Status: software prototype implemented and representative regression gates passed.
 Manufacturing qualification and real-city visual approval remain pending.
