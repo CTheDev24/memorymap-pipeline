@@ -1,0 +1,186 @@
+{
+  "coverage": "Representative fixtures, not Houston/Big Sur/Chicago race generations",
+  "inputs": {
+    "route.gpx": "eae7f0738ae1bc3ba0689fca80ad2c260532f7270811648b99b78f31c14b26f7",
+    "roads.geojson": "376aa9917037fcbdbd47cff16bcbdd3465030339b1c0a815d9e7afe824cf4863",
+    "buildings.geojson": "78020051e3bede642919fc2648e36ede191f55284567bf9fcf8cf72334b03a73",
+    "dem.json": "d211c657d9d3a769c200415e50df752bff9637b785332d0e251dbf65f4d88789"
+  },
+  "cases": {
+    "cityscape": {
+      "generation_seconds": 0.49906379997264594,
+      "model_sha256": "59dcaa90e2f211da8176eddef8fb746ef1edd0fbf07c17542ef74ebaae24dd54",
+      "components": [
+        "Base_White",
+        "Route_Accent",
+        "Roads_Motorways",
+        "Roads_Main",
+        "Roads_Local",
+        "Roads_Service",
+        "Buildings_Verification"
+      ],
+      "unchanged_arrays": {
+        "base_mesh": true,
+        "route_mesh": true,
+        "buildings_mesh": true,
+        "landscape_mesh": true,
+        "water_mesh": true
+      },
+      "build": {
+        "release": "city-relief-v1",
+        "source_sha256": "f999868087fe1f84d231b2fcd42b16293ea465f13afc19cfc02297a1be6016bb",
+        "packaged": false
+      },
+      "layer_states": {
+        "terrain": "disabled",
+        "water": "disabled",
+        "buildings": "complete",
+        "roads": "complete",
+        "route": "complete"
+      },
+      "road_classes": {
+        "motorways": {
+          "height_mm": 0.8,
+          "area_mm2": 287.99999998670785
+        },
+        "main": {
+          "height_mm": 0.8,
+          "area_mm2": 151.03999998854823
+        },
+        "local": {
+          "height_mm": 0.8,
+          "area_mm2": 1041.8028103882962
+        },
+        "service": {
+          "height_mm": 0.8,
+          "area_mm2": 74.39111109999415
+        }
+      },
+      "street_selection": {
+        "algorithm": null,
+        "source_count": null,
+        "retained_count": null,
+        "omitted_count": null
+      },
+      "terrain_relief_mm": null,
+      "building_height_distribution": {
+        "count": 2,
+        "height_sources": {
+          "height": 2
+        },
+        "real_height_m": {
+          "p50": 5.5,
+          "p90": 6.7,
+          "p99": 6.97,
+          "maximum": 7.0
+        },
+        "rendered_height_mm": {
+          "p50": 2.5666666666666664,
+          "p90": 2.8066666666666666,
+          "p99": 2.8606666666666665,
+          "maximum": 2.8666666666666667
+        },
+        "ceiling_occupancy": {
+          "at_least_50_percent": 0.0,
+          "at_least_75_percent": 0.0,
+          "at_least_90_percent": 0.0
+        }
+      }
+    },
+    "terrain": {
+      "generation_seconds": 1.0281303999945521,
+      "model_sha256": "55638d287c304fd83f2e471da3451d616ba5e54e5900a6d058612527d1cbea1e",
+      "components": [
+        "Base_Bone",
+        "Route_Accent",
+        "Water_Blue",
+        "Terrain_Green"
+      ],
+      "unchanged_arrays": {
+        "base_mesh": true,
+        "route_mesh": true,
+        "buildings_mesh": true,
+        "landscape_mesh": true,
+        "water_mesh": true
+      },
+      "build": {
+        "release": "city-relief-v1",
+        "source_sha256": "f999868087fe1f84d231b2fcd42b16293ea465f13afc19cfc02297a1be6016bb",
+        "packaged": false
+      },
+      "layer_states": {
+        "terrain": "complete",
+        "water": "complete",
+        "buildings": "disabled",
+        "roads": "disabled",
+        "route": "complete"
+      },
+      "road_classes": {},
+      "street_selection": {
+        "algorithm": null,
+        "source_count": null,
+        "retained_count": null,
+        "omitted_count": null
+      },
+      "terrain_relief_mm": 9.0,
+      "building_height_distribution": null
+    },
+    "street_grid": {
+      "generation_seconds": 0.5517405000282452,
+      "model_sha256": "589a150db538bbdd70723809a0bde37df8263af21ff7474f81e8b8987c186794",
+      "components": [
+        "Base_White",
+        "Route_Accent",
+        "Roads_Motorways",
+        "Roads_Main",
+        "Roads_Local",
+        "Roads_Service"
+      ],
+      "unchanged_arrays": {
+        "base_mesh": true,
+        "route_mesh": true,
+        "buildings_mesh": true,
+        "landscape_mesh": true,
+        "water_mesh": true
+      },
+      "build": {
+        "release": "city-relief-v1",
+        "source_sha256": "f999868087fe1f84d231b2fcd42b16293ea465f13afc19cfc02297a1be6016bb",
+        "packaged": false
+      },
+      "layer_states": {
+        "terrain": "disabled",
+        "water": "disabled",
+        "buildings": "disabled",
+        "roads": "complete",
+        "route": "complete"
+      },
+      "road_classes": {
+        "motorways": {
+          "height_mm": 0.8,
+          "area_mm2": 287.99999998670785
+        },
+        "main": {
+          "height_mm": 0.8,
+          "area_mm2": 151.03999998854823
+        },
+        "local": {
+          "height_mm": 0.8,
+          "area_mm2": 941.6516994800894
+        },
+        "service": {
+          "height_mm": 0.8,
+          "area_mm2": 74.55999998854182
+        }
+      },
+      "street_selection": {
+        "algorithm": "street-selection-v1",
+        "source_count": 16,
+        "retained_count": 14,
+        "omitted_count": 2
+      },
+      "terrain_relief_mm": null,
+      "building_height_distribution": null
+    }
+  }
+}

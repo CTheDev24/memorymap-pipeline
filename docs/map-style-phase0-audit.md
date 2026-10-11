@@ -55,7 +55,7 @@ This is a scoped search result, not proof that no other checkout or repository h
 
 | Area | Current implementation | Gap for requested refactor |
 |---|---|---|
-| Shared generation | Desktop worker constructs `GenerationRequest`; CLI/API share `generate_memory_map` | Add style resolution before this shared entry point; avoid duplicated pipelines |
+| Shared desktop generation | Desktop worker constructs `GenerationRequest`; legacy CLI has its own orchestration and API jobs currently generate route/base only | Add style resolution to the desktop service; keep legacy clients compatible and avoid duplicating style engines |
 | Coordinates | `MapFrame` handles print projection, rotation, frame size; terrain resamples onto it | Preserve one frame and shared Z support for every new component |
 | Profiles | `urban` and `landscape`; independent layer switches | No Cityscape/Terrain/Street Grid primary selector or per-style state |
 | Buildings | Filtering, grouping, optimization, assemblies, roofs, height policy, City Relief provenance | Retain these paths; Cityscape must not silently enable provisional City Relief |
@@ -159,5 +159,7 @@ invent settings to approximate the accepted references.
 - The three real reference baselines, reference visual acceptance, Bambu assignment
   and physical-print tests are **pending**, not passed by the 507 automated tests.
 
-Only this audit document was added. No refactor phase, new full LA Balanced run,
-release, installation, merge, slicer acceptance claim or printer job was performed.
+At the initial audit checkpoint only this document was added. After the owner's
+clarification, the representative regression gates and implementation proceeded;
+see [the current refactor report](map-style-refactor.md). No new full LA Balanced
+run, release, installation, merge, slicer acceptance claim or printer job was performed.
