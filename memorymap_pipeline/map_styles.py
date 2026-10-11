@@ -12,7 +12,7 @@ MAP_STYLES = {"cityscape": "Cityscape", "terrain": "Terrain", "street_grid": "St
 ROAD_CLASSES = {
     "motorways": ("motorway", "motorway_link", "trunk", "trunk_link"),
     "main": ("primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link"),
-    "local": ("residential", "living_street", "unclassified", "pedestrian", "cycleway", "footway", "path", "track"),
+    "local": ("residential", "living_street", "unclassified", "pedestrian", "cycleway", "footway", "path", "track", "steps"),
     "service": ("service",),
 }
 ROAD_CLASS_NAMES = {
@@ -51,6 +51,9 @@ def resolve_request(request):
     config = dict(request.config)
     config.update(map_style=request.map_style, style_profile="landscape" if terrain else "urban",
                   terrain_enabled=terrain)
+    if request.map_style != "cityscape":
+        config.update(building_appearance_mode="existing", building_generalization_mode="manual",
+                      building_grouping_enabled=False)
     if terrain:
         # A selected terrain style must not silently succeed with a flat DEM.
         config["terrain_flat_fallback"] = False

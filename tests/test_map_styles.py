@@ -1,14 +1,14 @@
-from pathlib import Path
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+from memorymap_pipeline.desktop.project import DesktopProject
 from memorymap_pipeline.generation import GenerationRequest, generate_memory_map
 from memorymap_pipeline.gpx_loader import load_route_from_gpx
 from memorymap_pipeline.map_frame import MapFrame
 from memorymap_pipeline.map_styles import resolve_request
-from memorymap_pipeline.desktop.project import DesktopProject
 from memorymap_pipeline.terrain import ElevationGrid
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -71,3 +71,33 @@ def test_representative_style_generations(tmp_path, style):
         assert np.isfinite(mesh.vertices).all()
         assert mesh.bounds[0, 0] >= -1e-6 and mesh.bounds[1, 0] <= 120 + 1e-6
         assert mesh.bounds[0, 1] >= -1e-6 and mesh.bounds[1, 1] <= 90 + 1e-6
+
+
+def test_urban_water_context_reuses_flat_support_without_fetching_dem(tmp_path, monkeypatch):
+    from shapely.geometry import box
+
+    from memorymap_pipeline import generation
+
+    def no_dem(*args, **kwargs):
+        pytest.fail("Urban water context must not request measured topography")
+
+    monkeypatch.setattr(generation.Usgs3depProvider, "fetch", no_dem)
+    monkeypatch.setattr(generation.TerrariumProvider, "fetch", no_dem)
+    req = replace(request(tmp_path, "street_grid"), config={"water_enabled": True},
+                  water_polygons=[box(15, 65, 25, 75)])
+    result = generate_memory_map(req)
+    assert result.water_mesh is not None
+    assert result.stats["flat_water_context"]
+    assert result.stats["terrain"]["source"] == "flat-water-support"
+    assert not result.buildings_mesh
+    assert result.road_class_meshes
+
+
+def test_new_cityscape_preserves_established_buildings_and_route(tmp_path):
+    legacy = generate_memory_map(request(tmp_path))
+    city = generate_memory_map(request(tmp_path, "cityscape"))
+    for name in ("base_mesh", "buildings_mesh", "route_mesh"):
+        first, second = getattr(legacy, name), getattr(city, name)
+        assert np.array_equal(first.vertices, second.vertices)
+        assert np.array_equal(first.faces, second.faces)
+    assert city.road_class_meshes and "roads" not in city.meshes

@@ -16,7 +16,6 @@ from shapely.geometry import LineString, MultiPoint, box
 from shapely.ops import unary_union
 from trimesh.util import concatenate
 
-
 from .build_identity import build_identity
 from .building_heights import BuildingHeightPolicy
 from .buildings import download_and_build_buildings
@@ -155,10 +154,11 @@ class GenerationResult:
     landscape_mesh: Any | None = None
     start_marker_mesh: Any | None = None
     finish_marker_mesh: Any | None = None
+    road_class_meshes: dict[str, Any] = field(default_factory=dict)
 
     @property
     def meshes(self) -> dict[str, Any]:
-        return {
+        layers = {
             name: mesh
             for name, mesh in {
                 "base": self.base_mesh,
@@ -172,6 +172,10 @@ class GenerationResult:
             }.items()
             if mesh is not None
         }
+        if self.road_class_meshes:
+            layers.pop("roads", None)
+            layers.update({f"roads_{key}": mesh for key, mesh in self.road_class_meshes.items()})
+        return layers
 
 
 def _merged_config(overrides: dict[str, Any]) -> dict[str, Any]:
@@ -410,7 +414,12 @@ def generate_memory_map(
     _configure_packaged_networking()
     from .city_relief import configure
 
-    config = configure(_merged_config(request.config))
+    config = _merged_config(request.config)
+    original_road_height = config["road_height"]
+    original_road_types = config["road_types"]
+    config = configure(config)
+    if request.map_style in {"cityscape", "street_grid"}:
+        config.update(road_height=original_road_height, road_types=original_road_types)
     height_policy = BuildingHeightPolicy.from_config(config)
     flat_border_enabled = bool(config.get("flat_border_enabled", False))
     frame = _frame_for_border(request.frame, flat_border_enabled)
@@ -468,7 +477,9 @@ def generate_memory_map(
     linear_water_geometries: list[Any] = []
     linear_water_region = None
     ground_cover_stats = None
-    if request.include_base and bool(config.get("terrain_enabled", False)):
+    flat_water_context = (request.map_style in {"cityscape", "street_grid"}
+                          and bool(config.get("water_enabled", False)))
+    if request.include_base and (bool(config.get("terrain_enabled", False)) or flat_water_context):
         terrain_target_cell_size_mm = float(
             config.get(
                 "landscape_terrain_target_cell_size_mm"
@@ -503,6 +514,10 @@ def generate_memory_map(
         )
         grid_size = terrain_grid_spec.shape
         elevation_grid = request.elevation_grid
+        if flat_water_context:
+            south, north, west, east = bbox
+            elevation_grid = ElevationGrid(np.zeros((2, 2)), south, north, west, east,
+                                          "flat-water-support")
         if elevation_grid is None:
             if config.get("terrain_provider", "usgs-3dep") != "usgs-3dep":
                 raise ValueError(f"Unsupported terrain provider: {config.get('terrain_provider')}")
@@ -530,7 +545,7 @@ def generate_memory_map(
                     elevation_grid = global_provider.fetch(bbox, grid_size, cache_dir)
                 except Exception as fallback_exc:
                     if not bool(config.get("terrain_flat_fallback", True)):
-                        raise RuntimeError(
+                        raise LayerGenerationError("terrain",
                             f"USGS terrain failed ({usgs_exc}); "
                             f"global DEM fallback failed ({fallback_exc})"
                         ) from fallback_exc
@@ -589,7 +604,7 @@ def generate_memory_map(
                     water_file=request.water_file,
                     minimum_waterway_width_mm=float(config.get("minimum_waterway_width_mm", 0.8)),
                     include_metadata=landscape_style,
-                    strict=bool(config.get("building_grouping_enabled", False)),
+                    strict=bool(config.get("building_grouping_enabled", False)) or request.map_style is not None,
                 )
                 if landscape_style:
                     water_features = [
@@ -988,6 +1003,7 @@ def generate_memory_map(
     )
     unioned_roads = None
     roads_mesh = None
+    road_class_meshes = {}
     if request.include_roads or city_internal_roads:
         default_road_style = resolve_road_style(style_profile)
         if landscape_style:
@@ -1015,7 +1031,13 @@ def generate_memory_map(
                 default_road_style.terrain_smoothing_types,
             )
             road_smoothing_distances = config.get("road_terrain_smoothing_distances_mm", {})
-        if bool(config.get("building_grouping_enabled", False)):
+        separated_roads = bool(config.get("road_class_meshes", False)) and not landscape_style
+        if separated_roads:
+            from .map_styles import ROAD_CLASSES, class_widths
+
+            widths = class_widths(config.get("road_class_widths_mm"))
+            road_widths = {kind: widths[cls] for cls, kinds in ROAD_CLASSES.items() for kind in kinds}
+        if bool(config.get("building_grouping_enabled", False)) and not separated_roads:
             # At marathon scale the normal 1.1 mm local streets consume nearly
             # the whole block. Keep a nozzle-width street between grouped masses.
             road_widths = dict(road_widths)
@@ -1070,9 +1092,13 @@ def generate_memory_map(
                             kind: (0.6 if kind in MAJOR_ROADS else 0.3) for kind in road_types
                         },
                     }
-                    if config["building_appearance_mode"] == "city_relief"
+                    if config["building_appearance_mode"] == "city_relief" and not separated_roads
                     else {}
                 ),
+                **({"class_meshes_out": road_class_meshes,
+                    "adaptive_streets": bool(config.get("adaptive_streets", False)),
+                    "street_spacing_mm": float(config.get("street_spacing_mm", .7))}
+                   if separated_roads else {}),
                 network_type=str(config.get("road_network_type", "all")),
                 map_width_mm=frame.print_width_mm,
                 map_height_mm=frame.print_height_mm,
@@ -1120,6 +1146,10 @@ def generate_memory_map(
         if roads_mesh is None and request.include_roads:
             warnings.append("No road geometry was available inside the selected frame.")
             warnings.extend(f"Road detail: {message}" for message in collector.messages[-4:])
+        elif roads_mesh is not None and feature_support_at is not None and road_class_meshes:
+            road_class_meshes = {cls: drape_mesh(mesh, feature_support_at)
+                                 for cls, mesh in road_class_meshes.items()}
+            roads_mesh = concatenate(list(road_class_meshes.values()))
         elif roads_mesh is not None and feature_support_at is not None:
             smoothing_region = roads_mesh.metadata.pop("terrain_smoothing_region", None)
             profile_corridors = roads_mesh.metadata.pop("terrain_profile_corridors", ())
@@ -1329,6 +1359,9 @@ def generate_memory_map(
             "Building processing failed. No new model was exported; retry or disable Buildings.",
         )
     layer_states = {
+        "terrain": "complete" if terrain_surface is not None and not flat_water_context else "disabled",
+        "water": ("disabled" if not config.get("water_enabled", False) else
+                  "complete" if water_mesh is not None else "empty"),
         "buildings": (
             "disabled"
             if not request.include_buildings
@@ -1429,6 +1462,9 @@ def generate_memory_map(
             layer_colors=config.get("layer_colors"),
             start_marker_mesh=start_marker_mesh,
             finish_marker_mesh=finish_marker_mesh,
+            **({"road_class_meshes": road_class_meshes,
+                "road_class_colors": config.get("road_class_colors", {})}
+               if road_class_meshes else {}),
         )
         buildings_mesh = exported_meshes["buildings"]
         water_mesh = exported_meshes["water"]
@@ -1465,6 +1501,7 @@ def generate_memory_map(
         output_path.with_suffix(".audit.json").unlink(missing_ok=True)
     stats = {
         "map_style": request.map_style,
+        "flat_water_context": flat_water_context,
         "route_points": len(request.route.points),
         "style_profile": style_profile,
         "route_height_mm": route_height_mm,
@@ -1473,6 +1510,7 @@ def generate_memory_map(
         "roads": _geometry_count(unioned_roads),
         "road_acquisition": road_source_stats,
         "road_processing": road_processing_stats,
+        "road_classes": {key: _mesh_stats(mesh) for key, mesh in road_class_meshes.items()},
         "road_style": (
             {
                 "profile": style_profile,
@@ -1534,6 +1572,7 @@ def generate_memory_map(
 
         report = {
             "schema_version": 2,
+            "map_style_algorithm": "map-styles-v1" if request.map_style is not None else None,
             "build": build_identity(),
             "layer_states": layer_states,
             "mode": config["building_generalization_mode"],
@@ -1573,6 +1612,7 @@ def generate_memory_map(
         landscape_mesh=landscape_mesh,
         start_marker_mesh=start_marker_mesh,
         finish_marker_mesh=finish_marker_mesh,
+        road_class_meshes=road_class_meshes,
     )
 
 

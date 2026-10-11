@@ -374,6 +374,9 @@ def download_and_build_roads(
     major_road_types: Iterable[str] = (),
     acquisition_stats: dict | None = None,
     processing_stats: dict | None = None,
+    class_meshes_out: dict | None = None,
+    adaptive_streets: bool = False,
+    street_spacing_mm: float = .7,
 ) -> tuple[geom.base.BaseGeometry | None, object | None]:
     """Download OSM drivable roads within bbox (lat_min, lat_max, lon_min, lon_max), buffer them
     using widths from road_widths (mm). ``road_height_mm`` is the visible height above
@@ -441,43 +444,69 @@ def download_and_build_roads(
 
     # Create clipping boundary to keep roads within map bounds
     clip_box = geom.box(margin_mm, margin_mm, map_width_mm - margin_mm, map_height_mm - margin_mm)
+    def projected_records():
+        for _, row in edges.iterrows():
+            hw = row.get("highway")
+            if hw is None:
+                continue
+            hw_norm = _normalize_highway_value(hw)
+            if hw_norm not in road_types | barrier_types:
+                continue
+            if (
+                hw_norm == "service"
+                and _normalized_tag_values(row.get("service")) & blocked_service_types
+            ):
+                continue
+            if _normalized_tag_values(row.get("access")) & blocked_access:
+                continue
 
-    for _, row in edges.iterrows():
-        hw = row.get("highway")
-        if hw is None:
-            continue
-        hw_norm = _normalize_highway_value(hw)
-        if hw_norm not in road_types | barrier_types:
-            continue
-        if (
-            hw_norm == "service"
-            and _normalized_tag_values(row.get("service")) & blocked_service_types
-        ):
-            continue
-        if _normalized_tag_values(row.get("access")) & blocked_access:
-            continue
+            geom_obj = row.get("geometry")
+            if geom_obj is None:
+                continue
 
-        geom_obj = row.get("geometry")
-        if geom_obj is None:
-            continue
+            # extract lat/lon arrays (shapely gives coords as (lon, lat))
+            coords = np.array(geom_obj.coords)
+            if coords.shape[0] < 2:
+                continue
+            lons = coords[:, 0]
+            lats = coords[:, 1]
 
-        # extract lat/lon arrays (shapely gives coords as (lon, lat))
-        coords = np.array(geom_obj.coords)
-        if coords.shape[0] < 2:
-            continue
-        lons = coords[:, 0]
-        lats = coords[:, 1]
+            projected = project_lonlat_array(lats, lons, center_lat=center_lat, center_lon=center_lon)
+            frame = transform.get("map_frame")
+            transformed = (
+                frame.transform_projected(projected)
+                if frame is not None
+                else apply_transform(projected, transform)
+            )
 
-        projected = project_lonlat_array(lats, lons, center_lat=center_lat, center_lon=center_lon)
-        frame = transform.get("map_frame")
-        transformed = (
-            frame.transform_projected(projected)
-            if frame is not None
-            else apply_transform(projected, transform)
+            # build shapely LineString in mm coordinates
+            line = LineString([(float(x), float(y)) for x, y in transformed])
+            name_values = _normalized_tag_values(row.get("name")) - {"nan", "none"}
+            yield line, hw_norm, ";".join(sorted(name_values))
+
+    prepared = list(projected_records()) if adaptive_streets else projected_records()
+
+    selected = None
+    if adaptive_streets:
+        from .map_styles import ROAD_CLASSES
+        from .street_selection import select_streets
+
+        widths = {cls: max(float(road_widths.get(kind, .4)) for kind in kinds)
+                  for cls, kinds in ROAD_CLASSES.items()}
+        visible = []
+        for i, (line, highway, name) in enumerate(prepared):
+            if highway in road_types:
+                clipped_line = line.intersection(clip_box)
+                if not clipped_line.is_empty and clipped_line.length > 0:
+                    visible.append((i, (clipped_line, highway, name)))
+        keep, selection_stats = select_streets(
+            [entry for _, entry in visible], priority_region, widths, street_spacing_mm,
         )
-
-        # build shapely LineString in mm coordinates
-        line = LineString([(float(x), float(y)) for x, y in transformed])
+        selected = {visible[i][0] for i in keep}
+        if processing_stats is not None:
+            processing_stats["selection"] = selection_stats
+    class_polygons = {}
+    for index, (line, hw_norm, _name) in enumerate(prepared):
 
         if grouping_barrier_widths_mm is not None and barrier_polygons is not None:
             boundary = line.buffer(
@@ -496,11 +525,17 @@ def download_and_build_roads(
                         barrier_polygons.append(clipped)
                     if hw_norm not in road_types:
                         continue
+                    if selected is not None and index not in selected:
+                        continue
                     if local_road_region is not None and hw_norm not in major_road_types:
                         clipped = clipped.intersection(local_road_region)
                         if clipped.is_empty:
                             continue
                     buffered_polys.append(clipped)
+                    if class_meshes_out is not None:
+                        from .map_styles import road_class
+
+                        class_polygons.setdefault(road_class(hw_norm), []).append(clipped)
                     if (
                         road_heights_mm
                         and road_heights_mm.get(hw_norm, road_height_mm) >= road_height_mm
@@ -515,6 +550,8 @@ def download_and_build_roads(
                                 RoadTerrainCorridor(line, clipped, width_mm, hw_norm)
                             )
             except Exception:
+                if class_meshes_out is not None or adaptive_streets:
+                    raise ValueError("Road clipping or class partition preparation failed")
                 # If clipping fails, keep unclipped
                 if barrier_polygons is not None and hw_norm in barrier_types:
                     raise ValueError("Road barrier clipping failed")
@@ -532,6 +569,33 @@ def download_and_build_roads(
 
     if not buffered_polys:
         return None, None
+
+    if class_meshes_out is not None:
+        from trimesh.util import concatenate
+
+        from .street_selection import partition_classes
+
+        regions = partition_classes(class_polygons, clip_box, priority_region)
+        class_stats = {}
+        if not regions:
+            if processing_stats is not None:
+                processing_stats.update(algorithm="road-classes-v1", classes={}, failed_polygon_count=0)
+            return None, None
+        for cls, region in regions.items():
+            stats = {}
+            meshes = _extrude_road_regions(
+                [(region, road_height_mm)], hierarchical=True,
+                embed_depth_mm=embed_depth_mm, z_offset=z_offset, processing_stats=stats,
+            )
+            if not meshes or stats.get("failed_polygon_count", 0):
+                raise ValueError(f"Road class meshing failed: {cls}")
+            mesh = concatenate(meshes)
+            class_meshes_out[cls] = mesh
+            class_stats[cls] = {**stats, "area_mm2": region.area, "height_mm": road_height_mm}
+        if processing_stats is not None:
+            processing_stats.update(algorithm="road-classes-v1", classes=class_stats,
+                                    failed_polygon_count=0)
+        return ops.unary_union(list(regions.values())), concatenate(list(class_meshes_out.values()))
 
     unioned = ops.unary_union(buffered_polys)
     # A geometric union may legally retain polygons which touch at only a point.

@@ -13,7 +13,6 @@ from trimesh.creation import extrude_polygon
 
 from .palettes import resolve_palette, rgba
 
-
 DEFAULT_FEATURE_EMBED_DEPTH_MM = 0.2
 
 
@@ -487,6 +486,8 @@ def export_3mf(
     layer_colors: dict[str, str] | None = None,
     start_marker_mesh: Trimesh | None = None,
     finish_marker_mesh: Trimesh | None = None,
+    road_class_meshes: dict[str, Trimesh] | None = None,
+    road_class_colors: dict[str, str] | None = None,
 ):
     from trimesh.exchange.export import export_mesh
 
@@ -500,6 +501,22 @@ def export_3mf(
         raise ValueError(f"Unsupported style profile: {style_profile}")
     landscape_style = style_profile == "landscape"
     colors = resolve_palette(style_profile, color_preset, layer_colors)
+    if road_class_meshes:
+        from trimesh.util import concatenate
+
+        from .map_styles import ROAD_CLASSES
+
+        if set(road_class_meshes) - set(ROAD_CLASSES):
+            raise ValueError("Unknown road class mesh")
+        roads_mesh = concatenate(list(road_class_meshes.values()))
+    if road_class_colors:
+        from .map_styles import ROAD_CLASSES
+
+        if set(road_class_colors) - set(ROAD_CLASSES):
+            raise ValueError("Unknown road class color")
+        for value in road_class_colors.values():
+            if not isinstance(value, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+                raise ValueError("Road class colors must be #RRGGBB")
     materials: dict[str, tuple[str, str]] = {}
 
     layer_meshes = {
@@ -567,7 +584,18 @@ def export_3mf(
     if finish_marker_mesh is not None:
         color_mesh(finish_marker_mesh, "Finish_Marker", "Finish Marker", "route")
 
-    if roads_mesh is not None:
+    if road_class_meshes:
+        from .map_styles import ROAD_CLASS_NAMES, ROAD_CLASSES
+
+        for cls in ROAD_CLASSES:
+            mesh = road_class_meshes.get(cls)
+            if mesh is None:
+                continue
+            color_mesh(mesh, f"Roads_{cls.title()}", ROAD_CLASS_NAMES[cls], "roads")
+            color = (road_class_colors or {}).get(cls, colors["roads"])
+            mesh.visual.face_colors = np.asarray(rgba(color), dtype=np.uint8)
+            materials[f"Roads_{cls.title()}"] = (ROAD_CLASS_NAMES[cls], color + "FF")
+    elif roads_mesh is not None:
         color_mesh(roads_mesh, "Roads_Black", "Roads", "roads")
 
     if buildings_mesh is not None:
