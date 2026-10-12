@@ -49,7 +49,7 @@ it is not a live settings mirror or an external command listener.
 ```
 
 The normal `memorymap-desktop` console entry point also accepts `--automation`.
-The installed executable is unchanged. A future reviewed package build will expose:
+The installed executable is unchanged. A separate review package supports:
 
 ```powershell
 & 'Trace Studio.exe' --automation job.json
@@ -83,7 +83,8 @@ does not discard a valid model, matching the existing desktop behavior.
 
 ## Validation and remaining gates
 
-Local Windows suite: **533 passed**, 106 existing dependency warnings, 36.06 seconds.
+Local Windows suite after load-mode support: **534 passed**, 106 existing dependency
+warnings, 33.58 seconds.
 Scoped Ruff and `git diff --check` pass. Both desktop entry points dispatch the
 explicit request; wrong argument counts are rejected without normal app launch.
 
@@ -94,7 +95,33 @@ route/base model with no network calls; only the WebEngine view is replaced by a
 test widget. Legacy hidden border and route-layer-height values remain preserved.
 
 Live Computer Use remains blocked by its runtime initialization error. The installed
-EXE does not support this new option until a reviewed build is produced. Packaging,
-actual Windows WebEngine preview, and Chicago physical acceptance are separate gates.
+EXE remains unchanged. Full generation smoke, actual Windows WebEngine preview,
+and Chicago physical acceptance are separate gates.
 No full LA generation, printer job, installed-app replacement, or release is part
 of this change.
+
+## Packaged Chicago load verification
+
+A separate EXE was built from code commit `11539a7` at
+`dist/trace-automation-review/Trace Studio.exe`. Its SHA256 is
+`fd036880f3bc4391281681211af9e2856e83c0b43a26da179ca72ffb6ae14119`.
+The package verifier confirms every checked module matches source, including
+`desktop.automation`, the desktop worker, and the existing geometry engines.
+
+The Downloads Chicago Trace project was copied to
+`benchmarks/outputs/trace-automation/chicago.trace.json`. The copy restores explicit
+Street Grid, audit-matching major-road widths, and the owner's requested **0.6 mm
+local width**. The original Downloads project was not changed.
+
+The packaged load-only session reports `ready`, with 163 route points, buildings
+disabled, the original 190 × 240 mm frame, and widths 1.2/0.8/0.6/0.4 mm for
+motorways/main/local/service. The visible native window title is
+`Trace Studio — Chicago Marathon`; the process is responding. This validates
+packaged project loading, not full map generation or rendered 3D preview.
+
+Artifacts: `benchmarks/outputs/trace-automation/package-provenance.json`,
+`session-inputs.json`, and `chicago-visible-session/status.json` plus its
+`effective.trace.json`. The initial hidden launch restored the project but exposed
+no visible native window. Only those verified, owned idle review processes were
+stopped and replaced by the visible interactive launch. The installed session was
+not stopped or modified. The visible review instance is left open for the owner.
