@@ -23,11 +23,12 @@ def job(tmp_path):
 
 def test_job_resolves_relative_paths_and_refuses_reuse(tmp_path):
     request = job(tmp_path)
-    project, route, directory, sources = load_job(request)
+    project, route, directory, sources, action = load_job(request)
     assert route.is_absolute() and route.is_file()
     assert not project.include_buildings and not project.include_roads
     assert directory == tmp_path / "result"
     assert sources == {}
+    assert action == "generate"
     with pytest.raises(FileExistsError):
         load_job(request)
 

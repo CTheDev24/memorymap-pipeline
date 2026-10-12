@@ -389,3 +389,39 @@ def test_local_automation_failure_does_not_publish_result(desktop_window, tmp_pa
     assert 'roads: failed' in status['error']
     assert not (tmp_path / 'output/map.3mf').exists()
     assert not (tmp_path / 'output/map.audit.json').exists()
+
+def test_automation_load_opens_project_without_generating(desktop_window, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+
+    from memorymap_pipeline import generation
+    from memorymap_pipeline.desktop.automation import run
+
+    monkeypatch.setattr(generation, 'generate_memory_map',
+                        lambda *_args, **_kwargs: pytest.fail('load must not generate'))
+    project = DesktopProject(
+        MapFrame(29.76, -95.37, 1000, 1400, 190, 240),
+        gpx_path=str(Path('tests/fixtures/frame_route.gpx').resolve()),
+        include_roads=True, include_buildings=False, map_style='street_grid',
+        road_class_widths_mm={'motorways': 1.2, 'main': .8, 'local': .4, 'service': .4},
+    )
+    project.save(tmp_path / 'project.json')
+    request = tmp_path / 'job.json'
+    request.write_text(json.dumps({'version': 1, 'action': 'load', 'project': 'project.json',
+                                   'job_directory': 'output'}))
+    observed = []
+
+    def inspect_and_exit():
+        observed.append(json.loads((tmp_path / 'output/status.json').read_text()))
+        QApplication.instance().quit()
+
+    QTimer.singleShot(50, inspect_and_exit)
+    assert run(request) == 0
+    assert observed[0]['state'] == 'ready'
+    assert observed[0]['map_style'] == 'street_grid'
+    assert observed[0]['settings']['road_class_widths_mm']['local'] == .4
+    assert observed[0]['route_point_count'] > 0
+    assert json.loads((tmp_path / 'output/status.json').read_text())['state'] == 'closed'
+    assert not (tmp_path / 'output/map.3mf').exists()

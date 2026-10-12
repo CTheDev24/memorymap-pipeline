@@ -23,6 +23,7 @@ Create a request JSON:
 ```json
 {
   "version": 1,
+  "action": "generate",
   "project": "chicago.trace.json",
   "job_directory": "chicago-local-width-06",
   "sources": {
@@ -36,6 +37,12 @@ and caches. Supported frozen inputs are `roads_file`, `buildings_file`,
 `water_file`, and `landcover_file`. Relative request paths resolve beside the
 request; a relative GPX path resolves beside the Trace project. The output
 directory must not exist. Reusing a job is rejected rather than overwriting files.
+
+Use `"action": "load"` to open an interactive instance with the project restored
+without starting generation. Its status becomes `ready`; the window remains open
+until closed by the operator, after which status becomes `closed`. The default
+action is `generate`. Load-mode status records the initial restored settings only;
+it is not a live settings mirror or an external command listener.
 
 ```powershell
 .venv/Scripts/python.exe -m memorymap_pipeline.desktop --automation job.json

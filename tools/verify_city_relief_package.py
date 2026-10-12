@@ -50,6 +50,7 @@ for name in [
     "desktop.project",
     "desktop.window",
     "desktop.worker",
+    "desktop.automation",
     "desktop.validation",
     "desktop.smoke_test",
 ]:

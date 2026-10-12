@@ -5,6 +5,7 @@ No listener, remote access, or control of another running desktop instance.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from hashlib import sha256
 from pathlib import Path
@@ -17,9 +18,12 @@ def load_job(request_path: str | Path):
     data = json.loads(request_path.read_text(encoding="utf-8"))
     if data.get("version") != 1:
         raise ValueError("Unsupported automation request version")
-    unknown = set(data) - {"version", "project", "job_directory", "sources"}
+    unknown = set(data) - {"version", "project", "job_directory", "sources", "action"}
     if unknown:
         raise ValueError(f"Unknown automation fields: {sorted(unknown)}")
+    action = data.get("action", "generate")
+    if action not in {"load", "generate"}:
+        raise ValueError("Automation action must be load or generate")
 
     def resolve(value, base):
         path = Path(value)
@@ -42,7 +46,7 @@ def load_job(request_path: str | Path):
             raise ValueError(f"Source does not exist: {path}")
     # Never reuse an earlier job or overwrite owner files.
     directory.mkdir(parents=True, exist_ok=False)
-    return project, route_path, directory, sources
+    return project, route_path, directory, sources, action
 
 
 def write_status(directory: Path, status: dict) -> None:
@@ -70,8 +74,10 @@ def run(request_path: str | Path) -> int:
     from .window import MemoryMapWindow
     from .worker import GenerationWorker
 
-    project, route_path, directory, sources = load_job(request_path)
-    status = {"version": 1, "state": "starting", "progress": 0, "warnings": []}
+    project, route_path, directory, sources, action = load_job(request_path)
+    status = {"version": 1, "state": "starting", "progress": 0, "warnings": [],
+              "action": action, "process_id": os.getpid(), "gpx_path": str(route_path),
+              "map_style": project.map_style}
     write_status(directory, status)
     try:
         route = load_route_from_gpx(route_path)
@@ -83,7 +89,7 @@ def run(request_path: str | Path) -> int:
             running = True
 
             def closeEvent(self, event):
-                if self.running:
+                if self.running or self.generation_thread is not None:
                     event.ignore()
                 else:
                     super().closeEvent(event)
@@ -91,6 +97,18 @@ def run(request_path: str | Path) -> int:
         window = JobWindow()
         window._apply_project(project, route_path, route)
         window.setWindowTitle("Trace Studio — local automation job")
+        window._project_state().save(directory / "effective.trace.json")
+        if action == "load":
+            window.running = False
+            window.setWindowTitle(f"Trace Studio — {route_path.stem}")
+            window.show()
+            status.update(state="ready", settings=window._generation_config_payload(),
+                          frame=window.current_frame, route_point_count=len(route.points))
+            write_status(directory, status)
+            result = app.exec()
+            status.update(state="closed")
+            write_status(directory, status)
+            return int(result)
         window.setWindowFlag(Qt.WindowCloseButtonHint, False)
         window.show()
         window.setEnabled(False)
@@ -112,7 +130,6 @@ def run(request_path: str | Path) -> int:
             "route_height_mm": window.route_height.currentData(),
             "config": window._generation_config_payload(), **sources,
         }
-        window._project_state().save(directory / "effective.trace.json")
         status.update(state="running", settings=payload["config"])
         write_status(directory, status)
 
