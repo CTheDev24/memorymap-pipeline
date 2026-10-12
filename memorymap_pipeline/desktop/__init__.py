@@ -7,6 +7,12 @@ def run() -> int:
     """Launch the optional Qt UI without importing Qt during package discovery."""
     import sys
 
+    if sys.argv[1:2] == ["--automation"]:
+        if len(sys.argv) != 3:
+            return 2
+        from .automation import run as run_automation
+
+        return run_automation(sys.argv[2])
     if sys.argv[1:2] == ["--validate-map"]:
         if len(sys.argv) != 3:
             return 2

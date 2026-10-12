@@ -335,3 +335,57 @@ def test_grouped_buildings_keep_final_limits_and_member_provenance(tmp_path, mod
     assert records[0].get("group_id") == records[1].get("group_id") is not None
     for record in records:
         assert record["height_control"]["effective_tops_mm"] == pytest.approx([.4])
+
+def test_local_automation_runs_real_desktop_worker(desktop_window, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from memorymap_pipeline.desktop.automation import run
+
+    monkeypatch.setattr(type(desktop_window.preview_view), 'load', lambda *_args: None, raising=False)
+
+    route_path = Path('tests/fixtures/frame_route.gpx').resolve()
+    project = DesktopProject(
+        MapFrame(29.76, -95.37, 1000, 1400, 190, 240),
+        gpx_path=str(route_path), include_roads=False, include_buildings=False,
+        flat_border_enabled=True, route_layer_height_mm=.12,
+    )
+    project.save(tmp_path / 'project.json')
+    request = tmp_path / 'job.json'
+    request.write_text(json.dumps({'version': 1, 'project': 'project.json',
+                                   'job_directory': 'output'}))
+    assert run(request) == 0
+    status = json.loads((tmp_path / 'output/status.json').read_text())
+    assert status['state'] == 'complete'
+    assert status['layer_states']['buildings'] == 'disabled'
+    assert status['layer_states']['roads'] == 'disabled'
+    from hashlib import sha256
+    assert sha256((tmp_path / 'output/map.3mf').read_bytes()).hexdigest() == status['model_sha256']
+    restored = DesktopProject.load(tmp_path / 'output/effective.trace.json')
+    assert restored.flat_border_enabled
+    assert restored.route_layer_height_mm == .12
+
+def test_local_automation_failure_does_not_publish_result(desktop_window, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from memorymap_pipeline import generation
+    from memorymap_pipeline.desktop.automation import run
+
+    def fail(*_args, **_kwargs):
+        raise generation.LayerGenerationError('roads', 'test network unavailable')
+
+    monkeypatch.setattr(generation, 'generate_memory_map', fail)
+    project = DesktopProject(
+        MapFrame(29.76, -95.37, 1000, 1400, 190, 240),
+        gpx_path=str(Path('tests/fixtures/frame_route.gpx').resolve()),
+        include_roads=True, include_buildings=False,
+    )
+    project.save(tmp_path / 'project.json')
+    request = tmp_path / 'job.json'
+    request.write_text(json.dumps({'version': 1, 'project': 'project.json',
+                                   'job_directory': 'output'}))
+    assert run(request) == 1
+    status = json.loads((tmp_path / 'output/status.json').read_text())
+    assert status['state'] == 'failed'
+    assert 'roads: failed' in status['error']
+    assert not (tmp_path / 'output/map.3mf').exists()
+    assert not (tmp_path / 'output/map.audit.json').exists()

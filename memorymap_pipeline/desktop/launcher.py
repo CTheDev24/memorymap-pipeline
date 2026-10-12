@@ -7,6 +7,13 @@ from collections.abc import Sequence
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Start the Qt desktop application; imports stay lazy for headless tooling."""
+    arguments = list(argv) if argv is not None else sys.argv
+    if arguments[1:2] == ["--automation"]:
+        if len(arguments) != 3:
+            return 2
+        from .automation import run as run_automation
+
+        return run_automation(arguments[2])
     try:
         from PySide6.QtWidgets import QApplication
         from PySide6.QtGui import QIcon
@@ -18,7 +25,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     from .window import MemoryMapWindow
 
-    arguments = list(argv) if argv is not None else sys.argv
     application = QApplication.instance()
     owns_application = application is None
     if application is None:
